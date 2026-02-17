@@ -14,6 +14,22 @@ from app.gui.utils import format_datetime_utc3
 
 logger = logging.getLogger(__name__)
 
+JOB_ID_ROLE = Qt.UserRole + 1
+
+
+class NumericTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem с числовой сортировкой по данным из UserRole."""
+
+    def __lt__(self, other):
+        my = self.data(Qt.UserRole)
+        ot = other.data(Qt.UserRole)
+        if my is not None and ot is not None:
+            try:
+                return float(my) < float(ot)
+            except (TypeError, ValueError):
+                pass
+        return super().__lt__(other)
+
 
 class TableManagerMixin:
     """Миксин для управления таблицей задач"""
@@ -53,8 +69,9 @@ class TableManagerMixin:
             row = self.jobs_table.rowCount()
             self.jobs_table.insertRow(row)
 
-            num_item = QTableWidgetItem(str(idx))
-            num_item.setData(Qt.UserRole, job.id)
+            num_item = NumericTableWidgetItem(str(idx))
+            num_item.setData(Qt.UserRole, idx)
+            num_item.setData(JOB_ID_ROLE, job.id)
             self.jobs_table.setItem(row, 0, num_item)
 
             display_name = job.task_name if job.task_name else job.document_name
@@ -72,7 +89,7 @@ class TableManagerMixin:
             self.jobs_table.setItem(row, 3, status_item)
 
             progress_text = f"{int(job.progress * 100)}%"
-            progress_item = QTableWidgetItem(progress_text)
+            progress_item = NumericTableWidgetItem(progress_text)
             progress_item.setData(Qt.UserRole, job.progress)
             self.jobs_table.setItem(row, 4, progress_item)
 
@@ -97,8 +114,10 @@ class TableManagerMixin:
         row = 0 if at_top else self.jobs_table.rowCount()
         self.jobs_table.insertRow(row)
 
-        num_item = QTableWidgetItem("1" if at_top else str(self.jobs_table.rowCount()))
-        num_item.setData(Qt.UserRole, job.id)
+        num_val = 1 if at_top else self.jobs_table.rowCount()
+        num_item = NumericTableWidgetItem(str(num_val))
+        num_item.setData(Qt.UserRole, num_val)
+        num_item.setData(JOB_ID_ROLE, job.id)
         self.jobs_table.setItem(row, 0, num_item)
 
         display_name = job.task_name if job.task_name else job.document_name
@@ -115,7 +134,7 @@ class TableManagerMixin:
         self.jobs_table.setItem(row, 3, QTableWidgetItem(status_text))
 
         progress_text = f"{int(job.progress * 100)}%"
-        progress_item = QTableWidgetItem(progress_text)
+        progress_item = NumericTableWidgetItem(progress_text)
         progress_item.setData(Qt.UserRole, job.progress)
         self.jobs_table.setItem(row, 4, progress_item)
 
@@ -137,12 +156,12 @@ class TableManagerMixin:
         """Заменить временную задачу на реальную в таблице"""
         for row in range(self.jobs_table.rowCount()):
             item = self.jobs_table.item(row, 0)
-            if item and item.data(Qt.UserRole) == old_job_id:
+            if item and item.data(JOB_ID_ROLE) == old_job_id:
                 logger.info(
                     f"Найдена временная задача в строке {row}, заменяем на {new_job.id}"
                 )
 
-                item.setData(Qt.UserRole, new_job.id)
+                item.setData(JOB_ID_ROLE, new_job.id)
 
                 display_name = (
                     new_job.task_name if new_job.task_name else new_job.document_name
@@ -180,7 +199,7 @@ class TableManagerMixin:
         """Удалить задачу из таблицы по ID"""
         for row in range(self.jobs_table.rowCount()):
             item = self.jobs_table.item(row, 0)
-            if item and item.data(Qt.UserRole) == job_id:
+            if item and item.data(JOB_ID_ROLE) == job_id:
                 self.jobs_table.removeRow(row)
                 logger.info(f"Задача {job_id} удалена из таблицы")
                 return
