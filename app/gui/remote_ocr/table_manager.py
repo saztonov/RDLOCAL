@@ -17,17 +17,16 @@ logger = logging.getLogger(__name__)
 JOB_ID_ROLE = Qt.UserRole + 1
 
 
-class NumericTableWidgetItem(QTableWidgetItem):
-    """QTableWidgetItem с числовой сортировкой по данным из UserRole."""
+class SortableTableWidgetItem(QTableWidgetItem):
+    """QTableWidgetItem с сортировкой по данным из UserRole (числа, даты)."""
 
     def __lt__(self, other):
         my = self.data(Qt.UserRole)
         ot = other.data(Qt.UserRole)
         if my is not None and ot is not None:
-            try:
-                return float(my) < float(ot)
-            except (TypeError, ValueError):
-                pass
+            if isinstance(my, (int, float)) and isinstance(ot, (int, float)):
+                return my < ot
+            return str(my) < str(ot)
         return super().__lt__(other)
 
 
@@ -69,7 +68,7 @@ class TableManagerMixin:
             row = self.jobs_table.rowCount()
             self.jobs_table.insertRow(row)
 
-            num_item = NumericTableWidgetItem(str(idx))
+            num_item = SortableTableWidgetItem(str(idx))
             num_item.setData(Qt.UserRole, idx)
             num_item.setData(JOB_ID_ROLE, job.id)
             self.jobs_table.setItem(row, 0, num_item)
@@ -78,7 +77,7 @@ class TableManagerMixin:
             self.jobs_table.setItem(row, 1, QTableWidgetItem(display_name))
 
             created_at_str = format_datetime_utc3(job.created_at)
-            created_item = QTableWidgetItem(created_at_str)
+            created_item = SortableTableWidgetItem(created_at_str)
             created_item.setData(Qt.UserRole, job.created_at)
             self.jobs_table.setItem(row, 2, created_item)
 
@@ -89,7 +88,7 @@ class TableManagerMixin:
             self.jobs_table.setItem(row, 3, status_item)
 
             progress_text = f"{int(job.progress * 100)}%"
-            progress_item = NumericTableWidgetItem(progress_text)
+            progress_item = SortableTableWidgetItem(progress_text)
             progress_item.setData(Qt.UserRole, job.progress)
             self.jobs_table.setItem(row, 4, progress_item)
 
@@ -115,7 +114,7 @@ class TableManagerMixin:
         self.jobs_table.insertRow(row)
 
         num_val = 1 if at_top else self.jobs_table.rowCount()
-        num_item = NumericTableWidgetItem(str(num_val))
+        num_item = SortableTableWidgetItem(str(num_val))
         num_item.setData(Qt.UserRole, num_val)
         num_item.setData(JOB_ID_ROLE, job.id)
         self.jobs_table.setItem(row, 0, num_item)
@@ -126,15 +125,15 @@ class TableManagerMixin:
         created_at_str = (
             format_datetime_utc3(job.created_at) if job.created_at else "Только что"
         )
-        created_item = QTableWidgetItem(created_at_str)
-        created_item.setData(Qt.UserRole, job.created_at)
+        created_item = SortableTableWidgetItem(created_at_str)
+        created_item.setData(Qt.UserRole, job.created_at or "")
         self.jobs_table.setItem(row, 2, created_item)
 
         status_text = self._get_status_text(job.status)
         self.jobs_table.setItem(row, 3, QTableWidgetItem(status_text))
 
         progress_text = f"{int(job.progress * 100)}%"
-        progress_item = NumericTableWidgetItem(progress_text)
+        progress_item = SortableTableWidgetItem(progress_text)
         progress_item.setData(Qt.UserRole, job.progress)
         self.jobs_table.setItem(row, 4, progress_item)
 
