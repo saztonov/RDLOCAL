@@ -48,7 +48,9 @@ datalab_poll_max_attempts: 90
 datalab_max_retries: 3
 
 # ===== CHANDRA (LM Studio) =====
-# Параллельных запросов к Chandra (LM Studio Max Concurrent Predictions >= этого значения)
+# Параллельных запросов к Chandra PER TASK
+# При N воркерах LM Studio нужно Max Concurrent Predictions >= chandra_max_concurrent * N
+# Пример: 2 воркера × 2 = 4 одновременных запроса к LM Studio
 chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2

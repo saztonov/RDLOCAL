@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: services/remote_ocr/Dockerfile
-    command: celery -A services.remote_ocr.server.celery_app worker --loglevel=info --concurrency=1
+    command: celery -A services.remote_ocr.server.celery_app worker --loglevel=info --concurrency=${CELERY_CONCURRENCY:-2}
     env_file:
       - .env
     environment:
@@ -48,8 +48,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 4G
+          cpus: '4.0'
+          memory: 6G
     logging:
       driver: "json-file"
       options:

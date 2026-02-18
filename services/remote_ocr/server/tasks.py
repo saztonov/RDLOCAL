@@ -15,6 +15,7 @@ from .logging_config import get_logger
 from .memory_utils import force_gc, log_memory, log_memory_delta
 from .rate_limiter import get_datalab_limiter
 from .settings import settings
+from .chandra_lifecycle import acquire_chandra, release_chandra
 from .storage import get_job, register_ocr_results_to_node, update_job_status
 from .storage_jobs import increment_retry_count, set_job_started_at
 from .task_helpers import check_paused, create_empty_result, download_job_files
@@ -32,6 +33,8 @@ def run_ocr_task(self, job_id: str) -> dict:
     start_mem = log_memory(f"[START] Задача {job_id}")
 
     work_dir = None
+    engine = "openrouter"
+    strip_backend = None
     try:
         # Получаем задачу из БД с настройками
         job = get_job(job_id, with_files=True, with_settings=True)
@@ -146,6 +149,7 @@ def run_ocr_task(self, job_id: str) -> dict:
                 base_url=settings.chandra_base_url,
             )
             strip_backend.preload()
+            acquire_chandra(job_id)
         elif engine == "datalab" and settings.datalab_api_key:
             strip_backend = create_ocr_engine(
                 "datalab",
@@ -292,9 +296,14 @@ def run_ocr_task(self, job_id: str) -> dict:
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
 
-        # Выгрузить модель Chandra из LM Studio (освобождаем VRAM)
-        if engine == "chandra" and hasattr(strip_backend, "unload_model"):
-            strip_backend.unload_model()
+        # Выгрузить модель Chandra из LM Studio (только если нет других активных задач)
+        if engine == "chandra" and strip_backend is not None and hasattr(strip_backend, "unload_model"):
+            remaining = release_chandra(job_id)
+            if remaining == 0:
+                strip_backend.unload_model()
+                logger.info(f"Chandra: последняя задача завершена, модель выгружена")
+            else:
+                logger.info(f"Chandra: модель НЕ выгружена, активных задач: {remaining}")
 
         # Очищаем кэш размеров страниц
         clear_page_size_cache()
