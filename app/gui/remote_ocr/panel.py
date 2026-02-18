@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -25,7 +26,7 @@ from app.gui.remote_ocr.job_operations import JobOperationsMixin
 from app.gui.remote_ocr.polling_controller import PollingControllerMixin
 from app.gui.remote_ocr.result_handler import ResultHandlerMixin
 from app.gui.remote_ocr.signals import WorkerSignals
-from app.gui.remote_ocr.table_manager import TableManagerMixin
+from app.gui.remote_ocr.table_manager import JOB_ID_ROLE, TableManagerMixin
 
 if TYPE_CHECKING:
     from app.gui.main_window import MainWindow
@@ -113,6 +114,11 @@ class RemoteOCRPanel(
 
         layout.addLayout(header_layout)
 
+        from app.gui.remote_ocr.ocr_stats_widget import OCRStatsWidget
+
+        self.stats_widget = OCRStatsWidget()
+        layout.addWidget(self.stats_widget)
+
         self.jobs_table = QTableWidget()
         self.jobs_table.setColumnCount(7)
         self.jobs_table.setHorizontalHeaderLabels(
@@ -134,6 +140,8 @@ class RemoteOCRPanel(
         self.jobs_table.setSortingEnabled(True)
         self.jobs_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.jobs_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.jobs_table.customContextMenuRequested.connect(self._show_table_context_menu)
         layout.addWidget(self.jobs_table)
 
         self.setWidget(widget)
@@ -184,9 +192,42 @@ class RemoteOCRPanel(
         self._attach_prompts_to_blocks(blocks)
         return blocks
 
+    def _get_blocks_needing_ocr(self):
+        """Получить только блоки, нуждающиеся в OCR."""
+        from rd_core.ocr_block_status import needs_ocr
+
+        blocks = []
+        if self.main_window.annotation_document:
+            for page in self.main_window.annotation_document.pages:
+                for block in page.blocks or []:
+                    if needs_ocr(block):
+                        blocks.append(block)
+        self._attach_prompts_to_blocks(blocks)
+        return blocks
+
     def _attach_prompts_to_blocks(self, blocks):
         """Промпты берутся из категорий в Supabase на стороне сервера"""
         pass
+
+    def update_ocr_stats(self):
+        """Пересчитать и обновить статистику OCR для текущего документа."""
+        if not self.main_window.annotation_document:
+            self.stats_widget.clear_stats()
+            return
+
+        from app.gui.remote_ocr.ocr_stats_widget import compute_ocr_stats
+
+        all_blocks = []
+        for page in self.main_window.annotation_document.pages:
+            if page.blocks:
+                all_blocks.extend(page.blocks)
+
+        if not all_blocks:
+            self.stats_widget.clear_stats()
+            return
+
+        stats = compute_ocr_stats(all_blocks)
+        self.stats_widget.update_stats(stats)
 
     def _on_job_uploading(self, job_info):
         """Слот: задача начала загружаться"""
@@ -280,6 +321,7 @@ class RemoteOCRPanel(
 
         self._reload_annotation_from_result(extract_dir)
         self._refresh_document_in_tree()
+        self.update_ocr_stats()
 
         from app.gui.toast import show_toast
 
@@ -296,10 +338,57 @@ class RemoteOCRPanel(
             self, "Ошибка загрузки", f"Не удалось скачать файлы:\n{error_msg}"
         )
 
+    def _show_table_context_menu(self, pos):
+        """Контекстное меню таблицы задач"""
+        item = self.jobs_table.itemAt(pos)
+        if not item:
+            return
+
+        row = item.row()
+        first_col_item = self.jobs_table.item(row, 0)
+        if not first_col_item:
+            return
+
+        job_id = first_col_item.data(JOB_ID_ROLE)
+        if not job_id:
+            return
+
+        job_info = self._jobs_cache.get(job_id)
+        node_id = getattr(job_info, "node_id", None) if job_info else None
+
+        menu = QMenu(self)
+        find_action = menu.addAction("🔍 Найти в дереве проектов")
+        find_action.setEnabled(bool(node_id))
+
+        action = menu.exec_(self.jobs_table.mapToGlobal(pos))
+        if action == find_action and node_id:
+            self._navigate_to_project_tree(node_id)
+
+    def _navigate_to_project_tree(self, node_id: str):
+        """Навигация к узлу в дереве проектов"""
+        if not hasattr(self.main_window, "project_tree_widget"):
+            return
+
+        tree_widget = self.main_window.project_tree_widget
+
+        if hasattr(self.main_window, "project_dock"):
+            dock = self.main_window.project_dock
+            if not dock.isVisible():
+                dock.show()
+
+        if not tree_widget.navigate_to_node(node_id):
+            QMessageBox.warning(
+                self,
+                "Узел не найден",
+                "Не удалось найти узел в дереве проектов.\n"
+                "Возможно, узел был удалён.",
+            )
+
     def showEvent(self, event):
-        """При показе панели обновляем список"""
+        """При показе панели обновляем список и статистику"""
         super().showEvent(event)
         self._refresh_jobs(manual=True)
+        self.update_ocr_stats()
         # Восстанавливаем интервал на основе активных задач
         interval = self.POLL_INTERVAL_PROCESSING if self._has_active_jobs else self.POLL_INTERVAL_IDLE
         self.refresh_timer.setInterval(interval)

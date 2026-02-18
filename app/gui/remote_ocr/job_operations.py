@@ -16,70 +16,97 @@ logger = logging.getLogger(__name__)
 class JobOperationsMixin:
     """Миксин для операций с задачами: создание, удаление, пауза, возобновление, перезапуск"""
 
-    def _clean_old_ocr_results(self, node_id: str, r2_key: str, r2):
-        """Очистить старые результаты OCR перед новым распознаванием"""
+    def _clean_old_ocr_results(
+        self, node_id: str, r2_key: str, r2, blocks_to_reprocess=None
+    ):
+        """Очистить старые результаты OCR перед новым распознаванием.
+
+        Args:
+            node_id: ID узла в дереве проектов
+            r2_key: R2 ключ PDF файла
+            r2: объект R2Storage
+            blocks_to_reprocess: список ID блоков для переобработки (smart mode).
+                Если None — полная очистка (кропы + node_files + все ocr_text).
+                Если задан — очищаем только ocr_text указанных блоков,
+                кропы и node_files не трогаем (сервер обновит в correction_mode).
+        """
         import shutil
         from pathlib import PurePosixPath
 
         from app.gui.folder_settings_dialog import get_projects_dir
         from app.tree_client import FileType, TreeClient
 
+        is_smart_mode = blocks_to_reprocess is not None
+
         try:
             pdf_stem = Path(r2_key).stem
             r2_prefix = str(PurePosixPath(r2_key).parent)
             projects_dir = get_projects_dir()
 
-            # 1. Удаляем кропы из R2 и локального кэша
-            crops_prefix = f"{r2_prefix}/crops/{pdf_stem}/"
-            crop_keys = r2.list_files(crops_prefix)
+            if not is_smart_mode:
+                # 1. Удаляем кропы из R2 и локального кэша
+                crops_prefix = f"{r2_prefix}/crops/{pdf_stem}/"
+                crop_keys = r2.list_files(crops_prefix)
 
-            if crop_keys:
-                deleted_keys, errors = r2.delete_objects_batch(crop_keys)
-                logger.debug(f"Deleted {len(deleted_keys)} crops from R2")
-                if errors:
-                    logger.warning(f"Failed to delete {len(errors)} crops from R2")
-
-                if projects_dir:
-                    for crop_key in deleted_keys:
-                        rel = (
-                            crop_key[len("tree_docs/"):]
-                            if crop_key.startswith("tree_docs/")
-                            else crop_key
+                if crop_keys:
+                    deleted_keys, errors = r2.delete_objects_batch(crop_keys)
+                    logger.debug(f"Deleted {len(deleted_keys)} crops from R2")
+                    if errors:
+                        logger.warning(
+                            f"Failed to delete {len(errors)} crops from R2"
                         )
-                        crop_local = Path(projects_dir) / "cache" / rel
-                        if crop_local.exists():
-                            crop_local.unlink()
 
-            # Удаляем папку crops из кэша
-            if projects_dir:
-                rel_prefix = (
-                    r2_prefix[len("tree_docs/"):]
-                    if r2_prefix.startswith("tree_docs/")
-                    else r2_prefix
-                )
-                crops_folder = (
-                    Path(projects_dir) / "cache" / rel_prefix / "crops" / pdf_stem
-                )
-                if crops_folder.exists():
-                    shutil.rmtree(crops_folder, ignore_errors=True)
+                    if projects_dir:
+                        for crop_key in deleted_keys:
+                            rel = (
+                                crop_key[len("tree_docs/"):]
+                                if crop_key.startswith("tree_docs/")
+                                else crop_key
+                            )
+                            crop_local = Path(projects_dir) / "cache" / rel
+                            if crop_local.exists():
+                                crop_local.unlink()
 
-            # 2. Удаляем записи из node_files (CROP)
-            client = TreeClient()
-            node_files = client.get_node_files(node_id)
-            for nf in node_files:
-                if nf.file_type == FileType.CROP:
-                    client.delete_node_file(nf.id)
+                # Удаляем папку crops из кэша
+                if projects_dir:
+                    rel_prefix = (
+                        r2_prefix[len("tree_docs/"):]
+                        if r2_prefix.startswith("tree_docs/")
+                        else r2_prefix
+                    )
+                    crops_folder = (
+                        Path(projects_dir)
+                        / "cache"
+                        / rel_prefix
+                        / "crops"
+                        / pdf_stem
+                    )
+                    if crops_folder.exists():
+                        shutil.rmtree(crops_folder, ignore_errors=True)
+
+                # 2. Удаляем записи из node_files (CROP)
+                client = TreeClient()
+                node_files = client.get_node_files(node_id)
+                for nf in node_files:
+                    if nf.file_type == FileType.CROP:
+                        client.delete_node_file(nf.id)
 
             # 3. Очищаем ocr_text в блоках текущего документа
+            reprocess_set = set(blocks_to_reprocess) if blocks_to_reprocess else None
+
             if self.main_window.annotation_document:
                 cleared = 0
                 for page in self.main_window.annotation_document.pages:
                     for block in page.blocks:
                         if hasattr(block, "ocr_text") and block.ocr_text:
-                            block.ocr_text = None
-                            cleared += 1
+                            if reprocess_set is None or block.id in reprocess_set:
+                                block.ocr_text = None
+                                cleared += 1
 
-                if cleared > 0:
+                # В smart mode всегда загружаем annotation в R2,
+                # чтобы сервер увидел новые блоки при merge
+                should_upload = cleared > 0 or is_smart_mode
+                if should_upload:
                     from app.gui.file_operations import (
                         get_annotation_path,
                         get_annotation_r2_key,
@@ -98,7 +125,8 @@ class JobOperationsMixin:
                         r2.upload_file(str(ann_path), ann_r2_key)
                         logger.debug(f"Synced cleared annotation to R2: {ann_r2_key}")
 
-            logger.info(f"Cleaned old OCR results for node: {node_id}")
+            mode_str = f"smart ({len(blocks_to_reprocess)} blocks)" if is_smart_mode else "full"
+            logger.info(f"Cleaned old OCR results for node: {node_id} (mode={mode_str})")
 
             if hasattr(self, "_downloaded_jobs"):
                 self._downloaded_jobs.clear()
@@ -142,6 +170,7 @@ class JobOperationsMixin:
         node_id = getattr(self.main_window, "_current_node_id", None) or None
         r2_key = getattr(self.main_window, "_current_r2_key", None) or None
 
+        r2 = None
         if node_id and r2_key:
             try:
                 from rd_core.r2_storage import R2Storage
@@ -155,8 +184,6 @@ class JobOperationsMixin:
                         "Синхронизируйте документ или перезагрузите его в дерево проектов.",
                     )
                     return
-
-                self._clean_old_ocr_results(node_id, r2_key, r2)
             except Exception as e:
                 logger.warning(f"Не удалось проверить R2: {e}")
 
@@ -173,36 +200,57 @@ class JobOperationsMixin:
         self._last_output_dir = dialog.output_dir
         self._last_engine = dialog.ocr_backend
 
-        selected_blocks = self._get_selected_blocks()
-        if not selected_blocks:
+        all_blocks = self._get_selected_blocks()
+        if not all_blocks:
             QMessageBox.warning(self, "Ошибка", "Нет блоков для распознавания")
             return
 
-        # Подсчёт корректировочных блоков
-        correction_blocks = [b for b in selected_blocks if b.is_correction]
-        correction_count = len(correction_blocks)
+        blocks_needing = self._get_blocks_needing_ocr()
+        has_previous = len(all_blocks) > len(blocks_needing)
 
-        # Показываем диалог выбора если есть корректировочные блоки
-        if correction_count > 0:
-            from PySide6.QtWidgets import QDialog
+        if has_previous and blocks_needing:
+            # Есть старые результаты и блоки для распознавания → SmartOCRModeDialog
+            from app.gui.smart_ocr_mode_dialog import SmartOCRModeDialog
 
-            from app.gui.correction_mode_dialog import CorrectionModeDialog
-
-            mode_dialog = CorrectionModeDialog(
+            mode_dialog = SmartOCRModeDialog(
                 self,
-                correction_count=correction_count,
-                total_count=len(selected_blocks),
+                total_count=len(all_blocks),
+                needs_ocr_count=len(blocks_needing),
+                successful_count=len(all_blocks) - len(blocks_needing),
             )
             if mode_dialog.exec() != QDialog.Accepted:
                 return
 
-            if mode_dialog.selected_mode == CorrectionModeDialog.MODE_CORRECTION:
-                selected_blocks = correction_blocks
+            if mode_dialog.selected_mode == SmartOCRModeDialog.MODE_SMART:
+                selected_blocks = blocks_needing
                 self._is_correction_mode = True
+                if node_id and r2_key and r2:
+                    block_ids = [b.id for b in selected_blocks]
+                    self._clean_old_ocr_results(
+                        node_id, r2_key, r2, blocks_to_reprocess=block_ids
+                    )
             else:
+                selected_blocks = all_blocks
                 self._is_correction_mode = False
+                if node_id and r2_key and r2:
+                    self._clean_old_ocr_results(node_id, r2_key, r2)
+
+        elif has_previous and not blocks_needing:
+            # Всё уже распознано
+            QMessageBox.information(
+                self,
+                "Все распознано",
+                "Все блоки уже успешно распознаны.\n"
+                "Добавьте новые блоки или пометьте для корректировки.",
+            )
+            return
+
         else:
+            # Первый запуск или все нуждаются в OCR
+            selected_blocks = all_blocks
             self._is_correction_mode = False
+            if node_id and r2_key and r2:
+                self._clean_old_ocr_results(node_id, r2_key, r2)
 
         client = self._get_client()
         if client is None:

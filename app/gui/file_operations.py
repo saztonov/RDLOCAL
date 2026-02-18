@@ -286,6 +286,10 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         if hasattr(self, "_load_ocr_result_file"):
             self._load_ocr_result_file()
 
+        # Обновляем статистику OCR
+        if hasattr(self, "remote_ocr_panel") and self.remote_ocr_panel:
+            self.remote_ocr_panel.update_ocr_stats()
+
         # Обновляем заголовок
         self.setWindowTitle(f"{__product__} - {Path(pdf_path).name}")
 

@@ -413,6 +413,69 @@ class ProjectTreeWidget(
         dialog = FileReconciliationDialog(node, self.client, self)
         dialog.exec()
 
+    def navigate_to_node(self, node_id: str) -> bool:
+        """Навигация к узлу: раскрытие предков, выделение и скролл.
+
+        Returns:
+            True если узел найден и выделен.
+        """
+        # Быстрый путь: узел уже загружен
+        if node_id in self._node_map:
+            self._select_and_scroll(node_id)
+            return True
+
+        # Получаем цепочку предков (от корня к родителю)
+        try:
+            ancestors = self.client.get_ancestors(node_id)
+        except Exception as e:
+            logger.error(f"Failed to get ancestors for {node_id}: {e}")
+            return False
+
+        if not ancestors:
+            logger.warning(f"Node {node_id} not found in tree and has no ancestors")
+            return False
+
+        # Последовательно раскрываем каждого предка
+        for ancestor in ancestors:
+            if ancestor.id not in self._node_map:
+                logger.warning(f"Ancestor {ancestor.id} ({ancestor.name}) not in tree")
+                return False
+
+            ancestor_item = self._node_map[ancestor.id]
+            if not ancestor_item.isExpanded():
+                if (ancestor_item.childCount() == 1
+                        and ancestor_item.child(0).data(0, Qt.UserRole) == "placeholder"):
+                    ancestor_item.removeChild(ancestor_item.child(0))
+                    self._load_children(ancestor_item, ancestor)
+                ancestor_item.setExpanded(True)
+                self._expanded_nodes.add(ancestor.id)
+
+        # Целевой узел должен быть в _node_map после раскрытия предков
+        if node_id in self._node_map:
+            self._select_and_scroll(node_id)
+            return True
+
+        # Последняя попытка: загрузить детей последнего предка
+        last_ancestor = ancestors[-1]
+        if last_ancestor.id in self._node_map:
+            last_item = self._node_map[last_ancestor.id]
+            self._load_children(last_item, last_ancestor)
+            if node_id in self._node_map:
+                self._select_and_scroll(node_id)
+                return True
+
+        logger.warning(f"Node {node_id} not found after expanding ancestors")
+        return False
+
+    def _select_and_scroll(self, node_id: str):
+        """Выделить узел в дереве и прокрутить к нему."""
+        item = self._node_map.get(node_id)
+        if not item:
+            return
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item)
+        self.highlight_document(node_id)
+
     # Свойство для доступа к скопированной аннотации (для контекстного меню)
     @property
     def _copied_annotation(self) -> Dict:
