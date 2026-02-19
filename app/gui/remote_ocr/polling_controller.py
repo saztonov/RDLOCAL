@@ -72,8 +72,8 @@ class PollingControllerMixin:
 
             # Отправляем полный список из кеша
             all_jobs = list(self._jobs_cache.values())
-            # Сортируем по времени создания (новые первыми)
-            all_jobs.sort(key=lambda j: j.created_at, reverse=True)
+            # Сортируем по приоритету (меньше = раньше), затем по времени создания
+            all_jobs.sort(key=lambda j: (j.priority, j.created_at))
             self._signals.jobs_loaded.emit(all_jobs, server_time or self._last_server_time or "")
         except Exception as e:
             logger.error(f"Ошибка получения изменений: {e}", exc_info=True)

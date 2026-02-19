@@ -18,3 +18,4 @@ class JobInfo:
     error_message: Optional[str] = None
     node_id: Optional[str] = None
     status_message: Optional[str] = None
+    priority: int = 0

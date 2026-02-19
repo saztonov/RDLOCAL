@@ -45,6 +45,7 @@ def list_jobs_handler(
                 "error_message": j.error_message,
                 "node_id": j.node_id,
                 "status_message": j.status_message,
+                "priority": j.priority,
             }
             for j in jobs
         ],
@@ -74,6 +75,7 @@ def get_jobs_changes_handler(
                 "error_message": j.error_message,
                 "node_id": j.node_id,
                 "status_message": j.status_message,
+                "priority": j.priority,
             }
             for j in jobs
         ],

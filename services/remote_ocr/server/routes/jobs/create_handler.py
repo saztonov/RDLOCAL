@@ -21,6 +21,7 @@ from services.remote_ocr.server.storage import (
     save_job_settings,
     update_node_r2_key,
 )
+from services.remote_ocr.server.storage_jobs import save_celery_task_id
 from services.remote_ocr.server.tasks import run_ocr_task
 from services.remote_ocr.server.timeout_utils import (
     calculate_dynamic_timeout,
@@ -199,11 +200,13 @@ async def create_job_handler(
     block_count = count_blocks_from_data(blocks_data)
     soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
 
-    run_ocr_task.apply_async(
+    celery_result = run_ocr_task.apply_async(
         args=[job.id],
+        priority=max(0, min(10, job.priority)),
         soft_time_limit=soft_timeout,
         time_limit=hard_timeout,
     )
+    save_celery_task_id(job.id, celery_result.id)
 
     return {
         "id": job.id,

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QMessageBox
 
+from app.gui.remote_ocr.table_manager import JOB_ID_ROLE
+
 if TYPE_CHECKING:
     pass
 
@@ -511,3 +513,52 @@ class JobOperationsMixin:
         except Exception as e:
             logger.error(f"Ошибка очистки задач: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось очистить задачи:\n{e}")
+
+    def _move_job_up(self):
+        """Переместить выделенную задачу вверх в очереди."""
+        self._reorder_selected_job("up")
+
+    def _move_job_down(self):
+        """Переместить выделенную задачу вниз в очереди."""
+        self._reorder_selected_job("down")
+
+    def _reorder_selected_job(self, direction: str):
+        """Переместить задачу вверх/вниз в очереди обработки."""
+        selected = self.jobs_table.selectedItems()
+        if not selected:
+            return
+
+        row = selected[0].row()
+        job_id_item = self.jobs_table.item(row, 0)
+        if not job_id_item:
+            return
+
+        job_id = job_id_item.data(JOB_ID_ROLE)
+        if not job_id:
+            return
+
+        cached_job = self._jobs_cache.get(job_id)
+        if not cached_job or cached_job.status != "queued":
+            return
+
+        client = self._get_client()
+        if client is None:
+            return
+
+        try:
+            ok = client.reorder_job(job_id, direction)
+            if ok:
+                from app.gui.toast import show_toast
+
+                label = "вверх" if direction == "up" else "вниз"
+                show_toast(self, f"Задача перемещена {label}")
+                self._refresh_jobs(manual=True)
+            else:
+                from app.gui.toast import show_toast
+
+                show_toast(self, "Не удалось переместить задачу")
+        except Exception as e:
+            logger.error(f"Ошибка перемещения задачи: {e}")
+            from app.gui.toast import show_toast
+
+            show_toast(self, f"Ошибка: {e}")

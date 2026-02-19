@@ -96,4 +96,5 @@ def job_to_dict(job: Job) -> dict:
         "node_id": job.node_id,
         "result_prefix": result_prefix,
         "status_message": job.status_message,
+        "priority": job.priority,
     }

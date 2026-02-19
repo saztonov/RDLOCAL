@@ -22,6 +22,7 @@ from services.remote_ocr.server.storage import (
     update_job_engine,
     update_job_task_name,
 )
+from services.remote_ocr.server.storage_jobs import save_celery_task_id
 from services.remote_ocr.server.tasks import run_ocr_task
 from services.remote_ocr.server.timeout_utils import (
     calculate_dynamic_timeout,
@@ -158,11 +159,13 @@ async def restart_job_handler(
     block_count = _get_block_count_for_job(job_id)
     soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
 
-    run_ocr_task.apply_async(
+    celery_result = run_ocr_task.apply_async(
         args=[job_id],
+        priority=max(0, min(10, job.priority)),
         soft_time_limit=soft_timeout,
         time_limit=hard_timeout,
     )
+    save_celery_task_id(job_id, celery_result.id)
 
     return {"ok": True, "job_id": job_id, "status": "queued"}
 
@@ -201,11 +204,13 @@ def start_job_handler(
     block_count = _get_block_count_for_job(job_id)
     soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
 
-    run_ocr_task.apply_async(
+    celery_result = run_ocr_task.apply_async(
         args=[job_id],
+        priority=max(0, min(10, job.priority)),
         soft_time_limit=soft_timeout,
         time_limit=hard_timeout,
     )
+    save_celery_task_id(job_id, celery_result.id)
 
     return {"ok": True, "job_id": job_id, "status": "queued"}
 
@@ -261,11 +266,13 @@ def resume_job_handler(
     block_count = _get_block_count_for_job(job_id)
     soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
 
-    run_ocr_task.apply_async(
+    celery_result = run_ocr_task.apply_async(
         args=[job_id],
+        priority=max(0, min(10, job.priority)),
         soft_time_limit=soft_timeout,
         time_limit=hard_timeout,
     )
+    save_celery_task_id(job_id, celery_result.id)
 
     return {"ok": True, "job_id": job_id, "status": "queued"}
 

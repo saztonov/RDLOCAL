@@ -79,6 +79,28 @@ def _invalidate_pause_cache(job_id: str) -> None:
         logger.debug(f"Failed to invalidate pause cache: {e}")
 
 
+def _next_queue_priority() -> int:
+    """Получить следующий priority для новой задачи в очереди.
+
+    Новая задача встаёт в конец очереди (наибольший priority).
+    """
+    try:
+        client = get_client()
+        result = (
+            client.table("jobs")
+            .select("priority")
+            .eq("status", "queued")
+            .order("priority", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]["priority"] + 1
+    except Exception as e:
+        logger.warning(f"Failed to get next queue priority: {e}")
+    return 0
+
+
 def create_job(
     document_id: str,
     document_name: str,
@@ -92,6 +114,7 @@ def create_job(
     """Создать новую задачу"""
     job_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
+    priority = _next_queue_priority() if status == "queued" else 0
 
     job = Job(
         id=job_id,
@@ -107,6 +130,7 @@ def create_job(
         r2_prefix=r2_prefix,
         client_id=client_id,
         node_id=node_id,
+        priority=priority,
     )
 
     client = get_client()
@@ -123,6 +147,7 @@ def create_job(
         "engine": job.engine,
         "r2_prefix": job.r2_prefix,
         "client_id": job.client_id,
+        "priority": job.priority,
     }
     if node_id:
         insert_data["node_id"] = node_id
@@ -177,7 +202,7 @@ def list_jobs(document_id: Optional[str] = None) -> List[Job]:
     if document_id:
         query = query.eq("document_id", document_id)
 
-    result = query.order("created_at", desc=True).execute()
+    result = query.order("priority", desc=False).order("created_at", desc=True).execute()
 
     # Сохраняем в кеш
     try:
@@ -373,6 +398,8 @@ def _row_to_job(row: dict) -> Job:
         block_stats=row.get("block_stats"),
         phase_data=row.get("phase_data"),
         retry_count=row.get("retry_count", 0),
+        priority=row.get("priority", 0),
+        celery_task_id=row.get("celery_task_id"),
     )
 
 
@@ -436,3 +463,81 @@ def reset_job_retry_count(job_id: str) -> None:
 
     logger.info(f"Job {job_id}: retry_count и started_at сброшены")
     _invalidate_jobs_cache()
+
+
+def save_celery_task_id(job_id: str, celery_task_id: str) -> None:
+    """Сохранить ID Celery задачи для revoke при reorder."""
+    now = datetime.utcnow().isoformat()
+    client = get_client()
+    client.table("jobs").update({
+        "celery_task_id": celery_task_id,
+        "updated_at": now,
+    }).eq("id", job_id).execute()
+
+
+def find_adjacent_queued_job(job_id: str, direction: str) -> Optional[Job]:
+    """Найти соседнюю queued-задачу для swap.
+
+    Очередь сортируется по priority ASC, created_at ASC.
+    direction="up" → задача с меньшим priority (или раньше создана при равном).
+    direction="down" → задача с большим priority (или позже создана при равном).
+    """
+    client = get_client()
+    result = (
+        client.table("jobs")
+        .select("*")
+        .eq("status", "queued")
+        .order("priority", desc=False)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    queued_jobs = [_row_to_job(row) for row in result.data]
+
+    current_idx = None
+    for i, j in enumerate(queued_jobs):
+        if j.id == job_id:
+            current_idx = i
+            break
+
+    if current_idx is None:
+        return None
+
+    if direction == "up" and current_idx > 0:
+        return queued_jobs[current_idx - 1]
+    elif direction == "down" and current_idx < len(queued_jobs) - 1:
+        return queued_jobs[current_idx + 1]
+
+    return None
+
+
+def swap_job_priorities(
+    job_a_id: str, priority_a: int, job_b_id: str, priority_b: int
+) -> None:
+    """Обменять priority двух задач.
+
+    Если priority совпадают, разводим: первая получает меньший,
+    вторая — больший (чтобы гарантировать различие).
+    """
+    now = datetime.utcnow().isoformat()
+    client = get_client()
+
+    if priority_a == priority_b:
+        new_a = priority_a - 1
+        new_b = priority_b + 1
+    else:
+        new_a = priority_b
+        new_b = priority_a
+
+    client.table("jobs").update({
+        "priority": new_a, "updated_at": now,
+    }).eq("id", job_a_id).execute()
+
+    client.table("jobs").update({
+        "priority": new_b, "updated_at": now,
+    }).eq("id", job_b_id).execute()
+
+    _invalidate_jobs_cache()
+    logger.info(
+        f"Swapped priorities: {job_a_id[:8]}→{new_a}, {job_b_id[:8]}→{new_b}"
+    )

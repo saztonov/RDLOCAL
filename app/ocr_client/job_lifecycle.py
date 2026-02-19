@@ -79,3 +79,10 @@ class JobLifecycleMixin:
             "patch", f"/jobs/{job_id}", data={"task_name": task_name}
         )
         return resp.json().get("ok", False)
+
+    def reorder_job(self, job_id: str, direction: str) -> bool:
+        """Переместить задачу вверх/вниз в очереди обработки."""
+        resp = self._request_with_retry(
+            "post", f"/jobs/{job_id}/reorder", data={"direction": direction}
+        )
+        return resp.json().get("ok", False)

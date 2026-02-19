@@ -23,6 +23,7 @@ def _parse_job(j: dict) -> JobInfo:
         error_message=j.get("error_message"),
         node_id=j.get("node_id"),
         status_message=j.get("status_message"),
+        priority=j.get("priority", 0),
     )
 
 

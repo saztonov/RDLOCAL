@@ -100,6 +100,20 @@ class RemoteOCRPanel(
         header_layout.addStretch()
         header_layout.addWidget(self.status_label)
 
+        self.move_up_btn = QPushButton("▲")
+        self.move_up_btn.setMaximumWidth(30)
+        self.move_up_btn.setToolTip("Переместить задачу выше в очереди")
+        self.move_up_btn.setEnabled(False)
+        self.move_up_btn.clicked.connect(self._move_job_up)
+        header_layout.addWidget(self.move_up_btn)
+
+        self.move_down_btn = QPushButton("▼")
+        self.move_down_btn.setMaximumWidth(30)
+        self.move_down_btn.setToolTip("Переместить задачу ниже в очереди")
+        self.move_down_btn.setEnabled(False)
+        self.move_down_btn.clicked.connect(self._move_job_down)
+        header_layout.addWidget(self.move_down_btn)
+
         self.clear_all_btn = QPushButton("🗑️")
         self.clear_all_btn.setMaximumWidth(30)
         self.clear_all_btn.setToolTip("Очистить все задачи")
@@ -142,6 +156,7 @@ class RemoteOCRPanel(
         self.jobs_table.setSelectionMode(QTableWidget.SingleSelection)
         self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.jobs_table.customContextMenuRequested.connect(self._show_table_context_menu)
+        self.jobs_table.itemSelectionChanged.connect(self._update_reorder_buttons)
         layout.addWidget(self.jobs_table)
 
         self.setWidget(widget)
@@ -383,6 +398,46 @@ class RemoteOCRPanel(
                 "Не удалось найти узел в дереве проектов.\n"
                 "Возможно, узел был удалён.",
             )
+
+    def _update_reorder_buttons(self):
+        """Обновить доступность кнопок ↑/↓ при смене выделения"""
+        selected = self.jobs_table.selectedItems()
+        if not selected:
+            self.move_up_btn.setEnabled(False)
+            self.move_down_btn.setEnabled(False)
+            return
+
+        row = selected[0].row()
+        item = self.jobs_table.item(row, 0)
+        if not item:
+            self.move_up_btn.setEnabled(False)
+            self.move_down_btn.setEnabled(False)
+            return
+
+        job_id = item.data(JOB_ID_ROLE)
+        job_info = self._jobs_cache.get(job_id)
+
+        if not job_info or job_info.status != "queued":
+            self.move_up_btn.setEnabled(False)
+            self.move_down_btn.setEnabled(False)
+            return
+
+        self.move_up_btn.setEnabled(self._has_adjacent_queued(row, "up"))
+        self.move_down_btn.setEnabled(self._has_adjacent_queued(row, "down"))
+
+    def _has_adjacent_queued(self, current_row: int, direction: str) -> bool:
+        """Проверить наличие соседней queued-задачи в таблице"""
+        step = -1 if direction == "up" else 1
+        row = current_row + step
+        while 0 <= row < self.jobs_table.rowCount():
+            item = self.jobs_table.item(row, 0)
+            if item:
+                adj_job_id = item.data(JOB_ID_ROLE)
+                adj_job = self._jobs_cache.get(adj_job_id)
+                if adj_job and adj_job.status == "queued":
+                    return True
+            row += step
+        return False
 
     def showEvent(self, event):
         """При показе панели обновляем список и статистику"""

@@ -42,6 +42,18 @@ def run_ocr_task(self, job_id: str) -> dict:
             logger.error(f"Задача {job_id} не найдена")
             return {"status": "error", "message": "Job not found"}
 
+        # ===== TASK GUARD: защита от дублей после reorder =====
+        if job.celery_task_id and job.celery_task_id != self.request.id:
+            logger.warning(
+                f"Task guard: stale task {self.request.id} for job {job_id}, "
+                f"expected {job.celery_task_id}. Aborting."
+            )
+            return {"status": "aborted", "message": "Stale task (reordered)"}
+
+        if job.status in ("cancelled", "done"):
+            logger.info(f"Task guard: job {job_id} status={job.status}, skipping")
+            return {"status": "skipped", "message": f"Job already {job.status}"}
+
         # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
         # Проверка 1: количество попыток
         if job.retry_count >= settings.job_max_retries:
