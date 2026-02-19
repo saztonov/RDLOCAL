@@ -87,10 +87,25 @@ class TreeFolderOperationsMixin:
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть папку:\n{e}")
 
     def _remove_stamps_from_document(self, node: TreeNode):
-        """Удалить рамки и QR-коды из PDF документа (скачать из R2, обработать, загрузить обратно)"""
+        """Удалить рамки и QR-коды из PDF документа (обработать и заменить оригинал)"""
         # Проверка блокировки документа
         if self._check_document_locked(node):
             return
+
+        # Подтверждение от пользователя
+        reply = QMessageBox.question(
+            self,
+            "Удаление рамок и QR",
+            f"Удалить рамки и QR-коды из документа '{node.name}'?\n\n"
+            "Оригинальный файл будет заменён очищенной версией.\n"
+            "Существующие аннотации (обводки блоков) будут сохранены.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        import shutil
 
         from app.gui.folder_settings_dialog import get_projects_dir
         from rd_core.pdf_stamp_remover import remove_stamps_from_pdf
@@ -109,13 +124,11 @@ class TreeFolderOperationsMixin:
             )
             return
 
-        # Скачиваем в папку проектов (с учётом структуры папок)
         projects_dir = get_projects_dir()
         if not projects_dir:
             QMessageBox.warning(self, "Ошибка", "Папка проектов не задана в настройках")
             return
 
-        # Сохраняем структуру папок из R2
         if r2_key.startswith("tree_docs/"):
             rel_path = r2_key[len("tree_docs/") :]
         else:
@@ -127,7 +140,7 @@ class TreeFolderOperationsMixin:
         # Закрываем файл если открыт в редакторе
         self._close_if_open(r2_key)
 
-        # Если файл уже есть локально - используем его, иначе скачиваем
+        # Скачиваем если нет локально
         if not local_path.exists():
             if not r2.download_file(r2_key, str(local_path)):
                 QMessageBox.critical(
@@ -135,57 +148,62 @@ class TreeFolderOperationsMixin:
                 )
                 return
 
+        # Обработка во временный файл (оригинал не трогаем до успешной загрузки в R2)
         output_path = local_path.parent / f"{local_path.stem}_clean{local_path.suffix}"
         success, result = remove_stamps_from_pdf(str(local_path), str(output_path))
 
         if not success:
+            output_path.unlink(missing_ok=True)
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось обработать файл:\n{result}"
             )
             return
 
-        # Загружаем обработанный файл в R2
-        parent_item = self._node_map.get(node.id)
-        parent = parent_item.parent() if parent_item else None
-        parent_node = parent.data(0, self._get_user_role()) if parent else None
-
-        if not isinstance(parent_node, TreeNode):
-            QMessageBox.warning(self, "Ошибка", "Не найден родительский узел")
-            return
-
-        new_r2_key = f"tree_docs/{parent_node.id}/{output_path.name}"
-
-        # Проверка уникальности имени в папке
-        if not self._check_name_unique(parent_node.id, output_path.name):
-            QMessageBox.warning(
-                self,
-                "Ошибка",
-                f"Файл с именем '{output_path.name}' уже существует в этой папке",
-            )
-            return
-
-        if not r2.upload_file(str(output_path), new_r2_key):
-            QMessageBox.critical(
-                self, "Ошибка", "Не удалось загрузить обработанный файл в R2"
-            )
-            return
-
         try:
-            doc_node = self.client.add_document(
-                parent_id=parent_node.id,
-                name=output_path.name,
-                r2_key=new_r2_key,
-                file_size=output_path.stat().st_size,
-            )
-            child_item = self._create_tree_item(doc_node)
-            parent.addChild(child_item)
-            logger.info(f"Clean document added: {doc_node.id} with r2_key={new_r2_key}")
+            # Загрузить очищенный PDF в R2 по тому же r2_key (перезапись оригинала)
+            if not r2.upload_file(str(output_path), r2_key):
+                output_path.unlink(missing_ok=True)
+                QMessageBox.critical(
+                    self, "Ошибка", "Не удалось загрузить обработанный файл в R2"
+                )
+                return
 
+            # Заменить локальный файл очищенной версией
+            shutil.move(str(output_path), str(local_path))
+
+            # Обновить file_size в атрибутах узла
+            new_size = local_path.stat().st_size
+            attrs = node.attributes.copy()
+            attrs["file_size"] = new_size
+            self.client.update_node(node.id, attributes=attrs)
+            node.attributes = attrs
+
+            # Обновить file_size в node_files (запись типа PDF)
+            try:
+                from app.tree_client import FileType
+
+                pdf_files = self.client.get_node_files(node.id, file_type=FileType.PDF)
+                for nf in pdf_files:
+                    if nf.r2_key == r2_key:
+                        self.client.update_node_file(nf.id, file_size=new_size)
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to update node_file size: {e}")
+
+            # Аннотации не трогаем — координаты остаются валидными
+            # (геометрия страниц не меняется при удалении штампов)
+
+            logger.info(f"Stamps removed from document {node.id}, r2_key={r2_key}")
             QMessageBox.information(
-                self, "Готово", f"Рамки удалены.\nФайл: {output_path.name}"
+                self,
+                "Готово",
+                f"Рамки и QR-коды удалены из документа '{node.name}'.\n"
+                f"Оригинальный файл обновлён.",
             )
+
         except Exception as e:
-            logger.exception(f"Error adding clean document: {e}")
-            QMessageBox.warning(
-                self, "Внимание", f"Файл загружен в R2, но не добавлен в дерево:\n{e}"
+            logger.exception(f"Error replacing cleaned document: {e}")
+            output_path.unlink(missing_ok=True)
+            QMessageBox.critical(
+                self, "Ошибка", f"Не удалось заменить документ:\n{e}"
             )
