@@ -35,6 +35,15 @@ class TableManagerMixin:
 
     def _update_table(self, jobs):
         """Обновить таблицу задач"""
+        # Сохранить выбранную задачу и позицию скролла
+        selected_job_id = None
+        selected_items = self.jobs_table.selectedItems()
+        if selected_items:
+            item = self.jobs_table.item(selected_items[0].row(), 0)
+            if item:
+                selected_job_id = item.data(JOB_ID_ROLE)
+        scroll_pos = self.jobs_table.verticalScrollBar().value()
+
         self.jobs_table.setSortingEnabled(False)
         self.jobs_table.setRowCount(0)
 
@@ -100,6 +109,16 @@ class TableManagerMixin:
             self.jobs_table.setCellWidget(row, 6, actions_widget)
 
         self.jobs_table.setSortingEnabled(True)
+
+        # Восстановить выбранную задачу
+        if selected_job_id:
+            for row in range(self.jobs_table.rowCount()):
+                item = self.jobs_table.item(row, 0)
+                if item and item.data(JOB_ID_ROLE) == selected_job_id:
+                    self.jobs_table.selectRow(row)
+                    break
+        # Восстановить позицию скролла
+        self.jobs_table.verticalScrollBar().setValue(scroll_pos)
 
     def _add_job_to_table(self, job, at_top: bool = False):
         """Добавить одну задачу в таблицу (для оптимистичного обновления)"""

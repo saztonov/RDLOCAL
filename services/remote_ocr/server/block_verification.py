@@ -98,12 +98,24 @@ def verify_and_retry_missing_blocks(
         logger.info("Все текстовые блоки распознаны")
         return False
 
+    total_found = len(missing_blocks)
     error_count = sum(1 for b in missing_blocks if b["reason"] == "api_error")
-    empty_count = len(missing_blocks) - error_count
+    empty_count = total_found - error_count
     logger.warning(
-        f"Найдено {len(missing_blocks)} нераспознанных текстовых блоков "
+        f"Найдено {total_found} нераспознанных текстовых блоков "
         f"(пустых: {empty_count}, ошибок API: {error_count}), engine: {engine_name}"
     )
+
+    # Лимиты верификации из конфигурации
+    from .settings import settings
+    max_blocks = settings.max_retry_blocks  # default 50
+    timeout_min = settings.verification_timeout_minutes  # default 10
+
+    if max_blocks > 0 and len(missing_blocks) > max_blocks:
+        logger.warning(
+            f"Ограничение верификации: {len(missing_blocks)} -> {max_blocks} блоков"
+        )
+        missing_blocks = missing_blocks[:max_blocks]
 
     # Создаём директорию для кропов
     retry_crops_dir = work_dir / "retry_crops"
@@ -115,9 +127,27 @@ def verify_and_retry_missing_blocks(
 
     is_chandra = _is_chandra_backend(ocr_backend)
     successful_retries = 0
+    consecutive_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 5
+    start_time = time.monotonic()
+    stopped_reason = None
 
     with StreamingPDFProcessor(str(pdf_path)) as processor:
         for idx, item in enumerate(missing_blocks):
+            # Проверка таймаута верификации
+            if timeout_min > 0:
+                elapsed_min = (time.monotonic() - start_time) / 60
+                if elapsed_min > timeout_min:
+                    stopped_reason = f"таймаут ({elapsed_min:.1f} мин > {timeout_min} мин)"
+                    logger.warning(f"Верификация прервана: {stopped_reason}")
+                    break
+
+            # Проверка серии ошибок подряд (backend недоступен)
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                stopped_reason = f"{MAX_CONSECUTIVE_FAILURES} ошибок подряд (backend недоступен)"
+                logger.warning(f"Верификация прервана: {stopped_reason}")
+                break
+
             # Вызываем callback прогресса перед обработкой блока
             if on_progress:
                 on_progress(idx, len(missing_blocks))
@@ -148,6 +178,7 @@ def verify_and_retry_missing_blocks(
                 crop = processor.crop_block_image(block_obj, padding=5)
                 if not crop:
                     logger.warning(f"Не удалось создать кроп для блока {block_id}")
+                    consecutive_failures += 1
                     continue
 
                 # Сохраняем кроп для отладки
@@ -168,11 +199,14 @@ def verify_and_retry_missing_blocks(
                         "marker_text_sample": "",
                     }
                     successful_retries += 1
+                    consecutive_failures = 0
                     logger.info(f"Блок {block_id} успешно распознан retry ({len(ocr_text)} символов)")
                 else:
+                    consecutive_failures += 1
                     logger.warning(f"Блок {block_id} не распознан при retry: {ocr_text[:100] if ocr_text else 'пусто'}")
 
             except Exception as e:
+                consecutive_failures += 1
                 logger.error(f"Ошибка обработки блока {block_id}: {e}", exc_info=True)
                 continue
 
@@ -185,7 +219,15 @@ def verify_and_retry_missing_blocks(
         # Регенерируем HTML и MD
         _regenerate_output_files(result, work_dir, result_json_path)
 
-    logger.info(f"Верификация завершена: {successful_retries}/{len(missing_blocks)} блоков восстановлено")
+    elapsed_total = (time.monotonic() - start_time) / 60
+    status_parts = [f"{successful_retries}/{len(missing_blocks)} блоков восстановлено"]
+    if total_found > len(missing_blocks):
+        status_parts.append(f"из {total_found} найденных")
+    if stopped_reason:
+        status_parts.append(f"прервано: {stopped_reason}")
+    status_parts.append(f"за {elapsed_total:.1f} мин")
+
+    logger.info(f"Верификация завершена: {', '.join(status_parts)}")
     return successful_retries > 0
 
 

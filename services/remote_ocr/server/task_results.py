@@ -239,7 +239,7 @@ def _generate_correction_results(
     """
     from rd_core.ocr import generate_html_from_pages
     from rd_core.ocr.generator_common import sanitize_html
-    from rd_core.ocr.ocr_html_parser import build_segments_from_html
+    from .ocr_html_parser import build_segments_from_html
 
     from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
     from .task_helpers import get_r2_storage

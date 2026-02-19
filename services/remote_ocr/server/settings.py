@@ -194,6 +194,18 @@ class Settings:
         )
     )
 
+    # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
+    max_retry_blocks: int = field(
+        default_factory=lambda: _get(
+            _yaml_config, "max_retry_blocks", "MAX_RETRY_BLOCKS", int
+        )
+    )
+    verification_timeout_minutes: int = field(
+        default_factory=lambda: _get(
+            _yaml_config, "verification_timeout_minutes", "VERIFICATION_TIMEOUT_MINUTES", int
+        )
+    )
+
     # ===== НАСТРОЙКИ OCR =====
     crop_png_compress: int = field(
         default_factory=lambda: _get(

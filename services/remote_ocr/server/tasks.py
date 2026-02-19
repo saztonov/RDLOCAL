@@ -223,10 +223,10 @@ def run_ocr_task(self, job_id: str) -> dict:
         update_job_status(job.id, "processing", progress=0.92, status_message="📄 Генерация результатов...")
         verification_backend = strip_backend
 
-        # Callback для верификации блоков (диапазон 0.92 -> 0.94)
+        # Callback для верификации блоков (диапазон 0.92 -> 0.97)
         def on_verification_progress(current: int, total: int):
             if total > 0:
-                progress = 0.92 + 0.02 * (current / total)
+                progress = 0.92 + 0.05 * (current / total)
                 status_msg = f"🔍 Верификация блоков ({current + 1}/{total})"
             else:
                 progress = 0.92
@@ -245,7 +245,7 @@ def run_ocr_task(self, job_id: str) -> dict:
 
         # Загрузка результатов в R2
         logger.info(f"Загрузка результатов в R2...")
-        update_job_status(job.id, "processing", progress=0.95, status_message="☁️ Загрузка в облако...")
+        update_job_status(job.id, "processing", progress=0.97, status_message="☁️ Загрузка в облако...")
         upload_results_to_r2(job, work_dir, r2_prefix)
 
         # Регистрация OCR результатов в node_files

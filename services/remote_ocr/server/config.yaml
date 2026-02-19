@@ -55,6 +55,12 @@ chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2
 
+# ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
+# Максимум блоков для retry верификации (0 = без лимита)
+max_retry_blocks: 50
+# Таймаут верификации в минутах (0 = без лимита)
+verification_timeout_minutes: 10
+
 # ===== НАСТРОЙКИ OCR =====
 # Сжатие PNG (0=без сжатия, 9=максимальное)
 crop_png_compress: 6
