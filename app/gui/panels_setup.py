@@ -6,10 +6,9 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
-    QGroupBox,
     QHBoxLayout,
-    QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QTabWidget,
     QToolButton,
     QTreeWidget,
@@ -172,21 +171,17 @@ class PanelsSetupMixin:
         # Переменная для выбранной группы
         self.selected_group_id = None
 
-        blocks_layout.addWidget(self.blocks_tabs)
+        # QSplitter: дерево блоков + inline OCR preview
+        blocks_splitter = QSplitter(Qt.Vertical)
+        blocks_splitter.addWidget(self.blocks_tabs)
 
-        # Подсказка для IMAGE блока
-        self.hint_group = QGroupBox("Подсказка (IMAGE)")
-        hint_layout = QVBoxLayout(self.hint_group)
+        self.ocr_preview_inline = OcrPreviewWidget()
+        blocks_splitter.addWidget(self.ocr_preview_inline)
+        blocks_splitter.setSizes([300, 200])
 
-        self.hint_edit = QPlainTextEdit()
-        self.hint_edit.setPlaceholderText("Введите описание содержимого картинки...")
-        self.hint_edit.setMaximumHeight(100)
-        self.hint_edit.textChanged.connect(self._on_hint_changed)
-        hint_layout.addWidget(self.hint_edit)
+        blocks_layout.addWidget(blocks_splitter)
 
-        self.hint_group.setEnabled(False)
         self._selected_image_block = None
-        blocks_layout.addWidget(self.hint_group)
 
         self.main_right_tabs.addTab(blocks_container, "Блоки")
 

@@ -197,6 +197,8 @@ class MainWindow(
         # Очистить OCR preview
         if hasattr(self, "ocr_preview") and self.ocr_preview:
             self.ocr_preview.clear()
+        if hasattr(self, "ocr_preview_inline") and self.ocr_preview_inline:
+            self.ocr_preview_inline.clear()
         self._update_ui()
 
     def _save_settings(self):
