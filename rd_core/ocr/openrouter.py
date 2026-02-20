@@ -224,6 +224,21 @@ class OpenRouterBackend:
                 return f"[Ошибка OpenRouter API: {response.status_code}]"
 
             result = response.json()
+
+            # OpenRouter может вернуть HTTP 200 с error в теле
+            if "error" in result:
+                err_obj = result["error"]
+                if isinstance(err_obj, dict):
+                    err_msg = err_obj.get("message", str(err_obj))
+                else:
+                    err_msg = str(err_obj)
+                logger.error(f"OpenRouter API error in body: {err_msg}")
+                return f"[Ошибка OpenRouter: {err_msg}]"
+
+            if "choices" not in result or not result["choices"]:
+                logger.error(f"OpenRouter: 'choices' missing. Keys: {list(result.keys())}")
+                return "[Ошибка OpenRouter: некорректный ответ API]"
+
             text = result["choices"][0]["message"]["content"].strip()
             logger.debug(f"OpenRouter OCR: распознано {len(text)} символов")
             return text

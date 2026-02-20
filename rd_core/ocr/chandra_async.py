@@ -264,6 +264,12 @@ class AsyncChandraBackend:
                 return f"[Ошибка Chandra API: {response.status_code}]"
 
             result = response.json()
+
+            if "choices" not in result or not result["choices"]:
+                err_msg = result.get("error", result)
+                logger.error(f"Chandra: 'choices' missing: {err_msg}")
+                return f"[Ошибка Chandra: некорректный ответ ({err_msg})]"
+
             text = result["choices"][0]["message"]["content"].strip()
             logger.debug(f"AsyncChandra OCR: распознано {len(text)} символов")
             return text

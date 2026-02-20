@@ -142,6 +142,10 @@ class DatalabOCRBackend:
                         logger.error(
                             f"Datalab API error: {response.status_code} - {response.text}"
                         )
+                        if response.status_code == 401:
+                            return "[Ошибка Datalab API 401: Неверный или просроченный DATALAB_API_KEY]"
+                        elif response.status_code == 403:
+                            return "[Ошибка Datalab API 403: Доступ запрещён]"
                         return f"[Ошибка Datalab API: {response.status_code}]"
 
                     result = response.json()
