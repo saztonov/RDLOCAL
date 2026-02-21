@@ -399,7 +399,7 @@ class ProjectTreeWidget(
         if not r2_key:
             QMessageBox.warning(self, "Ошибка", "Документ не имеет привязки к R2")
             return
-        dialog = BlockVerificationDialog(node.name, r2_key, self)
+        dialog = BlockVerificationDialog(node.name, r2_key, self, node_id=node.id)
         dialog.exec()
 
     def _view_in_supabase(self, node: TreeNode):

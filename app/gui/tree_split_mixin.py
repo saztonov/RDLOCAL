@@ -144,7 +144,7 @@ class TreeSplitMixin:
 
         try:
             ann_results = self._split_annotation_if_exists(
-                r2_key, local_path, r2, parts
+                node.id, local_path, r2, parts
             )
             if ann_results:
                 for res in ann_results:
@@ -198,24 +198,15 @@ class TreeSplitMixin:
             f"Разделено на {num_parts} частей: {node.name}"
         )
 
-    def _split_annotation_if_exists(self, r2_key, local_path, r2, parts):
+    def _split_annotation_if_exists(self, node_id, local_path, r2, parts):
         """Загрузить и разделить аннотацию, если она существует."""
-        from app.gui.file_auto_save import get_annotation_path, get_annotation_r2_key
         from rd_core.annotation_io import AnnotationIO
         from rd_core.annotation_split import split_annotation
 
-        ann_local = get_annotation_path(str(local_path))
-        ann_r2_key = get_annotation_r2_key(r2_key)
-
-        # Пробуем загрузить аннотацию: сначала локально, потом из R2
+        # Загружаем аннотацию из Supabase (привязана к node_id)
         source_doc = None
-        if ann_local.exists():
-            source_doc, _ = AnnotationIO.load_annotation(str(ann_local))
-        else:
-            if r2.exists(ann_r2_key):
-                ann_local.parent.mkdir(parents=True, exist_ok=True)
-                if r2.download_file(ann_r2_key, str(ann_local)):
-                    source_doc, _ = AnnotationIO.load_annotation(str(ann_local))
+        if node_id:
+            source_doc = AnnotationIO.load_from_db(node_id)
 
         if not source_doc or not source_doc.pages:
             return None
@@ -301,29 +292,12 @@ class TreeSplitMixin:
         return created_nodes
 
     def _upload_split_annotation(self, ann_result, doc_node, pdf_r2_key, r2):
-        """Загрузить аннотацию для одной части."""
-        from app.gui.file_auto_save import get_annotation_r2_key
-        from rd_core.annotation_io import ANNOTATION_FORMAT_VERSION
+        """Сохранить аннотацию для одной части в Supabase."""
+        from rd_core.annotation_io import AnnotationIO
 
-        ann_data = ann_result.document.to_dict()
-        ann_data["format_version"] = ANNOTATION_FORMAT_VERSION
-        ann_json = json.dumps(ann_data, ensure_ascii=False, indent=2)
-
-        ann_r2_key = get_annotation_r2_key(pdf_r2_key)
-
-        if not r2.upload_text(ann_json, ann_r2_key, "application/json"):
-            raise RuntimeError(f"Не удалось загрузить аннотацию в R2")
-
-        # Регистрируем аннотацию в node_files
-        ann_file_name = Path(ann_r2_key).name
-        self.client.add_node_file(
-            node_id=doc_node.id,
-            file_type=FileType.ANNOTATION,
-            r2_key=ann_r2_key,
-            file_name=ann_file_name,
-            file_size=len(ann_json.encode("utf-8")),
-            mime_type="application/json",
-        )
+        success = AnnotationIO.save_to_db(ann_result.document, doc_node.id)
+        if not success:
+            raise RuntimeError("Не удалось сохранить аннотацию в Supabase")
 
         # Обновляем has_annotation в attributes
         attrs = doc_node.attributes.copy() if doc_node.attributes else {}

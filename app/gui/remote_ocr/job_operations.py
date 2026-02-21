@@ -105,27 +105,20 @@ class JobOperationsMixin:
                                 block.ocr_text = None
                                 cleared += 1
 
-                # В smart mode всегда загружаем annotation в R2,
+                # В smart mode всегда сохраняем annotation в Supabase,
                 # чтобы сервер увидел новые блоки при merge
-                should_upload = cleared > 0 or is_smart_mode
-                if should_upload:
-                    from app.gui.file_operations import (
-                        get_annotation_path,
-                        get_annotation_r2_key,
-                    )
+                should_save = cleared > 0 or is_smart_mode
+                if should_save:
                     from rd_core.annotation_io import AnnotationIO
 
-                    pdf_path = getattr(self.main_window, "_current_pdf_path", None)
-                    if pdf_path:
-                        ann_path = get_annotation_path(pdf_path)
-                        AnnotationIO.save_annotation(
-                            self.main_window.annotation_document, str(ann_path)
+                    if node_id and self.main_window.annotation_document:
+                        success = AnnotationIO.save_to_db(
+                            self.main_window.annotation_document, node_id
                         )
-                        logger.debug(f"Saved cleared annotation to {ann_path}")
-
-                        ann_r2_key = get_annotation_r2_key(r2_key)
-                        r2.upload_file(str(ann_path), ann_r2_key)
-                        logger.debug(f"Synced cleared annotation to R2: {ann_r2_key}")
+                        if success:
+                            logger.debug(f"Saved cleared annotation to Supabase: {node_id}")
+                        else:
+                            logger.warning(f"Failed to save annotation to Supabase: {node_id}")
 
             mode_str = f"smart ({len(blocks_to_reprocess)} blocks)" if is_smart_mode else "full"
             logger.info(f"Cleaned old OCR results for node: {node_id} (mode={mode_str})")

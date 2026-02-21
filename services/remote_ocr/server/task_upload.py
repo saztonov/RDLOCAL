@@ -88,10 +88,12 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
     # Формат: (local_path, r2_key, content_type, file_type, filename, size, metadata)
     files_to_upload = []
 
-    # annotation.json -> {doc_stem}_annotation.json
+    # annotation.json -> сохраняем только в job_files для скачивания клиентом
+    # Аннотация как node-level файл больше НЕ загружается в R2 (хранится в Supabase)
     annotation_path = work_dir / "annotation.json"
     if annotation_path.exists():
         delete_job_files(job.id, ["blocks"])
+        # Загружаем в R2 только как часть job результатов (для скачивания клиентом)
         annotation_filename = f"{doc_stem}_annotation.json"
         r2_key = f"{r2_prefix}/{annotation_filename}"
         files_to_upload.append((

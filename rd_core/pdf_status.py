@@ -25,7 +25,7 @@ def calculate_pdf_status(
         r2_storage: Экземпляр R2Storage
         node_id: ID узла документа
         r2_key: R2 ключ PDF файла
-        check_blocks: Проверять ли наличие блоков в annotation.json
+        check_blocks: Проверять ли наличие блоков в аннотации
 
     Returns:
         Кортеж (статус, сообщение)
@@ -45,20 +45,20 @@ def calculate_pdf_status(
         pdf_stem = pdf_path.stem
         pdf_parent = str(pdf_path.parent)
 
-        ann_r2_key = f"{pdf_parent}/{pdf_stem}_annotation.json"
         ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
         res_r2_key = f"{pdf_parent}/{pdf_stem}_result.json"
 
         # Проверяем наличие файлов на R2 одним запросом list_objects
-        # Вместо 3 отдельных exists() делаем 1 list_objects_with_metadata()
         r2_objects = r2_storage.list_objects_with_metadata(f"{pdf_parent}/")
         r2_keys = {obj["Key"] for obj in r2_objects}
 
-        has_annotation_r2 = ann_r2_key in r2_keys
         has_ocr_html_r2 = ocr_r2_key in r2_keys
         has_result_json_r2 = res_r2_key in r2_keys
 
-        # Проверяем наличие файлов в Supabase
+        # Проверяем наличие аннотации в таблице annotations (Supabase)
+        has_annotation = client.has_annotation_in_db(node_id)
+
+        # Проверяем наличие файлов в node_files (Supabase)
         try:
             node_files = client.get_node_files(node_id)
             file_types_in_db = {nf.file_type for nf in node_files}
@@ -66,18 +66,15 @@ def calculate_pdf_status(
             logger.error(f"Failed to get node files for {node_id}: {e}", exc_info=True)
             raise
 
-        has_annotation_db = FileType.ANNOTATION in file_types_in_db
         has_ocr_html_db = FileType.OCR_HTML in file_types_in_db
         has_result_json_db = FileType.RESULT_JSON in file_types_in_db
 
-        # Проверяем блоки если требуется
+        # Проверяем блоки если требуется — загружаем из Supabase
         pages_without_blocks = []
-        if check_blocks and has_annotation_r2:
+        if check_blocks and has_annotation:
             try:
-                ann_content = r2_storage.download_text(ann_r2_key)
-                if ann_content:
-                    ann_data = json.loads(ann_content)
-
+                ann_data = client.get_annotation_data_for_status(node_id)
+                if ann_data:
                     # Поддержка двух форматов: {"pages": [...]} или просто [...]
                     if isinstance(ann_data, dict):
                         pages = ann_data.get("pages", [])
@@ -93,16 +90,12 @@ def calculate_pdf_status(
                             if not blocks:
                                 pages_without_blocks.append(page_num)
             except Exception as e:
-                logger.error(f"Failed to parse annotation.json: {e}")
+                logger.error(f"Failed to check annotation blocks: {e}")
 
         # Определяем статус и сообщение
         missing_r2 = []
         missing_db = []
 
-        if not has_annotation_r2:
-            missing_r2.append("annotation.json")
-        if not has_annotation_db:
-            missing_db.append("annotation.json")
         if not has_ocr_html_r2:
             missing_r2.append("ocr.html")
         if not has_ocr_html_db:
@@ -112,9 +105,9 @@ def calculate_pdf_status(
         if not has_result_json_db:
             missing_db.append("result.json")
 
-        # Приоритет 3: Нет annotation.json или есть страницы без блоков
-        if not has_annotation_r2:
-            return PDFStatus.MISSING_BLOCKS, "Нет annotation.json на R2"
+        # Приоритет 3: Нет аннотации или есть страницы без блоков
+        if not has_annotation:
+            return PDFStatus.MISSING_BLOCKS, "Нет аннотации в базе данных"
         elif pages_without_blocks:
             pages_str = ", ".join(str(p) for p in sorted(pages_without_blocks))
             return PDFStatus.MISSING_BLOCKS, f"Страницы без блоков: {pages_str}"

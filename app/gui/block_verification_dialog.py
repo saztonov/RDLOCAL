@@ -85,9 +85,10 @@ class VerificationWorker(QThread):
     progress = Signal(str)
     finished = Signal(object)  # VerificationResult или str (ошибка)
 
-    def __init__(self, r2_key: str):
+    def __init__(self, r2_key: str, node_id: str = ""):
         super().__init__()
         self.r2_key = r2_key
+        self.node_id = node_id
 
     def run(self):
         try:
@@ -108,18 +109,20 @@ class VerificationWorker(QThread):
         pdf_stem = pdf_path.stem
         pdf_parent = str(pdf_path.parent)
 
-        ann_r2_key = f"{pdf_parent}/{pdf_stem}_annotation.json"
         ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
         res_r2_key = f"{pdf_parent}/{pdf_stem}_result.json"
         md_r2_key = f"{pdf_parent}/{pdf_stem}_document.md"
 
-        # 1. Загружаем и парсим annotation.json
-        self.progress.emit("Загрузка annotation.json...")
-        ann_content = r2.download_text(ann_r2_key)
-        if not ann_content:
-            raise ValueError("annotation.json не найден на R2")
+        # 1. Загружаем и парсим аннотацию из Supabase
+        self.progress.emit("Загрузка аннотации...")
+        ann_data = None
+        if self.node_id:
+            from app.tree_client import TreeClient
+            client = TreeClient()
+            ann_data = client.get_annotation(self.node_id)
 
-        ann_data = json.loads(ann_content)
+        if not ann_data:
+            raise ValueError("Аннотация не найдена в базе данных")
 
         for page in ann_data.get("pages", []):
             page_num = page.get("page_number", 0)
@@ -215,10 +218,11 @@ class VerificationWorker(QThread):
 class BlockVerificationDialog(QDialog):
     """Диалог верификации блоков"""
 
-    def __init__(self, node_name: str, r2_key: str, parent=None):
+    def __init__(self, node_name: str, r2_key: str, parent=None, node_id: str = ""):
         super().__init__(parent)
         self.node_name = node_name
         self.r2_key = r2_key
+        self.node_id = node_id
         self._worker: Optional[VerificationWorker] = None
 
         self.setWindowTitle(f"Верификация блоков: {node_name}")
@@ -330,7 +334,7 @@ class BlockVerificationDialog(QDialog):
 
     def _start_verification(self):
         """Запустить верификацию"""
-        self._worker = VerificationWorker(self.r2_key)
+        self._worker = VerificationWorker(self.r2_key, self.node_id)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.start()

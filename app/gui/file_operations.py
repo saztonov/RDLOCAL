@@ -8,11 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from app.gui.file_auto_save import (
-    FileAutoSaveMixin,
-    get_annotation_path,
-    get_annotation_r2_key,
-)
+from app.gui.file_auto_save import FileAutoSaveMixin
 from app.gui.file_download import FileDownloadMixin
 from rd_core.annotation_io import AnnotationIO
 from rd_core.models import Document, Page
@@ -26,43 +22,9 @@ try:
 except ImportError:
     __product__ = "Core Structure"
 
-# Re-export для обратной совместимости
-__all__ = ["FileOperationsMixin", "get_annotation_path", "get_annotation_r2_key"]
-
 
 class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
     """Миксин для операций с файлами"""
-
-    def _sync_annotation_to_r2(self):
-        """Синхронизировать annotation.json с R2"""
-        if not self._current_r2_key or not self._current_pdf_path:
-            return
-
-        ann_path = get_annotation_path(self._current_pdf_path)
-        if not ann_path.exists():
-            return
-
-        try:
-            from rd_core.r2_storage import R2Storage
-
-            r2 = R2Storage()
-            ann_r2_key = get_annotation_r2_key(self._current_r2_key)
-            success = r2.upload_file(str(ann_path), ann_r2_key)
-            
-            if success:
-                logger.debug(f"Annotation synced to R2: {ann_r2_key}")
-                # Обновить атрибут has_annotation в дереве
-                self._update_has_annotation_flag(True)
-            else:
-                # Проверяем статус соединения
-                if hasattr(self, 'connection_manager') and not self.connection_manager.is_connected():
-                    logger.info(f"Аннотация будет синхронизирована при восстановлении соединения")
-                    from app.gui.toast import show_toast
-                    show_toast(self, "Аннотация сохранена локально. Синхронизация при восстановлении связи.", duration=3000)
-                else:
-                    logger.warning(f"Не удалось синхронизировать аннотацию: {ann_r2_key}")
-        except Exception as e:
-            logger.error(f"Sync annotation to R2 failed: {e}")
 
     def _update_has_annotation_flag(self, has_annotation: bool):
         """Обновить флаг has_annotation в узле дерева"""
@@ -82,7 +44,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 attrs["has_annotation"] = has_annotation
                 client.update_node(self._current_node_id, attributes=attrs)
 
-                # Обновляем статус PDF в БД (кеш будет инвалидирован)
+                # Обновляем статус PDF в БД
                 if node.node_type.value == "document" and self._current_r2_key:
                     r2 = R2Storage()
                     status, message = calculate_pdf_status(
@@ -92,7 +54,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                         self._current_node_id, status.value, message
                     )
 
-                    # Обновляем только конкретный узел в дереве (без полного refresh)
+                    # Обновляем только конкретный узел в дереве
                     if hasattr(self, "project_tree") and self.project_tree:
                         item = self.project_tree._node_map.get(self._current_node_id)
                         if item:
@@ -121,38 +83,38 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             logger.debug(f"Update has_annotation failed: {e}")
 
     def _load_annotation_if_exists(self, pdf_path: str, r2_key: str = ""):
-        """Загрузить annotation.json если существует (локально или в R2)"""
+        """Загрузить аннотацию из Supabase или мигрировать из старого JSON файла"""
         from app.gui.toast import show_toast
 
-        ann_path = get_annotation_path(pdf_path)
-
-        # Попробовать скачать из R2 если нет локально
-        if not ann_path.exists() and r2_key:
+        # 1. Попытка загрузить из Supabase (основной источник)
+        if self._current_node_id:
             try:
-                from rd_core.r2_storage import R2Storage
+                loaded = AnnotationIO.load_from_db(self._current_node_id)
+                if loaded:
+                    self.annotation_document = loaded
+                    logger.info(f"Annotation loaded from Supabase: {self._current_node_id}")
 
-                r2 = R2Storage()
-                ann_r2_key = get_annotation_r2_key(r2_key)
-                success = r2.download_file(ann_r2_key, str(ann_path))
-                
-                if not success:
-                    # Проверяем статус соединения
-                    if hasattr(self, 'connection_manager') and not self.connection_manager.is_connected():
-                        logger.info(f"Не удалось скачать аннотацию - работа в офлайн режиме")
-                        show_toast(self, "Работа в офлайн режиме. Аннотация недоступна.", duration=3000)
+                    # Инициализируем кеш аннотаций
+                    from app.gui.annotation_cache import get_annotation_cache
+                    cache = get_annotation_cache()
+                    cache.set(self._current_node_id, self.annotation_document, pdf_path)
+
+                    self._annotation_synced = True
+                    self._update_has_annotation_flag(True)
+                    return True
             except Exception as e:
-                logger.debug(f"No annotation in R2 or error: {e}")
+                logger.debug(f"Supabase annotation load error: {e}")
 
-        # Загрузить и мигрировать локальный файл
-        if ann_path.exists():
+        # 2. Проверить локальный JSON файл (миграция)
+        ann_path = Path(pdf_path).parent / f"{Path(pdf_path).stem}_annotation.json"
+
+        if ann_path.exists() and self._current_node_id:
+            logger.info(f"Найден старый JSON файл: {ann_path}, миграция в Supabase...")
             loaded, result = AnnotationIO.load_and_migrate(str(ann_path))
 
-            # Ошибка загрузки - предлагаем создать заново
             if not result.success:
                 error_msg = "; ".join(result.errors)
                 logger.error(f"Annotation load failed: {error_msg}")
-
-                from PySide6.QtWidgets import QMessageBox
 
                 reply = QMessageBox.warning(
                     self,
@@ -164,56 +126,99 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 )
 
                 if reply == QMessageBox.Yes:
-                    # Удаляем битый файл и создаём пустую аннотацию
                     try:
                         ann_path.unlink()
                     except Exception:
                         pass
                     show_toast(self, "Создана новая разметка", success=True)
-                    return False  # Будет создана пустая аннотация
+                    return False
                 else:
                     return False
 
             if loaded:
                 self.annotation_document = loaded
-                logger.info(f"Annotation loaded: {ann_path}")
-                
-                # Инициализируем кеш аннотаций
-                if self._current_node_id:
-                    from app.gui.annotation_cache import get_annotation_cache
-                    cache = get_annotation_cache()
-                    cache.set(
-                        self._current_node_id,
-                        self.annotation_document,
-                        pdf_path,
-                        r2_key,
-                        str(ann_path)
+
+                # Мигрируем в Supabase
+                success = AnnotationIO.save_to_db(loaded, self._current_node_id)
+                if success:
+                    # Удаляем JSON файл после успешной миграции
+                    try:
+                        ann_path.unlink()
+                        logger.info(f"JSON файл удалён после миграции: {ann_path}")
+                    except Exception as e:
+                        logger.warning(f"Не удалось удалить JSON файл: {e}")
+
+                    show_toast(
+                        self,
+                        "Разметка мигрирована в Supabase",
+                        duration=3000,
+                        success=True,
                     )
+                else:
+                    logger.warning("Миграция в Supabase не удалась, данные только в памяти")
 
-                # Миграция формата выполнена - сохраняем и уведомляем
-                if result.migrated:
-                    logger.info(f"Annotation format migrated, saving")
-                    AnnotationIO.save_annotation(loaded, str(ann_path))
-                    # Синхронизируем с R2
-                    self._sync_annotation_to_r2()
+                # Инициализируем кеш аннотаций
+                from app.gui.annotation_cache import get_annotation_cache
+                cache = get_annotation_cache()
+                cache.set(self._current_node_id, self.annotation_document, pdf_path)
 
-                    # Уведомление пользователю
-                    warn_count = len(result.warnings)
-                    if warn_count > 0:
+                self._annotation_synced = True
+                self._update_has_annotation_flag(True)
+                return True
+
+        # 3. Проверить R2 (для обратной совместимости — миграция)
+        if r2_key and self._current_node_id:
+            try:
+                from pathlib import PurePosixPath
+                from rd_core.r2_storage import R2Storage
+
+                r2 = R2Storage()
+                p = PurePosixPath(r2_key)
+                ann_r2_key = str(p.parent / f"{p.stem}_annotation.json")
+
+                # Скачать во временный файл
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as tmp:
+                    tmp_path = tmp.name
+
+                success = r2.download_file(ann_r2_key, tmp_path)
+                if success:
+                    loaded, result = AnnotationIO.load_and_migrate(tmp_path)
+                    if result.success and loaded:
+                        self.annotation_document = loaded
+
+                        # Мигрируем в Supabase
+                        AnnotationIO.save_to_db(loaded, self._current_node_id)
+
+                        # Инициализируем кеш
+                        from app.gui.annotation_cache import get_annotation_cache
+                        cache = get_annotation_cache()
+                        cache.set(self._current_node_id, self.annotation_document, pdf_path)
+
+                        self._annotation_synced = True
+                        self._update_has_annotation_flag(True)
+
                         show_toast(
                             self,
-                            f"Разметка обновлена до актуального формата ({warn_count} изм.)",
+                            "Разметка мигрирована из R2 в Supabase",
                             duration=3000,
                             success=True,
                         )
-                    else:
-                        show_toast(self, "Формат разметки обновлён", success=True)
 
-                # Аннотация уже есть - значит синхронизирована
-                self._annotation_synced = True
-                # Обновляем флаг has_annotation в дереве
-                self._update_has_annotation_flag(True)
-                return True
+                        logger.info(f"Annotation migrated from R2 to Supabase: {ann_r2_key}")
+
+                # Удалить временный файл
+                try:
+                    Path(tmp_path).unlink()
+                except Exception:
+                    pass
+
+                if success and loaded:
+                    return True
+
+            except Exception as e:
+                logger.debug(f"R2 annotation migration error: {e}")
+
         return False
 
     def _create_empty_annotation(self, pdf_path: str) -> Document:
@@ -294,11 +299,25 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         self.setWindowTitle(f"{__product__} - {Path(pdf_path).name}")
 
     def _save_annotation(self):
-        """Сохранить разметку в JSON"""
+        """Сохранить разметку в Supabase (или в JSON через диалог)"""
         if not self.annotation_document:
             return
 
-        # Определяем путь по умолчанию рядом с PDF
+        from app.gui.toast import show_toast
+
+        # Если есть node_id — сохраняем в Supabase
+        if self._current_node_id:
+            success = AnnotationIO.save_to_db(
+                self.annotation_document, self._current_node_id
+            )
+            if success:
+                show_toast(self, "Разметка сохранена в Supabase", success=True)
+                self._update_has_annotation_flag(True)
+            else:
+                show_toast(self, "Ошибка сохранения в Supabase")
+            return
+
+        # Fallback: сохранение в JSON файл (для локального использования без дерева)
         default_path = ""
         if hasattr(self, "_current_pdf_path") and self._current_pdf_path:
             pdf_path = Path(self._current_pdf_path)
@@ -309,12 +328,10 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         )
         if file_path:
             AnnotationIO.save_annotation(self.annotation_document, file_path)
-            from app.gui.toast import show_toast
-
             show_toast(self, "Разметка сохранена")
 
     def _load_annotation(self):
-        """Загрузить разметку из JSON"""
+        """Загрузить разметку из JSON и мигрировать в Supabase"""
         from app.gui.toast import show_toast
 
         file_path, _ = QFileDialog.getOpenFileName(
@@ -350,10 +367,10 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 self.annotation_document = loaded_doc
                 self._render_current_page()
 
-            # Сохранить если была миграция
-            if result.migrated:
-                AnnotationIO.save_annotation(loaded_doc, file_path)
-                show_toast(self, "Разметка загружена и обновлена", success=True)
+            # Сохраняем в Supabase если есть node_id
+            if self._current_node_id:
+                AnnotationIO.save_to_db(loaded_doc, self._current_node_id)
+                show_toast(self, "Разметка загружена и сохранена в Supabase", success=True)
             else:
                 show_toast(self, "Разметка загружена", success=True)
 
@@ -367,35 +384,19 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         if not hasattr(self, "_current_r2_key") or self._current_r2_key != r2_key:
             return
 
-        if not self._current_pdf_path:
+        if not self._current_pdf_path or not self._current_node_id:
             return
 
         try:
-            # Скачиваем обновлённую аннотацию из R2
-            from rd_core.r2_storage import R2Storage
-
-            ann_r2_key = get_annotation_r2_key(r2_key)
-            ann_path = get_annotation_path(self._current_pdf_path)
-
-            r2 = R2Storage()
-            if not r2.download_file(ann_r2_key, str(ann_path)):
-                logger.warning(f"Не удалось скачать аннотацию из R2: {ann_r2_key}")
-                return
-
-            # Загружаем с миграцией
-            loaded_doc, result = AnnotationIO.load_and_migrate(str(ann_path))
-            if not result.success or not loaded_doc:
-                logger.warning(f"Не удалось загрузить аннотацию: {result.errors}")
+            # Загружаем из Supabase
+            loaded_doc = AnnotationIO.load_from_db(self._current_node_id)
+            if not loaded_doc:
+                logger.warning(f"Не удалось загрузить аннотацию из Supabase: {self._current_node_id}")
                 return
 
             # Заменяем текущую аннотацию
             self.annotation_document = loaded_doc
             self._annotation_synced = True
-
-            # Если была миграция - сохраняем и синхронизируем
-            if result.migrated:
-                AnnotationIO.save_annotation(loaded_doc, str(ann_path))
-                self._sync_annotation_to_r2()
 
             # Обновляем отображение
             self._render_current_page()
@@ -404,7 +405,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             if hasattr(self, "_update_groups_tree"):
                 self._update_groups_tree()
 
-            logger.info(f"Аннотация обновлена из R2: {ann_r2_key}")
+            logger.info(f"Аннотация обновлена из Supabase: {self._current_node_id}")
             show_toast(self, "Аннотация обновлена", success=True)
 
         except Exception as e:

@@ -158,9 +158,9 @@ class FileDownloadMixin:
                 )
             )
 
-        # Типы файлов для скачивания (без кропов)
+        # Типы файлов для скачивания (без кропов и аннотаций)
+        # Аннотация хранится в Supabase (таблица annotations), не в node_files
         download_file_types = {
-            FileType.ANNOTATION,
             FileType.OCR_HTML,
             FileType.RESULT_JSON,
             FileType.RESULT_MD,

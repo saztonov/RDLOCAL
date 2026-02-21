@@ -158,7 +158,43 @@ class ConnectionMixin:
                 from app.gui.sync_queue import SyncOperationType
                 from rd_core.r2_storage import R2Storage
 
-                if operation.type == SyncOperationType.UPLOAD_FILE:
+                if operation.type == SyncOperationType.SAVE_ANNOTATION:
+                    # Сохранение аннотации в Supabase
+                    if not operation.node_id or not operation.data:
+                        queue.remove_operation(operation.id)
+                        return
+
+                    from app.tree_client import TreeClient
+
+                    client = TreeClient()
+                    ann_data = operation.data.get("annotation_data", {})
+                    fmt_ver = operation.data.get("format_version", 2)
+                    success = client.save_annotation(
+                        operation.node_id, ann_data, fmt_ver
+                    )
+                    if success:
+                        logger.info(
+                            f"Аннотация синхронизирована в Supabase: {operation.node_id}"
+                        )
+                        # Обновляем флаг has_annotation
+                        try:
+                            node = client.get_node(operation.node_id)
+                            if node and not node.attributes.get("has_annotation"):
+                                attrs = node.attributes.copy()
+                                attrs["has_annotation"] = True
+                                client.update_node(
+                                    operation.node_id, attributes=attrs
+                                )
+                        except Exception:
+                            pass
+                        queue.remove_operation(operation.id)
+                    else:
+                        queue.mark_failed(
+                            operation.id,
+                            "Не удалось сохранить аннотацию в Supabase",
+                        )
+
+                elif operation.type == SyncOperationType.UPLOAD_FILE:
                     r2 = R2Storage()
                     local_path = operation.local_path
                     r2_key = operation.r2_key
@@ -175,17 +211,6 @@ class ConnectionMixin:
 
                     if r2.upload_file(local_path, r2_key, content_type):
                         logger.info(f"Операция синхронизирована: {operation.id}")
-
-                        # Регистрируем файл аннотации в БД
-                        if (
-                            operation.data
-                            and operation.data.get("is_annotation")
-                            and operation.node_id
-                        ):
-                            self._register_synced_annotation(
-                                operation.node_id, r2_key, local_path
-                            )
-
                         queue.remove_operation(operation.id)
 
                         # Удаляем временный файл если это был временный файл
@@ -207,31 +232,3 @@ class ConnectionMixin:
         with ThreadPoolExecutor(max_workers=3) as executor:
             executor.map(sync_operation, pending)
 
-    def _register_synced_annotation(self, node_id: str, r2_key: str, local_path: str):
-        """Зарегистрировать синхронизированную аннотацию в БД"""
-        try:
-            from pathlib import Path
-
-            from app.tree_client import FileType, TreeClient
-
-            client = TreeClient()
-            client.upsert_node_file(
-                node_id=node_id,
-                file_type=FileType.ANNOTATION,
-                r2_key=r2_key,
-                file_name=Path(local_path).name,
-                file_size=Path(local_path).stat().st_size,
-                mime_type="application/json",
-            )
-
-            # Обновляем флаг has_annotation
-            node = client.get_node(node_id)
-            if node and not node.attributes.get("has_annotation"):
-                attrs = node.attributes.copy()
-                attrs["has_annotation"] = True
-                client.update_node(node_id, attributes=attrs)
-
-            logger.info(f"Аннотация зарегистрирована в БД: {node_id}")
-
-        except Exception as e:
-            logger.debug(f"Ошибка регистрации аннотации в БД: {e}")

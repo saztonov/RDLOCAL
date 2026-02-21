@@ -1,24 +1,10 @@
-"""Авто-сохранение аннотаций через кеш"""
+"""Авто-сохранение аннотаций через кеш (Supabase)"""
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import QTimer
 
 
 logger = logging.getLogger(__name__)
-
-
-def get_annotation_path(pdf_path: str) -> Path:
-    """Путь к annotation.json для PDF файла"""
-    p = Path(pdf_path)
-    return p.parent / f"{p.stem}_annotation.json"
-
-
-def get_annotation_r2_key(pdf_r2_key: str) -> str:
-    """R2 ключ для annotation.json"""
-    from pathlib import PurePosixPath
-    p = PurePosixPath(pdf_r2_key)
-    return str(p.parent / f"{p.stem}_annotation.json")
 
 
 class FileAutoSaveMixin:
@@ -32,52 +18,50 @@ class FileAutoSaveMixin:
         """Авто-сохранение разметки через кеш (мгновенно)"""
         if not self.annotation_document or not self._current_pdf_path:
             return
-        
+
         if not self._current_node_id:
             return
-        
+
         from app.gui.annotation_cache import get_annotation_cache
-        
+
         cache = get_annotation_cache()
-        
+
         # Обновляем кеш (мгновенно)
         cache.set(
             self._current_node_id,
             self.annotation_document,
             self._current_pdf_path,
-            self._current_r2_key,
-            str(get_annotation_path(self._current_pdf_path))
         )
-        
-        # Помечаем как измененную (запустит отложенное сохранение)
+
+        # Помечаем как измененную (запустит отложенное сохранение в Supabase)
         cache.mark_dirty(self._current_node_id)
 
     def _flush_pending_save(self):
-        """Принудительно синхронизировать с R2"""
+        """Принудительно синхронизировать с Supabase"""
         if not self._current_node_id:
             return
-        
+
         from app.gui.annotation_cache import get_annotation_cache
         cache = get_annotation_cache()
         cache.force_sync(self._current_node_id)
-    
+
     def _setup_annotation_cache_signals(self):
         """Подключить сигналы кеша аннотаций"""
         from app.gui.annotation_cache import get_annotation_cache
-        
+
         cache = get_annotation_cache()
         cache.synced.connect(self._on_annotation_synced)
         cache.sync_failed.connect(self._on_annotation_sync_failed)
-    
+
     def _on_annotation_synced(self, node_id: str):
         """Обработчик успешной синхронизации"""
         if node_id == self._current_node_id:
             self._annotation_synced = True
             logger.info(f"Annotation synced for node {node_id}")
-            
+
             # Обновляем иконку в дереве
             QTimer.singleShot(0, lambda: self._update_tree_annotation_icon(node_id))
-    
+
     def _on_annotation_sync_failed(self, node_id: str, error: str):
         """Обработчик ошибки синхронизации"""
         logger.error(f"Annotation sync failed for {node_id}: {error}")

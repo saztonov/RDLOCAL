@@ -105,7 +105,6 @@ class TreeCacheOperationsMixin:
         """Удалить файлы документа из R2, локального кэша и БД"""
         from pathlib import PurePosixPath
 
-        from app.gui.file_operations import get_annotation_r2_key
         from app.gui.folder_settings_dialog import get_projects_dir
         from rd_core.r2_storage import R2Storage
 
@@ -163,9 +162,9 @@ class TreeCacheOperationsMixin:
                 pdf_stem = Path(r2_key).stem
 
                 # Собираем все файлы для пакетного удаления
+                # Аннотация хранится в Supabase (таблица annotations), удаляется каскадно
                 files_to_delete = [
                     r2_key,  # PDF
-                    get_annotation_r2_key(r2_key),  # аннотация
                     f"{r2_prefix}/{pdf_stem}_ocr.html",  # OCR HTML
                     f"{r2_prefix}/{pdf_stem}_result.json",  # result JSON
                 ]
@@ -202,15 +201,6 @@ class TreeCacheOperationsMixin:
                     logger.info(f"Deleted from cache: {cache_file}")
                 except Exception as e:
                     logger.error(f"Failed to delete from cache: {e}")
-
-            # Удаляем аннотацию
-            ann_cache_file = cache_file.parent / f"{pdf_stem}_annotation.json"
-            if ann_cache_file.exists():
-                try:
-                    ann_cache_file.unlink()
-                    logger.info(f"Deleted annotation from cache: {ann_cache_file}")
-                except Exception as e:
-                    logger.error(f"Failed to delete annotation from cache: {e}")
 
             # Удаляем _ocr.html
             ocr_html_file = cache_file.parent / f"{pdf_stem}_ocr.html"

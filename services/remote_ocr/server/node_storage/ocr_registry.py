@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Dict, List
 
+import httpx
+
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.node_storage.file_manager import (
     add_node_file,
@@ -15,6 +17,44 @@ from services.remote_ocr.server.node_storage.file_manager import (
 )
 
 logger = get_logger(__name__)
+
+
+def _save_annotation_to_db(node_id: str, ann_data: dict) -> bool:
+    """Сохранить аннотацию в таблицу annotations (Supabase).
+
+    Использует UPSERT: если запись для node_id уже есть — обновляет.
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+
+    if not supabase_url or not supabase_key:
+        logger.error("SUPABASE_URL or SUPABASE_KEY not set")
+        return False
+
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+
+    format_version = ann_data.get("format_version", 2)
+
+    payload = {
+        "node_id": node_id,
+        "data": ann_data,
+        "format_version": format_version,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    resp = httpx.post(
+        f"{supabase_url}/rest/v1/annotations",
+        json=payload,
+        headers=headers,
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    return True
 
 
 def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
@@ -67,18 +107,17 @@ def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
         )
         registered += 1
 
-    # annotation.json -> {doc_stem}_annotation.json
+    # annotation.json -> сохраняем в таблицу annotations (Supabase)
+    # Аннотация хранится в Supabase (привязана к node_id), а не в node_files
     if annotation_path.exists():
-        annotation_filename = f"{doc_stem}_annotation.json"
-        add_node_file(
-            node_id,
-            "annotation",
-            f"{tree_prefix}/{annotation_filename}",
-            annotation_filename,
-            annotation_path.stat().st_size,
-            "application/json",
-        )
-        registered += 1
+        try:
+            with open(annotation_path, "r", encoding="utf-8") as f:
+                ann_data = json.load(f)
+            _save_annotation_to_db(node_id, ann_data)
+            registered += 1
+            logger.info(f"Annotation saved to Supabase annotations table: node_id={node_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save annotation to Supabase: {e}")
 
     # ocr_result.html -> {doc_stem}_ocr.html
     ocr_html = work_path / "ocr_result.html"

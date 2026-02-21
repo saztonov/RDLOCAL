@@ -2559,6 +2559,20 @@
         "default": "0",
         "data_type": "integer",
         "is_nullable": true
+      },
+      {
+        "name": "priority",
+        "comment": null,
+        "default": "0",
+        "data_type": "integer",
+        "is_nullable": false
+      },
+      {
+        "name": "celery_task_id",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
       }
     ],
     "constraints": [
@@ -3995,13 +4009,6 @@
         "default": null,
         "data_type": "jsonb",
         "is_nullable": true
-      },
-      {
-        "name": "level",
-        "comment": null,
-        "default": null,
-        "data_type": "integer",
-        "is_nullable": true
       }
     ],
     "constraints": [
@@ -4017,82 +4024,6 @@
         "name": "objects_pkey",
         "type": "PRIMARY KEY",
         "column": "id",
-        "foreign_table": null,
-        "foreign_column": null,
-        "foreign_table_schema": null
-      }
-    ]
-  },
-  "storage.prefixes": {
-    "schema": "storage",
-    "name": "prefixes",
-    "comment": null,
-    "columns": [
-      {
-        "name": "bucket_id",
-        "comment": null,
-        "default": null,
-        "data_type": "text",
-        "is_nullable": false
-      },
-      {
-        "name": "name",
-        "comment": null,
-        "default": null,
-        "data_type": "text",
-        "is_nullable": false
-      },
-      {
-        "name": "level",
-        "comment": null,
-        "default": "storage.get_level(name)",
-        "data_type": "integer",
-        "is_nullable": false
-      },
-      {
-        "name": "created_at",
-        "comment": null,
-        "default": "now()",
-        "data_type": "timestamp with time zone",
-        "is_nullable": true
-      },
-      {
-        "name": "updated_at",
-        "comment": null,
-        "default": "now()",
-        "data_type": "timestamp with time zone",
-        "is_nullable": true
-      }
-    ],
-    "constraints": [
-      {
-        "name": "prefixes_bucketId_fkey",
-        "type": "FOREIGN KEY",
-        "column": "bucket_id",
-        "foreign_table": "buckets",
-        "foreign_column": "id",
-        "foreign_table_schema": "storage"
-      },
-      {
-        "name": "prefixes_pkey",
-        "type": "PRIMARY KEY",
-        "column": "bucket_id",
-        "foreign_table": null,
-        "foreign_column": null,
-        "foreign_table_schema": null
-      },
-      {
-        "name": "prefixes_pkey",
-        "type": "PRIMARY KEY",
-        "column": "level",
-        "foreign_table": null,
-        "foreign_column": null,
-        "foreign_table_schema": null
-      },
-      {
-        "name": "prefixes_pkey",
-        "type": "PRIMARY KEY",
-        "column": "name",
         "foreign_table": null,
         "foreign_column": null,
         "foreign_table_schema": null

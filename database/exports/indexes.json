@@ -823,14 +823,6 @@
     "is_primary": false,
     "sql": "CREATE UNIQUE INDEX bucketid_objname ON storage.objects USING btree (bucket_id, name)"
   },
-  "storage.objects.idx_name_bucket_level_unique": {
-    "schema": "storage",
-    "name": "idx_name_bucket_level_unique",
-    "table_name": "objects",
-    "is_unique": true,
-    "is_primary": false,
-    "sql": "CREATE UNIQUE INDEX idx_name_bucket_level_unique ON storage.objects USING btree (name COLLATE \"C\", bucket_id, level)"
-  },
   "storage.objects.idx_objects_bucket_id_name": {
     "schema": "storage",
     "name": "idx_objects_bucket_id_name",
@@ -839,13 +831,13 @@
     "is_primary": false,
     "sql": "CREATE INDEX idx_objects_bucket_id_name ON storage.objects USING btree (bucket_id, name COLLATE \"C\")"
   },
-  "storage.objects.idx_objects_lower_name": {
+  "storage.objects.idx_objects_bucket_id_name_lower": {
     "schema": "storage",
-    "name": "idx_objects_lower_name",
+    "name": "idx_objects_bucket_id_name_lower",
     "table_name": "objects",
     "is_unique": false,
     "is_primary": false,
-    "sql": "CREATE INDEX idx_objects_lower_name ON storage.objects USING btree ((path_tokens[level]), lower(name) text_pattern_ops, bucket_id, level)"
+    "sql": "CREATE INDEX idx_objects_bucket_id_name_lower ON storage.objects USING btree (bucket_id, lower(name) COLLATE \"C\")"
   },
   "storage.objects.name_prefix_search": {
     "schema": "storage",
@@ -854,22 +846,6 @@
     "is_unique": false,
     "is_primary": false,
     "sql": "CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops)"
-  },
-  "storage.objects.objects_bucket_id_level_idx": {
-    "schema": "storage",
-    "name": "objects_bucket_id_level_idx",
-    "table_name": "objects",
-    "is_unique": true,
-    "is_primary": false,
-    "sql": "CREATE UNIQUE INDEX objects_bucket_id_level_idx ON storage.objects USING btree (bucket_id, level, name COLLATE \"C\")"
-  },
-  "storage.prefixes.idx_prefixes_lower_name": {
-    "schema": "storage",
-    "name": "idx_prefixes_lower_name",
-    "table_name": "prefixes",
-    "is_unique": false,
-    "is_primary": false,
-    "sql": "CREATE INDEX idx_prefixes_lower_name ON storage.prefixes USING btree (bucket_id, level, ((string_to_array(name, '/'::text))[level]), lower(name) text_pattern_ops)"
   },
   "storage.s3_multipart_uploads.idx_multipart_uploads_list": {
     "schema": "storage",

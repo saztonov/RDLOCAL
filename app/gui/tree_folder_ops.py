@@ -16,8 +16,6 @@ class TreeFolderOperationsMixin:
 
     def _open_document_folder(self, node: TreeNode):
         """Открыть папку документа в проводнике (скачать с R2 если нет локально)"""
-        from pathlib import PurePosixPath
-
         from app.gui.folder_settings_dialog import get_projects_dir
         from rd_core.r2_storage import R2Storage
 
@@ -41,20 +39,15 @@ class TreeFolderOperationsMixin:
         local_folder = local_file.parent
         local_folder.mkdir(parents=True, exist_ok=True)
 
-        # Скачиваем только PDF, аннотацию и MD (без кропов)
+        # Скачиваем только PDF (без кропов)
+        # Аннотация хранится в Supabase (таблица annotations), не в R2
         self.status_label.setText("Скачивание файлов с R2...")
         try:
             r2 = R2Storage()
-            r2_prefix = str(PurePosixPath(r2_key).parent)
-            pdf_stem = Path(r2_key).stem
 
-            # Список файлов для скачивания: PDF, annotation
+            # Список файлов для скачивания: только PDF
             files_to_download = [
                 (r2_key, local_file),  # PDF
-                (
-                    f"{r2_prefix}/{pdf_stem}_annotation.json",
-                    local_folder / f"{pdf_stem}_annotation.json",
-                ),
             ]
 
             downloaded = 0

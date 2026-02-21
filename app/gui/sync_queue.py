@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 
 class SyncOperationType(Enum):
     """Тип операции синхронизации"""
-    UPLOAD_ANNOTATION = "upload_annotation"
+    UPLOAD_ANNOTATION = "upload_annotation"  # Legacy: загрузка annotation JSON в R2
     UPLOAD_FILE = "upload_file"
     UPDATE_NODE = "update_node"
     DELETE_FILE = "delete_file"
+    SAVE_ANNOTATION = "save_annotation"  # Сохранение аннотации в Supabase
 
 
 @dataclass

@@ -8,6 +8,7 @@
 - files.py - Работа с node_files
 - categories.py - Категории изображений
 - path_v2.py - Materialized path операции
+- annotations.py - CRUD аннотаций (таблица annotations)
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from app.tree_models import (
     TreeNode,
 )
 
+from .annotations import TreeAnnotationsMixin
 from .categories import TreeCategoriesMixin
 from .core import TreeClientCore
 from .files import TreeFilesMixin
@@ -53,6 +55,7 @@ class TreeClient(
     TreeFilesMixin,
     TreeCategoriesMixin,
     TreePathMixin,
+    TreeAnnotationsMixin,
 ):
     """
     Клиент для работы с деревом проектов.
@@ -64,5 +67,6 @@ class TreeClient(
     - TreeFilesMixin: Файлы узлов (add_node_file, get_node_files, upsert_node_file)
     - TreeCategoriesMixin: Категории изображений
     - TreePathMixin: Операции с materialized path (get_descendants, get_ancestors)
+    - TreeAnnotationsMixin: CRUD аннотаций (таблица annotations)
     """
     pass

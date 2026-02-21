@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Dict
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from app.tree_client import FileType, NodeType, TreeNode
+from app.tree_client import NodeType, TreeNode
 
 if TYPE_CHECKING:
     from app.gui.project_tree.widget import ProjectTreeWidget
@@ -20,18 +20,14 @@ class AnnotationOperations:
     Операции с аннотациями документов.
 
     Отвечает за:
-    - Копирование/вставка аннотаций
+    - Копирование/вставка аннотаций (через Supabase)
     - Загрузка аннотаций из файла
     - Определение и назначение штампов
     """
 
     def __init__(self, widget: "ProjectTreeWidget"):
-        """
-        Args:
-            widget: Родительский виджет ProjectTreeWidget
-        """
         self._widget = widget
-        self._copied_annotation: Dict = {}  # {"json": str, "source_r2_key": str}
+        self._copied_annotation: Dict = {}  # {"data": dict, "source_node_id": str}
 
     @property
     def has_copied(self) -> bool:
@@ -39,64 +35,58 @@ class AnnotationOperations:
         return bool(self._copied_annotation)
 
     def copy_annotation(self, node: TreeNode) -> None:
-        """Скопировать аннотацию документа в буфер"""
-        from app.gui.file_operations import get_annotation_r2_key
-        from rd_core.r2_storage import R2Storage
-
-        r2_key = node.attributes.get("r2_key", "")
-        if not r2_key:
-            return
+        """Скопировать аннотацию документа из Supabase в буфер"""
+        from app.tree_client import TreeClient
 
         try:
-            r2 = R2Storage()
-            ann_r2_key = get_annotation_r2_key(r2_key)
-            json_content = r2.download_text(ann_r2_key)
+            client = TreeClient()
+            data = client.get_annotation(node.id)
 
-            if json_content:
+            if data:
                 self._copied_annotation = {
-                    "json": json_content,
-                    "source_r2_key": r2_key,
+                    "data": data,
+                    "source_node_id": node.id,
                 }
                 self._widget.status_label.setText("📋 Аннотация скопирована")
-                logger.info(f"Annotation copied from {ann_r2_key}")
+                logger.info(f"Annotation copied from node {node.id}")
             else:
                 QMessageBox.warning(
-                    self._widget, "Ошибка", "Не удалось загрузить аннотацию"
+                    self._widget, "Ошибка", "Аннотация не найдена в базе данных"
                 )
         except Exception as e:
             logger.error(f"Copy annotation failed: {e}")
             QMessageBox.critical(self._widget, "Ошибка", f"Ошибка копирования: {e}")
 
     def paste_annotation(self, node: TreeNode) -> None:
-        """Вставить аннотацию из буфера в документ"""
+        """Вставить аннотацию из буфера в документ (Supabase)"""
         if self._check_locked(node):
             return
 
-        from app.gui.file_operations import get_annotation_r2_key
-        from rd_core.r2_storage import R2Storage
+        from app.tree_client import TreeClient
 
         if not self._copied_annotation:
             return
 
-        r2_key = node.attributes.get("r2_key", "")
-        if not r2_key:
-            return
-
         try:
-            r2 = R2Storage()
-            ann_r2_key = get_annotation_r2_key(r2_key)
+            client = TreeClient()
+            data = self._copied_annotation["data"]
 
-            if r2.upload_text(self._copied_annotation["json"], ann_r2_key):
+            success = client.save_annotation(node.id, data)
+            if success:
                 # Обновляем флаг has_annotation
                 attrs = node.attributes.copy()
                 attrs["has_annotation"] = True
-                self._widget.client.update_node(node.id, attributes=attrs)
+                client.update_node(node.id, attributes=attrs)
 
                 # Обновляем статус PDF
-                self._update_pdf_status(node, r2_key, r2)
+                r2_key = node.attributes.get("r2_key", "")
+                if r2_key:
+                    from rd_core.r2_storage import R2Storage
+                    r2 = R2Storage()
+                    self._update_pdf_status(node, r2_key, r2)
 
                 self._widget.status_label.setText("📥 Аннотация вставлена")
-                logger.info(f"Annotation pasted to {ann_r2_key}")
+                logger.info(f"Annotation pasted to node {node.id}")
 
                 # Сигнал для обновления открытого документа
                 self._widget.annotation_replaced.emit(r2_key)
@@ -109,19 +99,12 @@ class AnnotationOperations:
             QMessageBox.critical(self._widget, "Ошибка", f"Ошибка вставки: {e}")
 
     def upload_from_file(self, node: TreeNode) -> None:
-        """Диалог загрузки аннотации блоков из файла"""
+        """Диалог загрузки аннотации блоков из файла → сохранение в Supabase"""
         if self._check_locked(node):
             return
 
-        from app.gui.file_operations import get_annotation_r2_key
-        from rd_core.r2_storage import R2Storage
-
-        r2_key = node.attributes.get("r2_key", "")
-        if not r2_key:
-            QMessageBox.warning(
-                self._widget, "Ошибка", "Документ не имеет привязки к R2"
-            )
-            return
+        from rd_core.annotation_io import AnnotationIO
+        from app.tree_client import TreeClient
 
         # Диалог выбора файла
         file_path, _ = QFileDialog.getOpenFileName(
@@ -135,45 +118,37 @@ class AnnotationOperations:
             return
 
         try:
-            # Читаем содержимое файла
-            with open(file_path, "r", encoding="utf-8") as f:
-                json_content = f.read()
-
-            # Валидация JSON
-            json.loads(json_content)
-
-            r2 = R2Storage()
-            ann_r2_key = get_annotation_r2_key(r2_key)
-
-            # Загружаем в R2
-            if not r2.upload_text(json_content, ann_r2_key):
+            # Загружаем и мигрируем
+            loaded_doc, result = AnnotationIO.load_and_migrate(file_path)
+            if not result.success or not loaded_doc:
+                error_msg = "; ".join(result.errors) if result.errors else "Неизвестная ошибка"
                 QMessageBox.critical(
-                    self._widget, "Ошибка", "Не удалось загрузить аннотацию в R2"
+                    self._widget, "Ошибка", f"Не удалось загрузить аннотацию:\n{error_msg}"
                 )
                 return
 
-            logger.info(f"Annotation uploaded to R2: {ann_r2_key}")
+            # Сохраняем в Supabase
+            success = AnnotationIO.save_to_db(loaded_doc, node.id)
+            if not success:
+                QMessageBox.critical(
+                    self._widget, "Ошибка", "Не удалось сохранить аннотацию в Supabase"
+                )
+                return
+
+            logger.info(f"Annotation uploaded to Supabase: node_id={node.id}")
 
             # Обновляем флаг has_annotation
+            client = TreeClient()
             attrs = node.attributes.copy()
             attrs["has_annotation"] = True
-            self._widget.client.update_node(node.id, attributes=attrs)
-
-            # Регистрируем файл в node_files
-            file_size = Path(file_path).stat().st_size
-            self._widget.client.upsert_node_file(
-                node_id=node.id,
-                file_type=FileType.ANNOTATION,
-                r2_key=ann_r2_key,
-                file_name=Path(ann_r2_key).name,
-                file_size=file_size,
-                mime_type="application/json",
-            )
-
-            logger.info(f"Annotation registered in Supabase: node_id={node.id}")
+            client.update_node(node.id, attributes=attrs)
 
             # Обновляем статус PDF
-            self._update_pdf_status(node, r2_key, r2)
+            r2_key = node.attributes.get("r2_key", "")
+            if r2_key:
+                from rd_core.r2_storage import R2Storage
+                r2 = R2Storage()
+                self._update_pdf_status(node, r2_key, r2)
 
             self._widget.status_label.setText("📤 Аннотация загружена")
             self._widget.annotation_replaced.emit(r2_key)
@@ -196,30 +171,20 @@ class AnnotationOperations:
         if self._check_locked(node):
             return
 
-        from app.gui.file_operations import get_annotation_r2_key
+        from app.tree_client import TreeClient
+        from rd_core.annotation_io import AnnotationIO
         from rd_core.models import BlockType, Document
-        from rd_core.r2_storage import R2Storage
-
-        r2_key = node.attributes.get("r2_key", "")
-        if not r2_key:
-            QMessageBox.warning(
-                self._widget, "Ошибка", "Документ не имеет привязки к R2"
-            )
-            return
 
         try:
-            r2 = R2Storage()
-            ann_r2_key = get_annotation_r2_key(r2_key)
+            client = TreeClient()
+            data = client.get_annotation(node.id)
 
-            # Загрузить аннотацию из R2
-            json_content = r2.download_text(ann_r2_key)
-            if not json_content:
+            if not data:
                 QMessageBox.warning(
                     self._widget, "Ошибка", "Аннотация документа не найдена"
                 )
                 return
 
-            data = json.loads(json_content)
             doc, _ = Document.from_dict(data)
 
             # Получить категорию stamp из базы
@@ -265,9 +230,9 @@ class AnnotationOperations:
                 QMessageBox.information(self._widget, "Результат", "Штампы не найдены")
                 return
 
-            # Сохранить аннотацию обратно в R2
-            updated_json = json.dumps(doc.to_dict(), ensure_ascii=False, indent=2)
-            if not r2.upload_text(updated_json, ann_r2_key):
+            # Сохранить аннотацию обратно в Supabase
+            success = AnnotationIO.save_to_db(doc, node.id)
+            if not success:
                 QMessageBox.critical(
                     self._widget, "Ошибка", "Не удалось сохранить аннотацию"
                 )
@@ -278,6 +243,7 @@ class AnnotationOperations:
                 self._widget, "Успех", f"Штамп назначен на {modified_count} страницах"
             )
 
+            r2_key = node.attributes.get("r2_key", "")
             self._widget.annotation_replaced.emit(r2_key)
 
         except Exception as e:
