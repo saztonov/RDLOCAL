@@ -6,11 +6,13 @@ from typing import Optional
 import httpx
 from PIL import Image
 
+from rd_core.ocr.http_utils import create_async_client
 from rd_core.ocr.chandra import (
     CHANDRA_DEFAULT_PROMPT,
     CHANDRA_DEFAULT_SYSTEM,
     CHANDRA_LOAD_CONFIG,
     CHANDRA_MODEL_KEY,
+    needs_model_reload,
 )
 from rd_core.ocr.utils import image_to_base64
 
@@ -37,19 +39,7 @@ class AsyncChandraBackend:
     async def _get_client(self) -> httpx.AsyncClient:
         """Получить или создать httpx AsyncClient с connection pooling"""
         if self._client is None or self._client.is_closed:
-            transport = httpx.AsyncHTTPTransport(
-                retries=3,
-                limits=httpx.Limits(
-                    max_connections=10,
-                    max_keepalive_connections=5,
-                    keepalive_expiry=30.0,
-                ),
-            )
-            self._client = httpx.AsyncClient(
-                transport=transport,
-                timeout=httpx.Timeout(300.0, connect=30.0),
-                auth=self._auth,
-            )
+            self._client = create_async_client(timeout=300.0, auth=self._auth)
         return self._client
 
     async def close(self):
@@ -84,20 +74,6 @@ class AsyncChandraBackend:
         logger.info(f"Chandra модель не найдена, используется fallback: {self._model_id}")
         return self._model_id
 
-    @staticmethod
-    def _needs_reload(loaded_instances: list, required_context: int) -> tuple:
-        """Проверяет нужна ли перезагрузка модели из-за несовпадения context_length."""
-        if not loaded_instances:
-            return True, "модель не загружена"
-        for inst in loaded_instances:
-            inst_id = inst.get("id", "unknown")
-            ctx = inst.get("context_length")
-            if ctx is None:
-                return True, f"instance {inst_id}: context_length недоступен в API"
-            if ctx != required_context:
-                return True, f"instance {inst_id}: context_length={ctx}, требуется {required_context}"
-        return False, f"context_length={required_context} OK"
-
     async def _ensure_model_loaded(self) -> None:
         """
         Проверяет загружена ли модель через LM Studio native API.
@@ -119,7 +95,7 @@ class AsyncChandraBackend:
             for m in models:
                 if "chandra" in m.get("key", "").lower():
                     loaded = m.get("loaded_instances", [])
-                    needs_reload, reason = self._needs_reload(loaded, required_ctx)
+                    needs_reload, reason = needs_model_reload(loaded, required_ctx)
 
                     if not needs_reload:
                         logger.debug(f"Модель {m['key']}: {reason}")

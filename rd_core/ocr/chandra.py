@@ -4,8 +4,10 @@ import os
 import threading
 from typing import Optional
 
+import requests
 from PIL import Image
 
+from rd_core.ocr.http_utils import create_retry_session
 from rd_core.ocr.utils import image_to_base64
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,20 @@ CHANDRA_LOAD_CONFIG = {
 }
 
 
+def needs_model_reload(loaded_instances: list, required_context: int) -> tuple:
+    """Проверяет нужна ли перезагрузка модели из-за несовпадения context_length."""
+    if not loaded_instances:
+        return True, "модель не загружена"
+    for inst in loaded_instances:
+        inst_id = inst.get("id", "unknown")
+        ctx = inst.get("context_length")
+        if ctx is None:
+            return True, f"instance {inst_id}: context_length недоступен в API"
+        if ctx != required_context:
+            return True, f"instance {inst_id}: context_length={ctx}, требуется {required_context}"
+    return False, f"context_length={required_context} OK"
+
+
 class ChandraBackend:
     """OCR через Chandra модель (LM Studio, OpenAI-compatible API)"""
 
@@ -62,23 +78,7 @@ class ChandraBackend:
         auth_pass = os.getenv("NGROK_AUTH_PASS")
         self._auth = (auth_user, auth_pass) if auth_user and auth_pass else None
 
-        try:
-            import requests
-            from requests.adapters import HTTPAdapter
-            from urllib3.util.retry import Retry
-
-            self.session = requests.Session()
-            retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[502, 503, 504])
-            adapter = HTTPAdapter(
-                pool_connections=5, pool_maxsize=10, max_retries=retry
-            )
-            self.session.mount("https://", adapter)
-            self.session.mount("http://", adapter)
-            if self._auth:
-                self.session.auth = self._auth
-            self.requests = requests
-        except ImportError:
-            raise ImportError("Требуется установить requests: pip install requests")
+        self.session = create_retry_session(auth=self._auth)
 
         logger.info(f"ChandraBackend инициализирован (base_url: {self.base_url})")
 
@@ -116,20 +116,6 @@ class ChandraBackend:
         self._discover_model()
         logger.info(f"Chandra модель предзагружена: {self._model_id}")
 
-    @staticmethod
-    def _needs_reload(loaded_instances: list, required_context: int) -> tuple:
-        """Проверяет нужна ли перезагрузка модели из-за несовпадения context_length."""
-        if not loaded_instances:
-            return True, "модель не загружена"
-        for inst in loaded_instances:
-            inst_id = inst.get("id", "unknown")
-            ctx = inst.get("context_length")
-            if ctx is None:
-                return True, f"instance {inst_id}: context_length недоступен в API"
-            if ctx != required_context:
-                return True, f"instance {inst_id}: context_length={ctx}, требуется {required_context}"
-        return False, f"context_length={required_context} OK"
-
     def _ensure_model_loaded(self) -> None:
         """
         Проверяет загружена ли модель через LM Studio native API.
@@ -151,7 +137,7 @@ class ChandraBackend:
             for m in models:
                 if "chandra" in m.get("key", "").lower():
                     loaded = m.get("loaded_instances", [])
-                    needs_reload, reason = self._needs_reload(loaded, required_ctx)
+                    needs_reload, reason = needs_model_reload(loaded, required_ctx)
 
                     if not needs_reload:
                         logger.debug(f"Модель {m['key']}: {reason}")
@@ -302,7 +288,7 @@ class ChandraBackend:
             logger.debug(f"Chandra OCR: распознано {len(text)} символов")
             return text
 
-        except self.requests.exceptions.Timeout:
+        except requests.exceptions.Timeout:
             logger.error("Chandra OCR: превышен таймаут")
             return "[Ошибка: превышен таймаут запроса к Chandra]"
         except Exception as e:

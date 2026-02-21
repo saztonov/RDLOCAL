@@ -12,7 +12,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLabel, QMainWindow, QProgressBar, QStatusBar
 
 from app.gui.block_handlers import BlockHandlersMixin
-from app.gui.blocks_tree_manager import BlocksTreeManager
+from app.gui.blocks_tree import BlocksTreeManager
 from app.gui.connection_mixin import ConnectionMixin
 from app.gui.file_operations import FileOperationsMixin
 from app.gui.menu_setup import MenuSetupMixin

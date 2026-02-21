@@ -4,8 +4,10 @@ import logging
 import os
 from typing import List, Optional
 
+import requests
 from PIL import Image
 
+from rd_core.ocr.http_utils import create_retry_session
 from rd_core.ocr.utils import image_to_base64, image_to_pdf_base64
 
 logger = logging.getLogger(__name__)
@@ -30,21 +32,7 @@ class OpenRouterBackend:
         self.model_name = model_name
         self.base_url = base_url or os.getenv("OPENROUTER_BASE_URL", self.DEFAULT_BASE_URL)
         self._provider_order: Optional[List[str]] = None
-        try:
-            import requests
-            from requests.adapters import HTTPAdapter
-            from urllib3.util.retry import Retry
-
-            self.session = requests.Session()
-            retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[502, 503, 504])
-            adapter = HTTPAdapter(
-                pool_connections=5, pool_maxsize=10, max_retries=retry
-            )
-            self.session.mount("https://", adapter)
-            self.session.mount("http://", adapter)
-            self.requests = requests  # для exceptions
-        except ImportError:
-            raise ImportError("Требуется установить requests: pip install requests")
+        self.session = create_retry_session()
         logger.info(f"OpenRouter инициализирован (модель: {self.model_name}, base_url: {self.base_url})")
 
     def _fetch_cheapest_providers(self) -> Optional[List[str]]:
@@ -243,7 +231,7 @@ class OpenRouterBackend:
             logger.debug(f"OpenRouter OCR: распознано {len(text)} символов")
             return text
 
-        except self.requests.exceptions.Timeout:
+        except requests.exceptions.Timeout:
             logger.error("OpenRouter OCR: превышен таймаут")
             return "[Ошибка: превышен таймаут запроса]"
         except Exception as e:

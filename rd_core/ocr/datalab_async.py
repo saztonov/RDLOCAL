@@ -9,6 +9,8 @@ from typing import Optional
 import httpx
 from PIL import Image
 
+from rd_core.ocr.http_utils import create_async_client
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,18 +55,7 @@ class AsyncDatalabOCRBackend:
     async def _get_client(self) -> httpx.AsyncClient:
         """Получить или создать httpx AsyncClient"""
         if self._client is None or self._client.is_closed:
-            transport = httpx.AsyncHTTPTransport(
-                retries=3,
-                limits=httpx.Limits(
-                    max_connections=10,
-                    max_keepalive_connections=5,
-                    keepalive_expiry=30.0,
-                ),
-            )
-            self._client = httpx.AsyncClient(
-                transport=transport,
-                timeout=httpx.Timeout(120.0, connect=30.0),
-            )
+            self._client = create_async_client(timeout=120.0)
         return self._client
 
     async def close(self):

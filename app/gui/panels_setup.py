@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.gui.ocr_preview_widget import OcrPreviewWidget
+from app.gui.ocr_preview import OcrPreviewWidget
 from app.gui.page_viewer import PageViewer
 from app.gui.project_tree import ProjectTreeWidget
 

@@ -2,7 +2,10 @@
 import logging
 from typing import Optional
 
+import requests
 from PIL import Image
+
+from rd_core.ocr.http_utils import create_retry_session
 
 logger = logging.getLogger(__name__)
 
@@ -38,20 +41,7 @@ class DatalabOCRBackend:
         self.poll_max_attempts = poll_max_attempts if poll_max_attempts is not None else self.DEFAULT_POLL_MAX_ATTEMPTS
         self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
 
-        try:
-            import requests
-            from requests.adapters import HTTPAdapter
-            from urllib3.util.retry import Retry
-
-            self.session = requests.Session()
-            retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[502, 503, 504])
-            adapter = HTTPAdapter(
-                pool_connections=5, pool_maxsize=10, max_retries=retry
-            )
-            self.session.mount("https://", adapter)
-            self.session.mount("http://", adapter)
-        except ImportError:
-            raise ImportError("Требуется установить requests: pip install requests")
+        self.session = create_retry_session()
         logger.info(
             f"Datalab OCR инициализирован (poll_interval={self.poll_interval}s, "
             f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries})"

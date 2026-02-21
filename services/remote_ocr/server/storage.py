@@ -5,6 +5,7 @@
 - storage_models.py - модели данных
 - storage_client.py - Supabase клиент
 - storage_jobs.py - CRUD задач
+- storage_jobs_queue.py - очередь, retry, reorder
 - storage_files.py - файлы задач
 - storage_settings.py - настройки задач
 - storage_nodes.py - node_files (связь с деревом проектов)
