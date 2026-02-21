@@ -191,10 +191,15 @@ async def pass2_ocr_from_manifest_async(
                         await rate_limiter.release_async()
 
                     response_len = len(response_text) if response_text else 0
-                    logger.info(
-                        f"PASS2 ASYNC: завершена обработка strip {strip.strip_id}, "
-                        f"ответ {response_len} символов"
-                    )
+                    if response_len == 0:
+                        logger.warning(
+                            f"PASS2 ASYNC: strip {strip.strip_id} — пустой ответ от OCR бэкенда"
+                        )
+                    else:
+                        logger.info(
+                            f"PASS2 ASYNC: завершена обработка strip {strip.strip_id}, "
+                            f"ответ {response_len} символов"
+                        )
 
                 finally:
                     merged_image.close()

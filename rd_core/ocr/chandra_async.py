@@ -114,13 +114,15 @@ class AsyncChandraBackend:
                             logger.warning(f"Ошибка выгрузки {inst.get('id')}: {e}")
                     break
 
+            # Используем фактический ключ модели из LM Studio (а не hardcoded)
+            actual_key = m.get("key", CHANDRA_MODEL_KEY)
             logger.info(
-                f"Загружаем модель {CHANDRA_MODEL_KEY} "
+                f"Загружаем модель {actual_key} "
                 f"(context_length={required_ctx})"
             )
             load_resp = await client.post(
                 f"{self.base_url}/api/v1/models/load",
-                json={"model": CHANDRA_MODEL_KEY, "echo_load_config": True, **CHANDRA_LOAD_CONFIG},
+                json={"model": actual_key, "echo_load_config": True, **CHANDRA_LOAD_CONFIG},
                 timeout=120.0,
             )
 
@@ -247,6 +249,9 @@ class AsyncChandraBackend:
                 return f"[Ошибка Chandra: некорректный ответ ({err_msg})]"
 
             text = result["choices"][0]["message"]["content"].strip()
+            if not text:
+                logger.warning("AsyncChandra OCR: получен пустой ответ от модели")
+                return "[Ошибка Chandra: пустой ответ модели]"
             logger.debug(f"AsyncChandra OCR: распознано {len(text)} символов")
             return text
 

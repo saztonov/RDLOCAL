@@ -275,8 +275,20 @@ def run_ocr_task(self, job_id: str) -> dict:
             except Exception as e:
                 logger.warning(f"Failed to update PDF status: {e}")
 
-        update_job_status(job.id, "done", progress=1.0, status_message="✅ Завершено успешно")
-        logger.info(f"Задача {job.id} завершена успешно")
+        # Подсчёт распознанных блоков для информативного статуса
+        recognized = sum(
+            1 for b in blocks
+            if b.ocr_text and not b.ocr_text.startswith("[Ошибка")
+        )
+        if recognized == total_blocks:
+            status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
+        elif recognized > 0:
+            status_msg = f"⚠️ Частично: {recognized}/{total_blocks} блоков распознано"
+        else:
+            status_msg = f"❌ Ошибка: 0/{total_blocks} блоков распознано"
+
+        update_job_status(job.id, "done", progress=1.0, status_message=status_msg)
+        logger.info(f"Задача {job.id} завершена: {recognized}/{total_blocks} блоков распознано")
 
         return {"status": "done", "job_id": job_id}
 
