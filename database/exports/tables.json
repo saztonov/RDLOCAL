@@ -2136,6 +2136,81 @@
       }
     ]
   },
+  "public.annotations": {
+    "schema": "public",
+    "name": "annotations",
+    "comment": "Хранение аннотаций (обводок/блоков) документов",
+    "columns": [
+      {
+        "name": "id",
+        "comment": null,
+        "default": "gen_random_uuid()",
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "node_id",
+        "comment": "Ссылка на документ в tree_nodes (1:1)",
+        "default": null,
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "data",
+        "comment": "Полная структура аннотации в формате v2 (pages, blocks)",
+        "default": "'{}'::jsonb",
+        "data_type": "jsonb",
+        "is_nullable": false
+      },
+      {
+        "name": "format_version",
+        "comment": "Версия формата аннотации (текущая: 2)",
+        "default": "2",
+        "data_type": "integer",
+        "is_nullable": false
+      },
+      {
+        "name": "created_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": true
+      },
+      {
+        "name": "updated_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": true
+      }
+    ],
+    "constraints": [
+      {
+        "name": "annotations_node_id_fkey",
+        "type": "FOREIGN KEY",
+        "column": "node_id",
+        "foreign_table": "tree_nodes",
+        "foreign_column": "id",
+        "foreign_table_schema": "public"
+      },
+      {
+        "name": "annotations_node_id_unique",
+        "type": "UNIQUE",
+        "column": "node_id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "annotations_pkey",
+        "type": "PRIMARY KEY",
+        "column": "id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      }
+    ]
+  },
   "public.image_categories": {
     "schema": "public",
     "name": "image_categories",

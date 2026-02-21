@@ -439,6 +439,22 @@
     "is_primary": false,
     "sql": "CREATE UNIQUE INDEX users_phone_key ON auth.users USING btree (phone)"
   },
+  "public.annotations.annotations_node_id_unique": {
+    "schema": "public",
+    "name": "annotations_node_id_unique",
+    "table_name": "annotations",
+    "is_unique": true,
+    "is_primary": false,
+    "sql": "CREATE UNIQUE INDEX annotations_node_id_unique ON public.annotations USING btree (node_id)"
+  },
+  "public.annotations.idx_annotations_node_id": {
+    "schema": "public",
+    "name": "idx_annotations_node_id",
+    "table_name": "annotations",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX idx_annotations_node_id ON public.annotations USING btree (node_id)"
+  },
   "public.image_categories.idx_image_categories_code": {
     "schema": "public",
     "name": "idx_image_categories_code",

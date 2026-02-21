@@ -1,5 +1,5 @@
 -- Database Schema SQL Export
--- Generated: 2026-02-21T14:14:08.198317
+-- Generated: 2026-02-21T15:20:01.932413
 -- Database: postgres
 -- Host: aws-1-eu-north-1.pooler.supabase.com
 
@@ -368,6 +368,24 @@ CREATE TABLE IF NOT EXISTS auth.users (
 );
 COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure schema.';
 COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when the account comes from SSO. These accounts can have duplicate emails.';
+
+-- Table: public.annotations
+-- Description: Хранение аннотаций (обводок/блоков) документов
+CREATE TABLE IF NOT EXISTS public.annotations (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    node_id uuid NOT NULL,
+    data jsonb NOT NULL DEFAULT '{}'::jsonb,
+    format_version integer NOT NULL DEFAULT 2,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT annotations_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.tree_nodes(id),
+    CONSTRAINT annotations_node_id_unique UNIQUE (node_id),
+    CONSTRAINT annotations_pkey PRIMARY KEY (id)
+);
+COMMENT ON TABLE public.annotations IS 'Хранение аннотаций (обводок/блоков) документов';
+COMMENT ON COLUMN public.annotations.node_id IS 'Ссылка на документ в tree_nodes (1:1)';
+COMMENT ON COLUMN public.annotations.data IS 'Полная структура аннотации в формате v2 (pages, blocks)';
+COMMENT ON COLUMN public.annotations.format_version IS 'Версия формата аннотации (текущая: 2)';
 
 -- Table: public.image_categories
 -- Description: Категории изображений с промптами для OCR
@@ -4205,6 +4223,12 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 -- Index on auth.users
 CREATE UNIQUE INDEX users_phone_key ON auth.users USING btree (phone);
+
+-- Index on public.annotations
+CREATE UNIQUE INDEX annotations_node_id_unique ON public.annotations USING btree (node_id);
+
+-- Index on public.annotations
+CREATE INDEX idx_annotations_node_id ON public.annotations USING btree (node_id);
 
 -- Index on public.image_categories
 CREATE INDEX idx_image_categories_code ON public.image_categories USING btree (code);
