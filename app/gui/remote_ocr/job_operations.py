@@ -257,6 +257,8 @@ class JobOperationsMixin:
             engine = "datalab"
         elif dialog.ocr_backend == "chandra":
             engine = "chandra"
+        elif dialog.ocr_backend == "qwen":
+            engine = "qwen"
         elif dialog.ocr_backend == "openrouter":
             engine = "openrouter"
 
