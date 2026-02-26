@@ -1,8 +1,45 @@
 """Утилиты для работы с изображениями в OCR"""
 import base64
 import io
+import logging
+import re
 
 from PIL import Image
+
+_logger = logging.getLogger(__name__)
+
+# ── Очистка <think> блоков из ответов LLM ─────────────────────────
+_THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+_THINK_UNCLOSED_RE = re.compile(r'<think>.*$', re.DOTALL | re.IGNORECASE)
+_THINK_ORPHAN_CLOSE_RE = re.compile(r'^[^<]*</think>', re.IGNORECASE)
+
+
+def strip_think_tags(text: str, backend_name: str = "LLM") -> str:
+    """Удалить <think>...</think> блоки (reasoning) из ответа LLM.
+
+    Обрабатывает:
+    - Полные <think>...</think> блоки
+    - Незакрытый <think> (модель не завершила reasoning)
+    - Сиротский </think> без открывающего <think>
+    """
+    if not text or '<think' not in text.lower():
+        return text
+
+    original_len = len(text)
+    cleaned = text
+    cleaned = _THINK_BLOCK_RE.sub('', cleaned)
+    cleaned = _THINK_UNCLOSED_RE.sub('', cleaned)
+    cleaned = _THINK_ORPHAN_CLOSE_RE.sub('', cleaned)
+    cleaned = cleaned.strip()
+
+    removed_len = original_len - len(cleaned)
+    if removed_len > 0:
+        _logger.info(
+            f"{backend_name}: удалены <think> блоки "
+            f"(удалено {removed_len} симв. reasoning, "
+            f"осталось {len(cleaned)} симв.)"
+        )
+    return cleaned
 
 
 def image_to_base64(image: Image.Image, max_size: int = 1500) -> str:

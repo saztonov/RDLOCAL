@@ -170,6 +170,12 @@ def sanitize_html(html: str) -> str:
 
     text = html
 
+    # 0. Удаляем <think>...</think> блоки (reasoning от LLM)
+    if '<think' in text.lower():
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'^[^<]*</think>', '', text, flags=re.IGNORECASE)
+
     # 1. Удаляем мусорные img теги от datalab
     text = DATALAB_IMG_PATTERN.sub("", text)
 

@@ -16,7 +16,7 @@ from rd_core.ocr.qwen import (
     QWEN_TEXT_PROMPT,
     QWEN_TEXT_SYSTEM,
 )
-from rd_core.ocr.utils import image_to_base64
+from rd_core.ocr.utils import image_to_base64, strip_think_tags
 
 logger = logging.getLogger(__name__)
 
@@ -282,10 +282,18 @@ class AsyncQwenBackend:
                 logger.error(f"Qwen: 'choices' missing: {err_msg}")
                 return f"[Ошибка Qwen: некорректный ответ ({err_msg})]"
 
-            text = result["choices"][0]["message"]["content"].strip()
-            if not text:
+            raw_text = result["choices"][0]["message"]["content"].strip()
+            if not raw_text:
                 logger.warning("AsyncQwen OCR: получен пустой ответ от модели")
                 return "[Ошибка Qwen: пустой ответ модели]"
+
+            text = strip_think_tags(raw_text, backend_name=f"AsyncQwen/{self.mode}")
+            if not text:
+                logger.warning(
+                    f"AsyncQwen OCR ({self.mode}): ответ только reasoning "
+                    f"({len(raw_text)} симв.), HTML не сгенерирован"
+                )
+                return "[Ошибка Qwen: ответ содержит только reasoning]"
             logger.debug(
                 f"AsyncQwen OCR ({self.mode}): распознано {len(text)} символов"
             )
