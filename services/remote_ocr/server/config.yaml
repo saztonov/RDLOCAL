@@ -55,6 +55,12 @@ chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2
 
+# ===== QWEN (LM Studio) =====
+# Параллельных запросов к Qwen PER TASK (аналогично Chandra)
+qwen_max_concurrent: 2
+# Пауза между retry при верификации блоков, секунды
+qwen_retry_delay: 2
+
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
 max_retry_blocks: 50

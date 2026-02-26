@@ -93,6 +93,24 @@ class OCRDialog(QDialog):
             chandra_error.setStyleSheet("color: #ff6b6b; font-weight: bold; margin-left: 20px;")
             backend_layout.addWidget(chandra_error)
 
+        # RadioButton: Qwen
+        self.radio_qwen = QRadioButton("Qwen 3.5 (локальная модель, LM Studio)")
+        self.radio_qwen.setChecked(self.ocr_backend == "qwen")
+        backend_layout.addWidget(self.radio_qwen)
+
+        qwen_info = QLabel(
+            "   Qwen3.5-35B-A3B — текст, таблицы и штампы через LM Studio + ngrok"
+        )
+        qwen_info.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
+        backend_layout.addWidget(qwen_info)
+
+        # Проверка наличия QWEN_BASE_URL / CHANDRA_BASE_URL
+        qwen_url = os.getenv("QWEN_BASE_URL") or os.getenv("CHANDRA_BASE_URL", "")
+        if not qwen_url:
+            qwen_error = QLabel("   QWEN_BASE_URL / CHANDRA_BASE_URL не найден в .env")
+            qwen_error.setStyleSheet("color: #ff6b6b; font-weight: bold; margin-left: 20px;")
+            backend_layout.addWidget(qwen_error)
+
         layout.addWidget(backend_group)
 
         # Кнопки
@@ -128,7 +146,10 @@ class OCRDialog(QDialog):
             return
 
         # Выбор OCR движка
-        if self.radio_chandra.isChecked():
+        if self.radio_qwen.isChecked():
+            self.ocr_backend = "qwen"
+            self.use_datalab = False
+        elif self.radio_chandra.isChecked():
             self.ocr_backend = "chandra"
             self.use_datalab = False
         else:

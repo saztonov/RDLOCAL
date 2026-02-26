@@ -15,7 +15,7 @@ from .logging_config import get_logger
 from .memory_utils import force_gc, log_memory, log_memory_delta
 from .rate_limiter import get_datalab_limiter
 from .settings import settings
-from .chandra_lifecycle import acquire_chandra, release_chandra
+from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
 from .storage import get_job, register_ocr_results_to_node, update_job_status
 from .storage_jobs import increment_retry_count, set_job_started_at
 from .task_helpers import check_paused, create_empty_result, download_job_files
@@ -162,6 +162,14 @@ def run_ocr_task(self, job_id: str) -> dict:
             )
             strip_backend.preload()
             acquire_chandra(job_id)
+        elif engine == "qwen" and settings.qwen_base_url:
+            strip_backend = create_ocr_engine(
+                "qwen",
+                base_url=settings.qwen_base_url,
+                mode="text",
+            )
+            strip_backend.preload()
+            acquire_lmstudio("qwen", job_id)
         elif engine == "datalab" and settings.datalab_api_key:
             strip_backend = create_ocr_engine(
                 "datalab",
@@ -197,23 +205,39 @@ def run_ocr_task(self, job_id: str) -> dict:
                 base_url=settings.openrouter_base_url,
             )
 
-            stmp_model = (
-                stamp_model
-                or image_model
-                or text_model
-                or table_model
-                or "qwen/qwen3-vl-30b-a3b-instruct"
-            )
-            logger.info(f"STAMP модель: {stmp_model}")
-            stamp_backend = create_ocr_engine(
-                "openrouter",
-                api_key=settings.openrouter_api_key,
-                model_name=stmp_model,
-                base_url=settings.openrouter_base_url,
-            )
+            # Штампы: через Qwen (локальная модель) или OpenRouter
+            if engine == "qwen" and settings.qwen_base_url:
+                logger.info("STAMP модель: Qwen (LM Studio, mode=stamp)")
+                stamp_backend = create_ocr_engine(
+                    "qwen",
+                    base_url=settings.qwen_base_url,
+                    mode="stamp",
+                )
+            else:
+                stmp_model = (
+                    stamp_model
+                    or image_model
+                    or text_model
+                    or table_model
+                    or "qwen/qwen3-vl-30b-a3b-instruct"
+                )
+                logger.info(f"STAMP модель: {stmp_model}")
+                stamp_backend = create_ocr_engine(
+                    "openrouter",
+                    api_key=settings.openrouter_api_key,
+                    model_name=stmp_model,
+                    base_url=settings.openrouter_base_url,
+                )
         else:
             image_backend = create_ocr_engine("dummy")
-            stamp_backend = create_ocr_engine("dummy")
+            if engine == "qwen" and settings.qwen_base_url:
+                stamp_backend = create_ocr_engine(
+                    "qwen",
+                    base_url=settings.qwen_base_url,
+                    mode="stamp",
+                )
+            else:
+                stamp_backend = create_ocr_engine("dummy")
 
         # OCR обработка (двухпроходный алгоритм)
         run_two_pass_ocr(
@@ -320,7 +344,7 @@ def run_ocr_task(self, job_id: str) -> dict:
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
 
-        # Выгрузить модель Chandra из LM Studio (только если нет других активных задач)
+        # Выгрузить модель LM Studio (только если нет других активных задач)
         if engine == "chandra" and strip_backend is not None and hasattr(strip_backend, "unload_model"):
             remaining = release_chandra(job_id)
             if remaining == 0:
@@ -328,6 +352,14 @@ def run_ocr_task(self, job_id: str) -> dict:
                 logger.info(f"Chandra: последняя задача завершена, модель выгружена")
             else:
                 logger.info(f"Chandra: модель НЕ выгружена, активных задач: {remaining}")
+
+        if engine == "qwen" and strip_backend is not None and hasattr(strip_backend, "unload_model"):
+            remaining = release_lmstudio("qwen", job_id)
+            if remaining == 0:
+                strip_backend.unload_model()
+                logger.info(f"Qwen: последняя задача завершена, модель выгружена")
+            else:
+                logger.info(f"Qwen: модель НЕ выгружена, активных задач: {remaining}")
 
         # Очищаем кэш размеров страниц
         clear_page_size_cache()

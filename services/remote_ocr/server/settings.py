@@ -194,6 +194,22 @@ class Settings:
         )
     )
 
+    # ===== QWEN (LM Studio) =====
+    qwen_base_url: str = field(
+        default_factory=lambda: os.getenv("QWEN_BASE_URL")
+        or os.getenv("CHANDRA_BASE_URL", "")
+    )
+    qwen_max_concurrent: int = field(
+        default_factory=lambda: _get(
+            _yaml_config, "qwen_max_concurrent", "QWEN_MAX_CONCURRENT", int
+        )
+    )
+    qwen_retry_delay: int = field(
+        default_factory=lambda: _get(
+            _yaml_config, "qwen_retry_delay", "QWEN_RETRY_DELAY", int
+        )
+    )
+
     # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
     max_retry_blocks: int = field(
         default_factory=lambda: _get(

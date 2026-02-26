@@ -303,8 +303,8 @@ def _group_and_merge_strips(
             current_strip_blocks.append((block.id, crop_path, part_idx, total_parts))
             current_strip_height += new_height
 
-        # Chandra: каждый блок отдельно (не объединять в общие strips)
-        if engine == "chandra" and current_strip_blocks:
+        # LM Studio бэкенды: каждый блок отдельно (не объединять в общие strips)
+        if engine in ("chandra", "qwen") and current_strip_blocks:
             _save_current_strip()
 
     _save_current_strip()

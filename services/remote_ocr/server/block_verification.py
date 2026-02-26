@@ -21,8 +21,16 @@ def _get_chandra_retry_delay() -> int:
 
 
 def _is_chandra_backend(backend) -> bool:
-    """Проверить, является ли бэкенд Chandra (LM Studio)."""
-    return type(backend).__name__ in ("ChandraBackend", "AsyncChandraBackend")
+    """Проверить, является ли бэкенд Chandra (LM Studio). Обратная совместимость."""
+    return _is_lmstudio_backend(backend)
+
+
+def _is_lmstudio_backend(backend) -> bool:
+    """Проверить, является ли бэкенд LM Studio (Chandra/Qwen)."""
+    return type(backend).__name__ in (
+        "ChandraBackend", "AsyncChandraBackend",
+        "QwenBackend", "AsyncQwenBackend",
+    )
 
 
 def _get_engine_name(backend) -> str:
@@ -31,6 +39,8 @@ def _get_engine_name(backend) -> str:
     name_map = {
         "ChandraBackend": "chandra",
         "AsyncChandraBackend": "chandra",
+        "QwenBackend": "qwen",
+        "AsyncQwenBackend": "qwen",
         "DatalabOCRBackend": "datalab",
         "OpenRouterBackend": "openrouter",
     }

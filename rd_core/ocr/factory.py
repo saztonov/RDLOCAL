@@ -30,6 +30,10 @@ def create_ocr_engine(backend: str = "dummy", **kwargs) -> OCRBackend:
         from rd_core.ocr.chandra import ChandraBackend
 
         return ChandraBackend(**kwargs)
+    elif backend == "qwen":
+        from rd_core.ocr.qwen import QwenBackend
+
+        return QwenBackend(**kwargs)
     elif backend == "dummy":
         from rd_core.ocr.dummy import DummyOCRBackend
 
@@ -64,6 +68,10 @@ def create_async_ocr_engine(backend: str = "dummy", **kwargs) -> AsyncOCRBackend
         from rd_core.ocr.chandra_async import AsyncChandraBackend
 
         return AsyncChandraBackend(**kwargs)
+    elif backend == "qwen":
+        from rd_core.ocr.qwen_async import AsyncQwenBackend
+
+        return AsyncQwenBackend(**kwargs)
     elif backend == "dummy":
         from rd_core.ocr.dummy_async import AsyncDummyOCRBackend
 
