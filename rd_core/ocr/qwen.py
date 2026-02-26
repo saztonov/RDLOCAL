@@ -320,7 +320,10 @@ class QwenBackend:
 
             response = self.session.post(
                 f"{self.base_url}/v1/chat/completions",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "ngrok-skip-browser-warning": "true",
+                },
                 json=payload,
                 timeout=300,
             )

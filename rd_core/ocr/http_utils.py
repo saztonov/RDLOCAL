@@ -22,6 +22,8 @@ def create_retry_session(
     adapter = HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    # Обход ngrok free tier browser interstitial
+    session.headers.update({"ngrok-skip-browser-warning": "true"})
     if auth:
         session.auth = auth
     return session
@@ -49,4 +51,6 @@ def create_async_client(
         transport=transport,
         timeout=httpx.Timeout(timeout, connect=connect_timeout),
         auth=auth,
+        # Обход ngrok free tier browser interstitial
+        headers={"ngrok-skip-browser-warning": "true"},
     )

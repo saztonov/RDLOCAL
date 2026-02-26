@@ -148,10 +148,12 @@ class AsyncChandraBackend:
         if not self._model_id:
             return
         try:
+            _ngrok_headers = {"ngrok-skip-browser-warning": "true"}
             resp = _httpx.get(
                 f"{self.base_url}/api/v1/models",
                 timeout=10.0,
                 auth=self._auth,
+                headers=_ngrok_headers,
             )
             if resp.status_code != 200:
                 return
@@ -165,6 +167,7 @@ class AsyncChandraBackend:
                             json={"instance_id": inst["id"]},
                             timeout=30.0,
                             auth=self._auth,
+                            headers=_ngrok_headers,
                         )
                         logger.info(f"Модель выгружена: {inst['id']}")
                     break
@@ -230,7 +233,10 @@ class AsyncChandraBackend:
 
             response = await client.post(
                 f"{self.base_url}/v1/chat/completions",
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "ngrok-skip-browser-warning": "true",
+                },
                 json=payload,
             )
 
