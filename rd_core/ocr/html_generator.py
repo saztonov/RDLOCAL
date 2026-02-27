@@ -10,6 +10,7 @@ from .generator_common import (
     INHERITABLE_STAMP_FIELDS,
     collect_block_groups,
     collect_inheritable_stamp_data,
+    contains_html,
     extract_image_ocr_data,
     find_page_stamp,
     format_stamp_parts,
@@ -17,6 +18,7 @@ from .generator_common import (
     get_html_header,
     is_image_ocr_json,
     sanitize_html,
+    strip_code_fence,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,19 +41,19 @@ def _format_image_ocr_html(data: dict) -> str:
 
     # Краткое описание
     if img_data.get("content_summary"):
-        parts.append(f"<p><b>Краткое описание:</b> {img_data['content_summary']}</p>")
+        parts.append(f"<p><b>Краткое описание:</b> {_escape_html(img_data['content_summary'])}</p>")
 
     # Детальное описание
     if img_data.get("detailed_description"):
-        parts.append(f"<p><b>Описание:</b> {img_data['detailed_description']}</p>")
+        parts.append(f"<p><b>Описание:</b> {_escape_html(img_data['detailed_description'])}</p>")
 
     # Распознанный текст
     if img_data.get("clean_ocr_text"):
-        parts.append(f"<p><b>Текст на чертеже:</b> {img_data['clean_ocr_text']}</p>")
+        parts.append(f"<p><b>Текст на чертеже:</b> {_escape_html(img_data['clean_ocr_text'])}</p>")
 
     # Ключевые сущности - через запятую
     if img_data.get("key_entities"):
-        entities_str = ", ".join(img_data["key_entities"])
+        entities_str = ", ".join(_escape_html(e) for e in img_data["key_entities"])
         parts.append(f"<p><b>Сущности:</b> {entities_str}</p>")
 
     return "\n".join(parts) if parts else ""
@@ -70,12 +72,12 @@ def _extract_html_from_ocr_text(ocr_text: str) -> str:
     if not ocr_text:
         return ""
 
-    text = ocr_text.strip()
+    text = strip_code_fence(ocr_text.strip())
     if not text:
         return ""
 
-    # Если начинается с HTML тега или закрывающего тега - обрабатываем как HTML
-    if text.startswith("<") or text.startswith("</"):
+    # Надёжное определение HTML через поиск тегов
+    if contains_html(text):
         return sanitize_html(text)
 
     # Пробуем распарсить как JSON

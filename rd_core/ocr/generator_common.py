@@ -155,6 +155,30 @@ DATALAB_IMG_PATTERN = re.compile(
 DATALAB_MD_IMG_PATTERN = re.compile(r'\[img:[a-f0-9]{20,}_img\]')
 
 
+# Паттерн для надёжного определения HTML-контента в тексте
+_HTML_TAG_PATTERN = re.compile(
+    r'<(?:table|thead|tbody|tr|th|td|p|div|span|h[1-6]|ul|ol|li|br|img|math|sub|sup|pre|input)\b',
+    re.IGNORECASE,
+)
+
+
+def contains_html(text: str) -> bool:
+    """Надёжное определение HTML-контента (не только startswith('<'))."""
+    if not text:
+        return False
+    return bool(_HTML_TAG_PATTERN.search(text))
+
+
+def strip_code_fence(text: str) -> str:
+    """Убрать ```html ... ``` обёртку если есть."""
+    if not text:
+        return text
+    m = re.match(r'^```(?:html)?\s*\n(.*?)```\s*$', text, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return text
+
+
 def sanitize_html(html: str) -> str:
     """
     Очистить HTML от артефактов datalab OCR.

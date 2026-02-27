@@ -285,7 +285,8 @@ def verify_and_retry_missing_blocks(
 
                 if ocr_text and not ocr_text.startswith(_ERROR_PREFIX):
                     # Обновляем блок в result.json
-                    blk_data["ocr_html"] = ocr_text
+                    from rd_core.ocr.generator_common import sanitize_html
+                    blk_data["ocr_html"] = sanitize_html(ocr_text)
                     blk_data["ocr_text"] = ocr_text
                     blk_data["ocr_meta"] = {
                         "method": [f"retry_{engine_name}"],

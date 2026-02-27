@@ -57,7 +57,8 @@ def table_to_markdown(table_html: str) -> str:
                 break
 
             colspan, rowspan = parse_cell_span(cell_tag)
-            text = re.sub(r"<[^>]+>", "", cell_content)
+            text = re.sub(r"<br\s*/?>", " ", cell_content, flags=re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", "", text)
             text = clean_cell_text(text)
 
             # Добавляем ячейку

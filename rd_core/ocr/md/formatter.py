@@ -2,7 +2,13 @@
 import json as json_module
 from typing import Dict
 
-from ..generator_common import extract_image_ocr_data, is_image_ocr_json, sanitize_markdown
+from ..generator_common import (
+    contains_html,
+    extract_image_ocr_data,
+    is_image_ocr_json,
+    sanitize_markdown,
+    strip_code_fence,
+)
 from .html_converter import html_to_markdown
 
 
@@ -62,12 +68,12 @@ def process_ocr_content(ocr_text: str) -> str:
     if not ocr_text:
         return ""
 
-    text = ocr_text.strip()
+    text = strip_code_fence(ocr_text.strip())
     if not text:
         return ""
 
-    # HTML контент (включая случаи, начинающиеся с закрывающего тега)
-    if text.startswith("<") or text.startswith("</"):
+    # HTML контент — надёжное определение через поиск тегов
+    if contains_html(text):
         return html_to_markdown(text)
 
     # JSON контент
