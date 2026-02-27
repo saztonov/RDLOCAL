@@ -63,9 +63,10 @@ qwen_retry_delay: 2
 
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
-max_retry_blocks: 50
+max_retry_blocks: 0
 # Таймаут верификации в минутах (0 = без лимита)
-verification_timeout_minutes: 10
+# Для LM Studio (ngrok) минимум 30 мин гарантируется в коде
+verification_timeout_minutes: 30
 
 # ===== НАСТРОЙКИ OCR =====
 # Сжатие PNG (0=без сжатия, 9=максимальное)

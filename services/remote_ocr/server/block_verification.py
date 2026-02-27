@@ -47,6 +47,53 @@ def _get_engine_name(backend) -> str:
     return name_map.get(cls, cls.lower())
 
 
+def _check_backend_available(backend, timeout: int = 10) -> bool:
+    """Быстрая проверка доступности бэкенда (ngrok tunnel для LM Studio)."""
+    if not _is_lmstudio_backend(backend):
+        return True
+
+    base_url = getattr(backend, "base_url", None)
+    if not base_url:
+        return True
+
+    try:
+        session = getattr(backend, "session", None)
+        if session:
+            resp = session.get(f"{base_url}/v1/models", timeout=timeout)
+            return resp.status_code == 200
+    except Exception:
+        return False
+    return True
+
+
+def _wait_for_backend(backend, max_wait: int = 300, check_interval: int = 15) -> bool:
+    """Ожидать восстановления бэкенда (ngrok tunnel).
+
+    Args:
+        backend: OCR backend
+        max_wait: максимальное ожидание в секундах
+        check_interval: интервал проверки в секундах
+
+    Returns:
+        True если бэкенд доступен
+    """
+    if _check_backend_available(backend):
+        return True
+
+    engine = _get_engine_name(backend)
+    logger.warning(f"{engine} бэкенд недоступен, ожидание до {max_wait}с...")
+    start = time.monotonic()
+    while time.monotonic() - start < max_wait:
+        time.sleep(check_interval)
+        if _check_backend_available(backend):
+            elapsed = time.monotonic() - start
+            logger.info(f"{engine} бэкенд восстановлен через {elapsed:.0f}с")
+            return True
+
+    logger.warning(f"{engine} бэкенд не восстановлен за {max_wait}с")
+    return False
+
+
 def verify_and_retry_missing_blocks(
     result_json_path: Path,
     pdf_path: Path,
@@ -118,8 +165,14 @@ def verify_and_retry_missing_blocks(
 
     # Лимиты верификации из конфигурации
     from .settings import settings
-    max_blocks = settings.max_retry_blocks  # default 50
-    timeout_min = settings.verification_timeout_minutes  # default 10
+    max_blocks = settings.max_retry_blocks  # default 0 (без лимита)
+    timeout_min = settings.verification_timeout_minutes  # default 30
+
+    is_lmstudio = _is_lmstudio_backend(ocr_backend)
+
+    # Для LM Studio: гарантируем минимальный таймаут 30 мин
+    if is_lmstudio:
+        timeout_min = max(timeout_min, 30)
 
     if max_blocks > 0 and len(missing_blocks) > max_blocks:
         logger.warning(
@@ -135,12 +188,17 @@ def verify_and_retry_missing_blocks(
     from .pdf_streaming_core import StreamingPDFProcessor
     from rd_core.models import Block
 
-    is_chandra = _is_chandra_backend(ocr_backend)
     successful_retries = 0
     consecutive_failures = 0
-    MAX_CONSECUTIVE_FAILURES = 5
+    MAX_CONSECUTIVE_FAILURES = 10
     start_time = time.monotonic()
     stopped_reason = None
+    base_delay = _get_chandra_retry_delay()
+
+    # Для LM Studio: ждём доступности бэкенда перед началом retry
+    if is_lmstudio:
+        if not _wait_for_backend(ocr_backend, max_wait=300, check_interval=15):
+            logger.warning("Бэкенд недоступен, начинаем верификацию с надеждой на восстановление")
 
     with StreamingPDFProcessor(str(pdf_path)) as processor:
         for idx, item in enumerate(missing_blocks):
@@ -152,11 +210,23 @@ def verify_and_retry_missing_blocks(
                     logger.warning(f"Верификация прервана: {stopped_reason}")
                     break
 
-            # Проверка серии ошибок подряд (backend недоступен)
+            # Проверка серии ошибок подряд — ждём восстановления бэкенда
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                stopped_reason = f"{MAX_CONSECUTIVE_FAILURES} ошибок подряд (backend недоступен)"
-                logger.warning(f"Верификация прервана: {stopped_reason}")
-                break
+                if is_lmstudio:
+                    logger.warning(
+                        f"{consecutive_failures} ошибок подряд, проверяем доступность бэкенда..."
+                    )
+                    if _wait_for_backend(ocr_backend, max_wait=180, check_interval=15):
+                        consecutive_failures = 0
+                        logger.info("Бэкенд восстановлен, продолжаем верификацию")
+                    else:
+                        stopped_reason = f"бэкенд недоступен после {MAX_CONSECUTIVE_FAILURES} ошибок"
+                        logger.warning(f"Верификация прервана: {stopped_reason}")
+                        break
+                else:
+                    stopped_reason = f"{MAX_CONSECUTIVE_FAILURES} ошибок подряд (backend недоступен)"
+                    logger.warning(f"Верификация прервана: {stopped_reason}")
+                    break
 
             # Вызываем callback прогресса перед обработкой блока
             if on_progress:
@@ -176,9 +246,23 @@ def verify_and_retry_missing_blocks(
                 f"{block_id} ({reason}), engine: {engine_name}"
             )
 
-            # Пауза перед retry для Chandra (LM Studio может быть перегружен)
-            if is_chandra and idx > 0:
-                time.sleep(_get_chandra_retry_delay())
+            # Пауза перед retry с exponential backoff при ошибках
+            if is_lmstudio and idx > 0:
+                if consecutive_failures > 0:
+                    backoff_delay = min(base_delay * (2 ** consecutive_failures), 120)
+                    logger.info(
+                        f"Backoff delay: {backoff_delay}с "
+                        f"(consecutive_failures={consecutive_failures})"
+                    )
+                    time.sleep(backoff_delay)
+                else:
+                    time.sleep(base_delay)
+
+            # Промежуточная проверка доступности при множественных ошибках
+            if is_lmstudio and consecutive_failures > 0 and consecutive_failures % 3 == 0:
+                if not _check_backend_available(ocr_backend):
+                    logger.info("Бэкенд недоступен, ожидание 60с...")
+                    time.sleep(60)
 
             try:
                 # Создаём Block объект для crop

@@ -11,13 +11,25 @@ def create_retry_session(
     total_retries: int = 3,
     backoff_factor: float = 0.5,
     status_forcelist: tuple = (502, 503, 504),
+    ngrok_mode: bool = False,
 ) -> requests.Session:
-    """Создать requests.Session с retry и connection pooling."""
+    """Создать requests.Session с retry и connection pooling.
+
+    Args:
+        ngrok_mode: расширенный retry для нестабильного ngrok tunnel
+                    (6 попыток, backoff до ~2 мин, включая 404)
+    """
+    if ngrok_mode:
+        total_retries = 6
+        backoff_factor = 2.0
+        status_forcelist = (404, 429, 500, 502, 503, 504)
+
     session = requests.Session()
     retry = Retry(
         total=total_retries,
         backoff_factor=backoff_factor,
         status_forcelist=status_forcelist,
+        allowed_methods=["GET", "POST"],
     )
     adapter = HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=retry)
     session.mount("https://", adapter)
@@ -35,12 +47,19 @@ def create_async_client(
     auth: Optional[Tuple[str, str]] = None,
     max_connections: int = 10,
     max_keepalive: int = 5,
+    ngrok_mode: bool = False,
 ):
-    """Создать httpx.AsyncClient с retry и connection pooling."""
+    """Создать httpx.AsyncClient с retry и connection pooling.
+
+    Args:
+        ngrok_mode: расширенный retry для нестабильного ngrok tunnel
+    """
     import httpx
 
+    retries = 5 if ngrok_mode else 3
+
     transport = httpx.AsyncHTTPTransport(
-        retries=3,
+        retries=retries,
         limits=httpx.Limits(
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive,

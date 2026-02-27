@@ -133,6 +133,14 @@ async def pass2_ocr_from_manifest_async(
                 )
 
     # --- Обработка strips ---
+    # Strip-level retry для LM Studio бэкендов (ngrok tunnel instability)
+    _is_lmstudio = type(strip_backend).__name__ in (
+        "ChandraBackend", "QwenBackend", "AsyncChandraBackend", "AsyncQwenBackend",
+    )
+    _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 0
+    _STRIP_RETRY_DELAYS = [30, 60]
+    _ERROR_PREFIX = "[Ошибка"
+
     async def _process_strip_async(
         strip: StripManifestEntry, strip_idx: int
     ) -> Optional[Tuple[StripManifestEntry, Dict[int, str], int]]:
@@ -150,59 +158,83 @@ async def pass2_ocr_from_manifest_async(
 
         async with concurrency_semaphore:
             try:
-                # Загрузка изображения в thread pool (CPU-bound)
-                merged_image = await asyncio.to_thread(Image.open, strip.strip_path)
+                strip_blocks = [
+                    blocks_by_id[bp["block_id"]]
+                    for bp in strip.block_parts
+                    if bp["block_id"] in blocks_by_id
+                ]
 
-                try:
-                    strip_blocks = [
-                        blocks_by_id[bp["block_id"]]
-                        for bp in strip.block_parts
-                        if bp["block_id"] in blocks_by_id
-                    ]
+                if not strip_blocks:
+                    return None
 
-                    if not strip_blocks:
-                        return None
+                prompt_data = build_strip_prompt(strip_blocks)
 
-                    prompt_data = build_strip_prompt(strip_blocks)
+                block_ids = [bp["block_id"] for bp in strip.block_parts]
+                logger.info(
+                    f"PASS2 ASYNC: начало обработки strip {strip.strip_id} "
+                    f"({len(strip.block_parts)} блоков): {block_ids}"
+                )
 
-                    block_ids = [bp["block_id"] for bp in strip.block_parts]
-                    logger.info(
-                        f"PASS2 ASYNC: начало обработки strip {strip.strip_id} "
-                        f"({len(strip.block_parts)} блоков): {block_ids}"
-                    )
+                response_text = None
+                for strip_attempt in range(_STRIP_MAX_RETRIES + 1):
+                    if strip_attempt > 0:
+                        delay = _STRIP_RETRY_DELAYS[min(strip_attempt - 1, len(_STRIP_RETRY_DELAYS) - 1)]
+                        logger.warning(
+                            f"PASS2 ASYNC: strip {strip.strip_id} retry "
+                            f"{strip_attempt}/{_STRIP_MAX_RETRIES}, ожидание {delay}с"
+                        )
+                        await asyncio.sleep(delay)
 
-                    # Получаем разрешение от rate limiter
-                    if not await rate_limiter.acquire_async():
-                        logger.warning(f"Strip {strip.strip_id}: rate limiter timeout")
-                        return None
+                    # Загрузка изображения в thread pool (CPU-bound)
+                    merged_image = await asyncio.to_thread(Image.open, strip.strip_path)
 
                     try:
-                        # Асинхронный OCR вызов
-                        if hasattr(strip_backend, "recognize_async"):
-                            response_text = await strip_backend.recognize_async(
-                                merged_image, prompt=prompt_data
-                            )
-                        else:
-                            # Fallback для sync backend
-                            response_text = await asyncio.to_thread(
-                                strip_backend.recognize, merged_image, prompt_data
-                            )
+                        # Получаем разрешение от rate limiter
+                        if not await rate_limiter.acquire_async():
+                            logger.warning(f"Strip {strip.strip_id}: rate limiter timeout")
+                            merged_image.close()
+                            if strip_attempt < _STRIP_MAX_RETRIES:
+                                continue
+                            return None
+
+                        try:
+                            # Асинхронный OCR вызов
+                            if hasattr(strip_backend, "recognize_async"):
+                                response_text = await strip_backend.recognize_async(
+                                    merged_image, prompt=prompt_data
+                                )
+                            else:
+                                # Fallback для sync backend
+                                response_text = await asyncio.to_thread(
+                                    strip_backend.recognize, merged_image, prompt_data
+                                )
+                        finally:
+                            await rate_limiter.release_async()
                     finally:
-                        await rate_limiter.release_async()
+                        merged_image.close()
 
-                    response_len = len(response_text) if response_text else 0
-                    if response_len == 0:
+                    # Проверяем результат: если ошибка и есть retry — повторяем
+                    if response_text and not response_text.startswith(_ERROR_PREFIX):
+                        break  # Успех
+                    if strip_attempt < _STRIP_MAX_RETRIES:
+                        err_preview = (response_text or "пусто")[:80]
                         logger.warning(
-                            f"PASS2 ASYNC: strip {strip.strip_id} — пустой ответ от OCR бэкенда"
+                            f"PASS2 ASYNC: strip {strip.strip_id} ошибка OCR "
+                            f"({err_preview}), будет retry"
                         )
-                    else:
-                        logger.info(
-                            f"PASS2 ASYNC: завершена обработка strip {strip.strip_id}, "
-                            f"ответ {response_len} символов"
-                        )
+                        continue
+                    # Последняя попытка, оставляем как есть
 
-                finally:
-                    merged_image.close()
+                response_len = len(response_text) if response_text else 0
+                if response_len == 0:
+                    logger.warning(
+                        f"PASS2 ASYNC: strip {strip.strip_id} — пустой ответ от OCR бэкенда"
+                    )
+                else:
+                    logger.info(
+                        f"PASS2 ASYNC: завершена обработка strip {strip.strip_id}, "
+                        f"ответ {response_len} символов"
+                    )
 
                 index_results = parse_batch_response_by_index(
                     len(strip.block_parts), response_text, block_ids=block_ids

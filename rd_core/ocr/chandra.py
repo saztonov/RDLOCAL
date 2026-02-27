@@ -2,6 +2,7 @@
 import logging
 import os
 import threading
+import time
 from typing import Optional
 
 import requests
@@ -78,7 +79,7 @@ class ChandraBackend:
         auth_pass = os.getenv("NGROK_AUTH_PASS")
         self._auth = (auth_user, auth_pass) if auth_user and auth_pass else None
 
-        self.session = create_retry_session(auth=self._auth)
+        self.session = create_retry_session(auth=self._auth, ngrok_mode=True)
 
         logger.info(f"ChandraBackend инициализирован (base_url: {self.base_url})")
 
@@ -213,6 +214,11 @@ class ChandraBackend:
         """Chandra не поддерживает прямой ввод PDF"""
         return False
 
+    # Transient HTTP коды, при которых имеет смысл retry (ngrok tunnel issues)
+    _TRANSIENT_CODES = {404, 429, 500, 502, 503, 504}
+    _MAX_APP_RETRIES = 3
+    _APP_RETRY_DELAYS = [30, 60, 120]  # секунды между application-level retry
+
     def recognize(
         self,
         image: Optional[Image.Image],
@@ -265,17 +271,53 @@ class ChandraBackend:
                 "top_p": 0.1,
             }
 
-            response = self.session.post(
-                f"{self.base_url}/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "ngrok-skip-browser-warning": "true",
-                },
-                json=payload,
-                timeout=300,
-            )
+            last_error = None
+            for attempt in range(self._MAX_APP_RETRIES + 1):
+                if attempt > 0:
+                    delay = self._APP_RETRY_DELAYS[min(attempt - 1, len(self._APP_RETRY_DELAYS) - 1)]
+                    logger.warning(
+                        f"Chandra API retry {attempt}/{self._MAX_APP_RETRIES}, "
+                        f"ожидание {delay}с (предыдущая ошибка: {last_error})"
+                    )
+                    time.sleep(delay)
 
-            if response.status_code != 200:
+                try:
+                    response = self.session.post(
+                        f"{self.base_url}/v1/chat/completions",
+                        headers={
+                            "Content-Type": "application/json",
+                            "ngrok-skip-browser-warning": "true",
+                        },
+                        json=payload,
+                        timeout=300,
+                    )
+                except requests.exceptions.ConnectionError as e:
+                    last_error = f"ConnectionError: {e}"
+                    logger.warning(f"Chandra connection error (attempt {attempt}): {e}")
+                    if attempt < self._MAX_APP_RETRIES:
+                        continue
+                    return f"[Ошибка Chandra: {last_error} после {self._MAX_APP_RETRIES} попыток]"
+                except requests.exceptions.Timeout:
+                    last_error = "Timeout"
+                    logger.warning(f"Chandra timeout (attempt {attempt})")
+                    if attempt < self._MAX_APP_RETRIES:
+                        continue
+                    return "[Ошибка: превышен таймаут запроса к Chandra]"
+
+                if response.status_code == 200:
+                    break
+
+                if response.status_code in self._TRANSIENT_CODES:
+                    last_error = f"HTTP {response.status_code}"
+                    if attempt < self._MAX_APP_RETRIES:
+                        logger.warning(
+                            f"Chandra transient error {response.status_code} "
+                            f"(attempt {attempt}), will retry"
+                        )
+                        continue
+                    return f"[Ошибка Chandra API: {response.status_code} после {self._MAX_APP_RETRIES} попыток]"
+
+                # Не-transient ошибка — возвращаем сразу
                 error_detail = response.text[:500] if response.text else "No details"
                 logger.error(
                     f"Chandra API error: {response.status_code} - {error_detail}"
@@ -296,9 +338,6 @@ class ChandraBackend:
             logger.debug(f"Chandra OCR: распознано {len(text)} символов")
             return text
 
-        except requests.exceptions.Timeout:
-            logger.error("Chandra OCR: превышен таймаут")
-            return "[Ошибка: превышен таймаут запроса к Chandra]"
         except Exception as e:
             logger.error(f"Ошибка Chandra OCR: {e}", exc_info=True)
             return f"[Ошибка Chandra OCR: {e}]"
