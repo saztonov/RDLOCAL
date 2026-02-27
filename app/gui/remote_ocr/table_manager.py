@@ -4,6 +4,7 @@ import logging
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QPushButton,
     QTableWidgetItem,
@@ -33,92 +34,213 @@ class SortableTableWidgetItem(QTableWidgetItem):
 class TableManagerMixin:
     """Миксин для управления таблицей задач"""
 
-    def _update_table(self, jobs):
-        """Обновить таблицу задач"""
-        # Сохранить выбранную задачу и позицию скролла
-        selected_job_id = None
-        selected_items = self.jobs_table.selectedItems()
-        if selected_items:
-            item = self.jobs_table.item(selected_items[0].row(), 0)
-            if item:
-                selected_job_id = item.data(JOB_ID_ROLE)
-        scroll_pos = self.jobs_table.verticalScrollBar().value()
+    # ── Утилитные методы ─────────────────────────────────────────────
 
-        self.jobs_table.setSortingEnabled(False)
-        self.jobs_table.setRowCount(0)
+    def _find_row_by_job_id(self, job_id: str) -> int:
+        """Найти строку в таблице по job_id. Возвращает -1 если не найден."""
+        for row in range(self.jobs_table.rowCount()):
+            item = self.jobs_table.item(row, 0)
+            if item and item.data(JOB_ID_ROLE) == job_id:
+                return row
+        return -1
 
-        # Авто-скачивание результата для текущего документа (только один раз)
-        current_node_id = getattr(self.main_window, "_current_node_id", None)
-        if current_node_id:
-            for job in jobs:
-                if (
-                    job.status == "done"
-                    and getattr(job, "node_id", None) == current_node_id
-                ):
-                    if job.id not in self._downloaded_jobs:
-                        # Уведомление если панель скрыта
-                        if not self.isVisible():
-                            from app.gui.toast import show_toast
+    def _update_row_cells(self, row: int, job, row_number: int):
+        """Обновить все ячейки строки данными задачи (in-place)."""
+        table = self.jobs_table
 
-                            doc_name = job.task_name or job.document_name or ""
-                            show_toast(
-                                self.main_window,
-                                f"OCR завершён: {doc_name}",
-                                duration=5000,
-                            )
-                            logger.info(
-                                f"Задача {job.id[:8]}... завершена "
-                                f"(панель скрыта), показано уведомление"
-                            )
-                        self._auto_download_result(job.id)
-                    break  # Только последняя done задача для текущего документа
+        # Колонка 0: №
+        item0 = table.item(row, 0)
+        if item0 is None:
+            item0 = SortableTableWidgetItem(str(row_number))
+            item0.setData(Qt.UserRole, row_number)
+            item0.setData(JOB_ID_ROLE, job.id)
+            table.setItem(row, 0, item0)
+        else:
+            item0.setText(str(row_number))
+            item0.setData(Qt.UserRole, row_number)
+            item0.setData(JOB_ID_ROLE, job.id)
 
-        for idx, job in enumerate(jobs, start=1):
-            row = self.jobs_table.rowCount()
-            self.jobs_table.insertRow(row)
+        # Колонка 1: Наименование
+        display_name = job.task_name if job.task_name else job.document_name
+        item1 = table.item(row, 1)
+        if item1 is None:
+            table.setItem(row, 1, QTableWidgetItem(display_name))
+        else:
+            item1.setText(display_name)
 
-            num_item = SortableTableWidgetItem(str(idx))
-            num_item.setData(Qt.UserRole, idx)
-            num_item.setData(JOB_ID_ROLE, job.id)
-            self.jobs_table.setItem(row, 0, num_item)
-
-            display_name = job.task_name if job.task_name else job.document_name
-            self.jobs_table.setItem(row, 1, QTableWidgetItem(display_name))
-
-            created_at_str = format_datetime_utc3(job.created_at)
+        # Колонка 2: Время начала
+        created_at_str = (
+            format_datetime_utc3(job.created_at) if job.created_at else "Только что"
+        )
+        item2 = table.item(row, 2)
+        if item2 is None:
             created_item = SortableTableWidgetItem(created_at_str)
-            created_item.setData(Qt.UserRole, job.created_at)
-            self.jobs_table.setItem(row, 2, created_item)
+            created_item.setData(Qt.UserRole, job.created_at or "")
+            table.setItem(row, 2, created_item)
+        else:
+            item2.setText(created_at_str)
+            item2.setData(Qt.UserRole, job.created_at or "")
 
-            status_text = self._get_status_text(job.status)
+        # Колонка 3: Статус
+        status_text = self._get_status_text(job.status)
+        item3 = table.item(row, 3)
+        if item3 is None:
             status_item = QTableWidgetItem(status_text)
             if job.error_message:
                 status_item.setToolTip(job.error_message)
-            self.jobs_table.setItem(row, 3, status_item)
+            table.setItem(row, 3, status_item)
+        else:
+            item3.setText(status_text)
+            item3.setToolTip(job.error_message or "")
 
-            progress_text = f"{int(job.progress * 100)}%"
+        # Колонка 4: Прогресс
+        progress_text = f"{int(job.progress * 100)}%"
+        item4 = table.item(row, 4)
+        if item4 is None:
             progress_item = SortableTableWidgetItem(progress_text)
             progress_item.setData(Qt.UserRole, job.progress)
-            self.jobs_table.setItem(row, 4, progress_item)
+            table.setItem(row, 4, progress_item)
+        else:
+            item4.setText(progress_text)
+            item4.setData(Qt.UserRole, job.progress)
 
-            status_msg = job.status_message or ""
-            status_msg_item = QTableWidgetItem(status_msg)
-            self.jobs_table.setItem(row, 5, status_msg_item)
+        # Колонка 5: Детали
+        status_msg = job.status_message or ""
+        item5 = table.item(row, 5)
+        if item5 is None:
+            table.setItem(row, 5, QTableWidgetItem(status_msg))
+        else:
+            item5.setText(status_msg)
 
-            actions_widget = self._create_actions_widget(job)
-            self.jobs_table.setCellWidget(row, 6, actions_widget)
+        # Колонка 6: Действия (виджет — всегда пересоздаём, т.к. зависит от статуса)
+        actions_widget = self._create_actions_widget(job)
+        table.setCellWidget(row, 6, actions_widget)
 
-        self.jobs_table.setSortingEnabled(True)
+    def _renumber_rows(self):
+        """Пересчитать номера строк (колонка 0) по текущему визуальному порядку."""
+        for row in range(self.jobs_table.rowCount()):
+            item = self.jobs_table.item(row, 0)
+            if item:
+                num = row + 1
+                item.setText(str(num))
+                item.setData(Qt.UserRole, num)
 
-        # Восстановить выбранную задачу
+    # ── Основной метод обновления таблицы ────────────────────────────
+
+    def _update_table(self, jobs):
+        """Обновить таблицу задач (инкрементально, без пересборки)."""
+        table = self.jobs_table
+
+        # 1. Сохранить выбранную задачу
+        selected_job_id = None
+        selected_items = table.selectedItems()
+        if selected_items:
+            item = table.item(selected_items[0].row(), 0)
+            if item:
+                selected_job_id = item.data(JOB_ID_ROLE)
+
+        # 2. Сохранить top visible job_id для восстановления скролла
+        top_visible_job_id = None
+        top_row = table.rowAt(0)
+        if top_row >= 0:
+            top_item = table.item(top_row, 0)
+            if top_item:
+                top_visible_job_id = top_item.data(JOB_ID_ROLE)
+
+        # 3. blockSignals + отключить сортировку
+        table.blockSignals(True)
+        table.setSortingEnabled(False)
+
+        try:
+            # 4. Авто-скачивание результата для текущего документа
+            current_node_id = getattr(self.main_window, "_current_node_id", None)
+            if current_node_id:
+                for job in jobs:
+                    if (
+                        job.status == "done"
+                        and getattr(job, "node_id", None) == current_node_id
+                    ):
+                        if job.id not in self._downloaded_jobs:
+                            if not self.isVisible():
+                                from app.gui.toast import show_toast
+
+                                doc_name = job.task_name or job.document_name or ""
+                                show_toast(
+                                    self.main_window,
+                                    f"OCR завершён: {doc_name}",
+                                    duration=5000,
+                                )
+                                logger.info(
+                                    f"Задача {job.id[:8]}... завершена "
+                                    f"(панель скрыта), показано уведомление"
+                                )
+                            self._auto_download_result(job.id)
+                        break
+
+            # 5. Построить множество incoming job IDs
+            incoming_ids = {job.id for job in jobs}
+
+            # 6. Построить карту текущих строк: job_id -> row
+            existing_rows = {}
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item:
+                    jid = item.data(JOB_ID_ROLE)
+                    if jid:
+                        existing_rows[jid] = row
+
+            # 7. Удалить строки для задач, которых больше нет (с конца)
+            rows_to_remove = [
+                row for jid, row in existing_rows.items() if jid not in incoming_ids
+            ]
+            for row in sorted(rows_to_remove, reverse=True):
+                table.removeRow(row)
+
+            # 8. Перестроить карту после удалений
+            existing_rows = {}
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item:
+                    jid = item.data(JOB_ID_ROLE)
+                    if jid:
+                        existing_rows[jid] = row
+
+            # 9. Обновить существующие + добавить новые
+            for idx, job in enumerate(jobs):
+                if job.id in existing_rows:
+                    self._update_row_cells(existing_rows[job.id], job, idx + 1)
+                else:
+                    new_row = table.rowCount()
+                    table.insertRow(new_row)
+                    self._update_row_cells(new_row, job, idx + 1)
+
+        finally:
+            # 10. Включить сортировку
+            table.setSortingEnabled(True)
+
+            # 11. Пересчитать номера по визуальному порядку
+            self._renumber_rows()
+
+            # 12. Восстановить blockSignals
+            table.blockSignals(False)
+
+        # 13. Восстановить выделение
         if selected_job_id:
-            for row in range(self.jobs_table.rowCount()):
-                item = self.jobs_table.item(row, 0)
-                if item and item.data(JOB_ID_ROLE) == selected_job_id:
-                    self.jobs_table.selectRow(row)
-                    break
-        # Восстановить позицию скролла
-        self.jobs_table.verticalScrollBar().setValue(scroll_pos)
+            sel_row = self._find_row_by_job_id(selected_job_id)
+            if sel_row >= 0:
+                table.selectRow(sel_row)
+
+        # 14. Восстановить скролл по job identity
+        if top_visible_job_id:
+            vis_row = self._find_row_by_job_id(top_visible_job_id)
+            if vis_row >= 0:
+                vis_item = table.item(vis_row, 0)
+                if vis_item:
+                    table.scrollToItem(
+                        vis_item, QAbstractItemView.ScrollHint.PositionAtTop
+                    )
+
+    # ── Одиночные операции со строками ───────────────────────────────
 
     def _add_job_to_table(self, job, at_top: bool = False):
         """Добавить одну задачу в таблицу (для оптимистичного обновления)"""
@@ -133,38 +255,12 @@ class TableManagerMixin:
         self.jobs_table.insertRow(row)
 
         num_val = 1 if at_top else self.jobs_table.rowCount()
-        num_item = SortableTableWidgetItem(str(num_val))
-        num_item.setData(Qt.UserRole, num_val)
-        num_item.setData(JOB_ID_ROLE, job.id)
-        self.jobs_table.setItem(row, 0, num_item)
-
-        display_name = job.task_name if job.task_name else job.document_name
-        self.jobs_table.setItem(row, 1, QTableWidgetItem(display_name))
-
-        created_at_str = (
-            format_datetime_utc3(job.created_at) if job.created_at else "Только что"
-        )
-        created_item = SortableTableWidgetItem(created_at_str)
-        created_item.setData(Qt.UserRole, job.created_at or "")
-        self.jobs_table.setItem(row, 2, created_item)
-
-        status_text = self._get_status_text(job.status)
-        self.jobs_table.setItem(row, 3, QTableWidgetItem(status_text))
-
-        progress_text = f"{int(job.progress * 100)}%"
-        progress_item = SortableTableWidgetItem(progress_text)
-        progress_item.setData(Qt.UserRole, job.progress)
-        self.jobs_table.setItem(row, 4, progress_item)
-
-        status_msg = job.status_message or ""
-        status_msg_item = QTableWidgetItem(status_msg)
-        self.jobs_table.setItem(row, 5, status_msg_item)
-
-        actions_widget = self._create_actions_widget(job)
-        self.jobs_table.setCellWidget(row, 6, actions_widget)
+        self._update_row_cells(row, job, num_val)
 
         self.jobs_table.setSortingEnabled(True)
+        self._renumber_rows()
 
+        display_name = job.task_name if job.task_name else job.document_name
         logger.info(
             f"Задача добавлена в таблицу: row={row}, name={display_name}, "
             f"status={job.status}, total_rows={self.jobs_table.rowCount()}"
@@ -172,55 +268,34 @@ class TableManagerMixin:
 
     def _replace_job_in_table(self, old_job_id: str, new_job):
         """Заменить временную задачу на реальную в таблице"""
-        for row in range(self.jobs_table.rowCount()):
-            item = self.jobs_table.item(row, 0)
-            if item and item.data(JOB_ID_ROLE) == old_job_id:
-                logger.info(
-                    f"Найдена временная задача в строке {row}, заменяем на {new_job.id}"
-                )
-
-                item.setData(JOB_ID_ROLE, new_job.id)
-
-                display_name = (
-                    new_job.task_name if new_job.task_name else new_job.document_name
-                )
-                self.jobs_table.item(row, 1).setText(display_name)
-
-                created_at_str = (
-                    format_datetime_utc3(new_job.created_at)
-                    if new_job.created_at
-                    else "Только что"
-                )
-                self.jobs_table.item(row, 2).setText(created_at_str)
-
-                status_text = self._get_status_text(new_job.status)
-                self.jobs_table.item(row, 3).setText(status_text)
-
-                progress_text = f"{int(new_job.progress * 100)}%"
-                self.jobs_table.item(row, 4).setText(progress_text)
-
-                status_msg = new_job.status_message or ""
-                self.jobs_table.item(row, 5).setText(status_msg)
-
-                actions_widget = self._create_actions_widget(new_job)
-                self.jobs_table.setCellWidget(row, 6, actions_widget)
-
-                logger.info(f"Задача заменена: {old_job_id} -> {new_job.id}")
-                return
-
-        logger.warning(
-            f"Временная задача {old_job_id} не найдена в таблице, добавляем как новую"
-        )
-        self._add_job_to_table(new_job, at_top=True)
+        row = self._find_row_by_job_id(old_job_id)
+        if row >= 0:
+            logger.info(
+                f"Найдена временная задача в строке {row}, заменяем на {new_job.id}"
+            )
+            self.jobs_table.setSortingEnabled(False)
+            self._update_row_cells(row, new_job, row + 1)
+            self.jobs_table.setSortingEnabled(True)
+            self._renumber_rows()
+            logger.info(f"Задача заменена: {old_job_id} -> {new_job.id}")
+        else:
+            logger.warning(
+                f"Временная задача {old_job_id} не найдена в таблице, "
+                f"добавляем как новую"
+            )
+            self._add_job_to_table(new_job, at_top=True)
 
     def _remove_job_from_table(self, job_id: str):
         """Удалить задачу из таблицы по ID"""
-        for row in range(self.jobs_table.rowCount()):
-            item = self.jobs_table.item(row, 0)
-            if item and item.data(JOB_ID_ROLE) == job_id:
-                self.jobs_table.removeRow(row)
-                logger.info(f"Задача {job_id} удалена из таблицы")
-                return
+        row = self._find_row_by_job_id(job_id)
+        if row >= 0:
+            self.jobs_table.setSortingEnabled(False)
+            self.jobs_table.removeRow(row)
+            self.jobs_table.setSortingEnabled(True)
+            self._renumber_rows()
+            logger.info(f"Задача {job_id} удалена из таблицы")
+
+    # ── Вспомогательные методы ───────────────────────────────────────
 
     def _get_status_text(self, status: str) -> str:
         """Получить текст статуса с эмодзи"""

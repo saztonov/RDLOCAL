@@ -454,6 +454,7 @@ class JobOperationsMixin:
                 from app.gui.toast import show_toast
 
                 show_toast(self, f"Задача {job_id[:8]}... удалена")
+                self._jobs_cache.pop(job_id, None)
                 self._remove_job_from_table(job_id)
             else:
                 QMessageBox.warning(self, "Ошибка", "Не удалось удалить задачу")

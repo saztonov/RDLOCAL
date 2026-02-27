@@ -152,6 +152,7 @@ class RemoteOCRPanel(
         header.resizeSection(6, 70)   # Действия
 
         self.jobs_table.setSortingEnabled(True)
+        self.jobs_table.sortByColumn(2, Qt.DescendingOrder)  # новые задачи сверху
         self.jobs_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.jobs_table.setSelectionMode(QTableWidget.SingleSelection)
         self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
