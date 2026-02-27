@@ -11,7 +11,7 @@ _logger = logging.getLogger(__name__)
 # ── Очистка <think> блоков из ответов LLM ─────────────────────────
 _THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 _THINK_UNCLOSED_RE = re.compile(r'<think>.*$', re.DOTALL | re.IGNORECASE)
-_THINK_ORPHAN_CLOSE_RE = re.compile(r'^[^<]*</think>', re.IGNORECASE)
+_THINK_ORPHAN_CLOSE_RE = re.compile(r'^.*?</think>', re.DOTALL | re.IGNORECASE)
 
 
 def strip_think_tags(text: str, backend_name: str = "LLM") -> str:
@@ -22,7 +22,7 @@ def strip_think_tags(text: str, backend_name: str = "LLM") -> str:
     - Незакрытый <think> (модель не завершила reasoning)
     - Сиротский </think> без открывающего <think>
     """
-    if not text or '<think' not in text.lower():
+    if not text or ('<think' not in text.lower() and '</think' not in text.lower()):
         return text
 
     original_len = len(text)
