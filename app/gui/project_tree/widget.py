@@ -305,17 +305,24 @@ class ProjectTreeWidget(
         """Подсветить текущий открытый документ"""
         if self._current_document_id and self._current_document_id in self._node_map:
             prev_item = self._node_map[self._current_document_id]
-            prev_node = prev_item.data(0, Qt.UserRole)
-            if isinstance(prev_node, TreeNode):
-                prev_item.setBackground(0, QColor("transparent"))
-                prev_item.setForeground(0, QColor(STATUS_COLORS.get(prev_node.status, "#e0e0e0")))
+            try:
+                prev_node = prev_item.data(0, Qt.UserRole)
+                if isinstance(prev_node, TreeNode):
+                    prev_item.setBackground(0, QColor("transparent"))
+                    prev_item.setForeground(0, QColor(STATUS_COLORS.get(prev_node.status, "#e0e0e0")))
+            except RuntimeError:
+                self._node_map.pop(self._current_document_id, None)
 
         self._current_document_id = node_id
         if node_id and node_id in self._node_map:
             item = self._node_map[node_id]
-            item.setBackground(0, QColor("#264f78"))
-            item.setForeground(0, QColor("#ffffff"))
-            self.tree.scrollToItem(item)
+            try:
+                item.setBackground(0, QColor("#264f78"))
+                item.setForeground(0, QColor("#ffffff"))
+                self.tree.scrollToItem(item)
+            except RuntimeError:
+                self._node_map.pop(node_id, None)
+                self._current_document_id = ""
 
     def eventFilter(self, obj, event):
         if obj == self.tree and event.type() == QEvent.KeyPress:
@@ -466,6 +473,19 @@ class ProjectTreeWidget(
 
         logger.warning(f"Node {node_id} not found after expanding ancestors")
         return False
+
+    def _remove_subtree_from_node_map(self, item: QTreeWidgetItem) -> None:
+        """Рекурсивно удалить item и всех потомков из _node_map.
+
+        Вызывать ДО удаления item из дерева (takeTopLevelItem/removeChild/takeChildren),
+        т.к. после удаления дочерние items уже недоступны.
+        """
+        for i in range(item.childCount()):
+            self._remove_subtree_from_node_map(item.child(i))
+        node = item.data(0, Qt.UserRole)
+        if isinstance(node, TreeNode):
+            self._node_map.pop(node.id, None)
+            self._sync_statuses.pop(node.id, None)
 
     def _select_and_scroll(self, node_id: str):
         """Выделить узел в дереве и прокрутить к нему."""

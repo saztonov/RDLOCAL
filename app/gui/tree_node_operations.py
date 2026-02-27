@@ -240,12 +240,12 @@ class TreeNodeOperationsMixin(
 
                     item = self._node_map.get(node.id)
                     if item:
+                        self._remove_subtree_from_node_map(item)
                         parent = item.parent()
                         if parent:
                             parent.removeChild(item)
                         else:
                             idx = self.tree.indexOfTopLevelItem(item)
                             self.tree.takeTopLevelItem(idx)
-                        del self._node_map[node.id]
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", str(e))

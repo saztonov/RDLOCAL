@@ -130,14 +130,13 @@ class TreeLoadMixin:
             if isinstance(node, TreeNode):
                 current_ids.add(node.id)
 
-        # Удалить пропавшие
+        # Удалить пропавшие (рекурсивная очистка _node_map ДО удаления из дерева)
         for i in range(self.tree.topLevelItemCount() - 1, -1, -1):
             item = self.tree.topLevelItem(i)
             node = item.data(0, Qt.UserRole)
             if isinstance(node, TreeNode) and node.id not in fresh_ids:
+                self._remove_subtree_from_node_map(item)
                 self.tree.takeTopLevelItem(i)
-                self._node_map.pop(node.id, None)
-                self._sync_statuses.pop(node.id, None)
 
         # Обновить существующие
         for node in fresh_roots:
@@ -175,14 +174,16 @@ class TreeLoadMixin:
         removed = changes.get("removed", [])
         updated = changes.get("updated", [])
 
-        # Удалить пропавшие корневые узлы
+        # Удалить пропавшие корневые узлы (рекурсивная очистка ДО удаления)
         for node_id in removed:
-            item = self._node_map.pop(node_id, None)
+            item = self._node_map.get(node_id)
             if item:
+                self._remove_subtree_from_node_map(item)
                 idx = self.tree.indexOfTopLevelItem(item)
                 if idx >= 0:
                     self.tree.takeTopLevelItem(idx)
-            self._sync_statuses.pop(node_id, None)
+            else:
+                self._sync_statuses.pop(node_id, None)
 
         # Обновить изменённые
         for node in updated:
@@ -238,12 +239,9 @@ class TreeLoadMixin:
         if not parent_item:
             return
 
-        # Удаляем текущих детей из node_map
+        # Рекурсивно удаляем всех потомков из _node_map (ДО takeChildren)
         for i in range(parent_item.childCount()):
-            child_item = parent_item.child(i)
-            child_node = child_item.data(0, Qt.UserRole)
-            if isinstance(child_node, TreeNode):
-                self._node_map.pop(child_node.id, None)
+            self._remove_subtree_from_node_map(parent_item.child(i))
 
         # Очищаем визуальных детей
         parent_item.takeChildren()

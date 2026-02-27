@@ -78,8 +78,6 @@ class TreeFileUploadMixin:
         # Копируем файл в локальный кэш ДО создания узла (чтобы открытие было мгновенным)
         self._copy_to_cache(task.local_path, task.r2_key)
 
-        parent_item = self._node_map.get(task.parent_node_id)
-
         try:
             doc_node = self.client.add_document(
                 parent_id=task.parent_node_id,
@@ -88,17 +86,27 @@ class TreeFileUploadMixin:
                 file_size=task.file_size,
             )
 
-            if parent_item:
-                if parent_item.childCount() == 1:
-                    child = parent_item.child(0)
-                    if child.data(0, self._get_user_role()) == "placeholder":
-                        parent_item.removeChild(child)
+            # Re-fetch parent_item ПОСЛЕ сетевого вызова: за это время
+            # auto-refresh мог перестроить дерево и удалить старый item
+            parent_item = self._node_map.get(task.parent_node_id)
 
-                child_item = self._item_builder.create_item(doc_node)
-                parent_item.addChild(child_item)
-                parent_item.setExpanded(True)
-                self.tree.setCurrentItem(child_item)
-                self.highlight_document(doc_node.id)
+            if parent_item:
+                try:
+                    if parent_item.childCount() == 1:
+                        child = parent_item.child(0)
+                        if child.data(0, self._get_user_role()) == "placeholder":
+                            parent_item.removeChild(child)
+
+                    child_item = self._item_builder.create_item(doc_node)
+                    parent_item.addChild(child_item)
+                    parent_item.setExpanded(True)
+                    self.tree.setCurrentItem(child_item)
+                    self.highlight_document(doc_node.id)
+                except RuntimeError:
+                    logger.warning(
+                        f"Parent item for {task.parent_node_id} deleted during UI update, "
+                        f"document {doc_node.id} created but not shown in tree"
+                    )
 
             logger.info(f"Document added: {doc_node.id} with r2_key={task.r2_key}")
             # Сигнал с node_id и r2_key для открытия
