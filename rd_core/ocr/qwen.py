@@ -19,7 +19,7 @@ from rd_core.ocr.chandra import (
     needs_model_reload,
 )
 from rd_core.ocr.http_utils import create_retry_session
-from rd_core.ocr.utils import image_to_base64, strip_think_tags
+from rd_core.ocr.utils import image_to_base64, strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,8 @@ QWEN_TEXT_SYSTEM = (
     "строительной документации: ГОСТ, СНиП, СП, ТУ, рабочие чертежи, стадия П. "
     "Твоя задача — максимально точно распознать содержимое переданного блока. "
     "Сохраняй все размеры, единицы измерения, номера ссылок и структуру таблиц "
-    "с абсолютной точностью. Выводи результат в чистом HTML."
+    "с абсолютной точностью. Выводи результат в чистом HTML. "
+    "НЕ используй режим размышлений. Выводи ТОЛЬКО финальный HTML, без рассуждений и анализа."
 )
 
 QWEN_TEXT_PROMPT = (
@@ -57,6 +58,7 @@ QWEN_TEXT_PROMPT = (
     "* Текст: <p>...</p>, <br> только при необходимости\n"
     "* Порядок чтения — корректный и естественный\n"
     "* Не добавляй ничего от себя — только то, что видишь"
+    "\n/nothink"
 )
 
 # ── Промпты: STAMP ─────────────────────────────────────────────────
@@ -64,7 +66,8 @@ QWEN_STAMP_SYSTEM = (
     "Ты — специалист по чтению штампов (основных надписей) из российской "
     "строительной документации. Ты работаешь с рабочей документацией и стадией П. "
     "Штамп содержит метаинформацию: организация, проект, стадия, лист, подписи. "
-    "Извлекай ВСЮ информацию с максимальной точностью."
+    "Извлекай ВСЮ информацию с максимальной точностью. "
+    "НЕ используй режим размышлений. Выводи ТОЛЬКО финальный HTML, без рассуждений и анализа."
 )
 
 QWEN_STAMP_PROMPT = (
@@ -83,6 +86,7 @@ QWEN_STAMP_PROMPT = (
     f"Теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
     "Используй colspan/rowspan для ячеек штампа.\n"
     "Не добавляй ничего от себя — только то, что видишь."
+    "\n/nothink"
 )
 
 
@@ -322,7 +326,6 @@ class QwenBackend:
                 "max_tokens": 12384,
                 "temperature": 0,
                 "top_p": 0.1,
-                "chat_template_kwargs": {"enable_thinking": False},
             }
 
             last_error = None
@@ -385,12 +388,27 @@ class QwenBackend:
                 logger.error(f"Qwen: 'choices' missing: {err_msg}")
                 return f"[Ошибка Qwen: некорректный ответ ({err_msg})]"
 
-            raw_text = result["choices"][0]["message"]["content"].strip()
+            message = result["choices"][0]["message"]
+
+            # LM Studio v0.3.23+ выносит thinking в отдельное поле
+            reasoning = message.get("reasoning_content") or message.get("reasoning")
+            raw_text = message.get("content", "").strip()
+
+            if reasoning:
+                logger.info(
+                    f"Qwen/{self.mode}: reasoning в отдельном поле "
+                    f"({len(reasoning)} симв.), content={len(raw_text)} симв."
+                )
+
             if not raw_text:
                 logger.warning("Qwen OCR: получен пустой ответ от модели")
                 return "[Ошибка Qwen: пустой ответ модели]"
 
+            # Слой 1: убрать <think>...</think> теги
             text = strip_think_tags(raw_text, backend_name=f"Qwen/{self.mode}")
+            # Слой 2: убрать не-тегированный reasoning (цепочки рассуждений без <think>)
+            text = strip_untagged_reasoning(text, backend_name=f"Qwen/{self.mode}")
+
             if not text:
                 logger.warning(
                     f"Qwen OCR ({self.mode}): ответ только reasoning "

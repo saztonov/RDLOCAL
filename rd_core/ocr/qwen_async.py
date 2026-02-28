@@ -16,7 +16,7 @@ from rd_core.ocr.qwen import (
     QWEN_TEXT_PROMPT,
     QWEN_TEXT_SYSTEM,
 )
-from rd_core.ocr.utils import image_to_base64, strip_think_tags
+from rd_core.ocr.utils import image_to_base64, strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,6 @@ class AsyncQwenBackend:
                 "max_tokens": 12384,
                 "temperature": 0,
                 "top_p": 0.1,
-                "chat_template_kwargs": {"enable_thinking": False},
             }
 
             response = await client.post(
@@ -283,12 +282,27 @@ class AsyncQwenBackend:
                 logger.error(f"Qwen: 'choices' missing: {err_msg}")
                 return f"[Ошибка Qwen: некорректный ответ ({err_msg})]"
 
-            raw_text = result["choices"][0]["message"]["content"].strip()
+            message = result["choices"][0]["message"]
+
+            # LM Studio v0.3.23+ выносит thinking в отдельное поле
+            reasoning = message.get("reasoning_content") or message.get("reasoning")
+            raw_text = message.get("content", "").strip()
+
+            if reasoning:
+                logger.info(
+                    f"AsyncQwen/{self.mode}: reasoning в отдельном поле "
+                    f"({len(reasoning)} симв.), content={len(raw_text)} симв."
+                )
+
             if not raw_text:
                 logger.warning("AsyncQwen OCR: получен пустой ответ от модели")
                 return "[Ошибка Qwen: пустой ответ модели]"
 
+            # Слой 1: убрать <think>...</think> теги
             text = strip_think_tags(raw_text, backend_name=f"AsyncQwen/{self.mode}")
+            # Слой 2: убрать не-тегированный reasoning
+            text = strip_untagged_reasoning(text, backend_name=f"AsyncQwen/{self.mode}")
+
             if not text:
                 logger.warning(
                     f"AsyncQwen OCR ({self.mode}): ответ только reasoning "

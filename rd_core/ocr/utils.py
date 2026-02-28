@@ -42,6 +42,55 @@ def strip_think_tags(text: str, backend_name: str = "LLM") -> str:
     return cleaned
 
 
+# ── Очистка не-тегированного reasoning ───────────────────────────
+_REASONING_PREFIX_RE = re.compile(
+    r'^(?:'
+    r'\d+\.\s+\*\*|'                                                    # "1. **Analyze..."
+    r'(?:Let me|I need to|I will|First[,.]|Looking at|Analyzing|'
+    r'To (?:analyze|process|extract|transcribe))\b|'                    # English reasoning
+    r'\*\*(?:Analyze|Step|Plan|Approach|Solution|Observation)\b|'        # **Analysis...
+    r'(?:Давай|Мне нужно|Сначала|Анализируя|Рассмотрим)\b'              # Russian reasoning
+    r')',
+    re.IGNORECASE
+)
+_HTML_START_RE = re.compile(r'<(?:p|table|h[1-6]|div|ul|ol|span|br|hr|img)\b', re.IGNORECASE)
+
+
+def strip_untagged_reasoning(text: str, backend_name: str = "LLM") -> str:
+    """Обнаружить и отрезать не-тегированный reasoning перед HTML-контентом.
+
+    Для случаев когда модель генерирует цепочку рассуждений БЕЗ <think> тегов,
+    а затем HTML-контент. Обрезает всё до первого HTML-тега.
+    """
+    if not text:
+        return text
+
+    stripped = text.lstrip()
+
+    # Быстрый выход: если текст начинается с HTML или code fence — всё хорошо
+    if stripped.startswith('<') or stripped.startswith('```'):
+        return text
+
+    # Проверяем: начало похоже на reasoning?
+    if not _REASONING_PREFIX_RE.match(stripped):
+        return text
+
+    # Ищем первый HTML-тег
+    html_match = _HTML_START_RE.search(text)
+    if not html_match:
+        # Нет HTML вообще — возвращаем как есть
+        return text
+
+    reasoning_part = text[:html_match.start()]
+    html_part = text[html_match.start():]
+
+    _logger.warning(
+        f"{backend_name}: обнаружен не-тегированный reasoning "
+        f"({len(reasoning_part)} симв. обрезано), HTML: {len(html_part)} симв."
+    )
+    return html_part
+
+
 def image_to_base64(image: Image.Image, max_size: int = 1500) -> str:
     """
     Конвертировать PIL Image в base64 с опциональным ресайзом
