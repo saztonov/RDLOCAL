@@ -282,7 +282,7 @@ def cancel_job_handler(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Отменить задачу (установить статус cancelled)"""
-    from services.remote_ocr.server.storage import update_job_status
+    from services.remote_ocr.server.storage import invalidate_pause_cache, update_job_status
 
     check_api_key(x_api_key)
 
@@ -296,5 +296,6 @@ def cancel_job_handler(
         )
 
     update_job_status(job_id, "cancelled", status_message="Отменено пользователем")
+    invalidate_pause_cache(job_id)
 
     return {"ok": True, "job_id": job_id, "status": "cancelled"}

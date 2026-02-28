@@ -114,6 +114,12 @@ class RemoteOCRPanel(
         self.move_down_btn.clicked.connect(self._move_job_down)
         header_layout.addWidget(self.move_down_btn)
 
+        self.cancel_all_btn = QPushButton("⏹")
+        self.cancel_all_btn.setMaximumWidth(30)
+        self.cancel_all_btn.setToolTip("Отменить все активные задачи")
+        self.cancel_all_btn.clicked.connect(self._cancel_all_jobs)
+        header_layout.addWidget(self.cancel_all_btn)
+
         self.clear_all_btn = QPushButton("🗑️")
         self.clear_all_btn.setMaximumWidth(30)
         self.clear_all_btn.setToolTip("Очистить все задачи")

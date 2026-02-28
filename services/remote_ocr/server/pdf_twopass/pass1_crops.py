@@ -35,6 +35,7 @@ def pass1_prepare_crops(
     save_image_crops_as_pdf: bool = True,
     on_progress: Optional[Callable[[int, int], None]] = None,
     engine: str = "",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> TwoPassManifest:
     """
     PASS 1: Вырезать все кропы и сохранить на диск.
@@ -150,6 +151,10 @@ def pass1_prepare_crops(
             processed_pages += 1
             if on_progress:
                 on_progress(processed_pages, total_pages)
+
+            if should_stop and should_stop():
+                logger.info("PASS1 прерван: задача отменена/приостановлена")
+                return TwoPassManifest(strips=[], image_blocks=[])
 
             gc.collect()
 

@@ -28,6 +28,7 @@ from .storage_jobs import (  # noqa: F401
     delete_job,
     get_job,
     increment_retry_count,
+    invalidate_pause_cache,
     is_job_paused,
     list_jobs,
     list_jobs_changed_since,

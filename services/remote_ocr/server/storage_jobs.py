@@ -340,6 +340,11 @@ def resume_job(job_id: str) -> bool:
     return len(result.data) > 0
 
 
+def invalidate_pause_cache(job_id: str) -> None:
+    """Инвалидировать Redis-кеш паузы для задачи (public API)"""
+    _invalidate_pause_cache(job_id)
+
+
 def is_job_paused(job_id: str) -> bool:
     """Проверить, поставлена ли задача на паузу (с Redis кешированием)"""
     # Check cache first
@@ -349,7 +354,7 @@ def is_job_paused(job_id: str) -> bool:
 
     # Cache miss - query DB
     job = get_job(job_id)
-    is_paused = job.status == "paused" if job else False
+    is_paused = job.status in ("paused", "cancelled") if job else False
 
     # Update cache
     _set_pause_cache(job_id, is_paused)

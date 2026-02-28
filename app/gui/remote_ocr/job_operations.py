@@ -443,6 +443,55 @@ class JobOperationsMixin:
             logger.error(f"Ошибка отмены задачи: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось отменить задачу:\n{e}")
 
+    def _cancel_all_jobs(self):
+        """Отменить все активные задачи (queued/processing/paused)"""
+        client = self._get_client()
+        if client is None:
+            return
+
+        try:
+            jobs = client.list_jobs()
+            active_jobs = [j for j in jobs if j.status in ("queued", "processing", "paused")]
+
+            if not active_jobs:
+                from app.gui.toast import show_toast
+                show_toast(self, "Нет активных задач для отмены")
+                return
+
+            reply = QMessageBox.question(
+                self,
+                "Отмена задач",
+                f"Отменить все активные задачи ({len(active_jobs)} шт.)?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+            cancelled = 0
+            errors = 0
+            for job in active_jobs:
+                try:
+                    if client.cancel_job(job.id):
+                        cancelled += 1
+                    else:
+                        errors += 1
+                except Exception as e:
+                    logger.warning(f"Ошибка отмены задачи {job.id}: {e}")
+                    errors += 1
+
+            self._refresh_jobs(manual=True)
+
+            from app.gui.toast import show_toast
+            if errors == 0:
+                show_toast(self, f"Отменено {cancelled} задач")
+            else:
+                show_toast(self, f"Отменено {cancelled}, ошибок: {errors}")
+
+        except Exception as e:
+            logger.error(f"Ошибка отмены всех задач: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось отменить задачи:\n{e}")
+
     def _delete_job(self, job_id: str):
         """Удалить задачу (без удаления файлов из R2)"""
         client = self._get_client()

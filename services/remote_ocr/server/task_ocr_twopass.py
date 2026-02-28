@@ -77,6 +77,7 @@ def run_two_pass_ocr(
             save_image_crops_as_pdf=True,
             on_progress=on_pass1_progress,
             engine=engine,
+            should_stop=lambda: check_paused(job.id),
         )
 
         log_memory_delta("После PASS1", start_mem)
