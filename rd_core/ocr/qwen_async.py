@@ -257,6 +257,7 @@ class AsyncQwenBackend:
                 "max_tokens": 12384,
                 "temperature": 0,
                 "top_p": 0.1,
+                "chat_template_kwargs": {"enable_thinking": False},
             }
 
             response = await client.post(
