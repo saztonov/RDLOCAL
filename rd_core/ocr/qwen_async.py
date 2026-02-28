@@ -226,10 +226,6 @@ class AsyncQwenBackend:
 
             system_prompt, user_prompt = self._get_prompts()
 
-            # Если передан prompt dict — используем system из него (контекст задачи)
-            if prompt and isinstance(prompt, dict):
-                system_prompt = prompt.get("system", "") or system_prompt
-
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})

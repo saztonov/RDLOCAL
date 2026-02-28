@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 # ── Модель и конфиг загрузки ────────────────────────────────────────
 QWEN_MODEL_KEY = os.getenv("QWEN_MODEL_KEY", "qwen/qwen3.5-35b-a3b/")
 QWEN_LOAD_CONFIG = {
-    "context_length": 32768,
+    "context_length": 65536,
     "flash_attention": True,
-    "eval_batch_size": 512,
+    "eval_batch_size": 1024,
 }
 
 # ── Промпты: TEXT / TABLE ───────────────────────────────────────────
@@ -294,10 +294,6 @@ class QwenBackend:
             img_b64 = image_to_base64(image)
 
             system_prompt, user_prompt = self._get_prompts()
-
-            # Если передан prompt dict — используем system из него (контекст задачи)
-            if prompt and isinstance(prompt, dict):
-                system_prompt = prompt.get("system", "") or system_prompt
 
             messages = []
             if system_prompt:
