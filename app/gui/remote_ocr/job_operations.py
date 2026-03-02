@@ -450,7 +450,7 @@ class JobOperationsMixin:
             return
 
         try:
-            jobs = client.list_jobs()
+            jobs, _ = client.list_jobs()
             active_jobs = [j for j in jobs if j.status in ("queued", "processing", "paused")]
 
             if not active_jobs:
@@ -532,7 +532,7 @@ class JobOperationsMixin:
             return
 
         try:
-            jobs = client.list_jobs()
+            jobs, _ = client.list_jobs()
             deleted = 0
             errors = 0
 

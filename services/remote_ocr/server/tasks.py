@@ -35,6 +35,7 @@ def run_ocr_task(self, job_id: str) -> dict:
     work_dir = None
     engine = "openrouter"
     strip_backend = None
+    lmstudio_acquired = False
     try:
         # Получаем задачу из БД с настройками
         job = get_job(job_id, with_files=True, with_settings=True)
@@ -162,6 +163,7 @@ def run_ocr_task(self, job_id: str) -> dict:
             )
             strip_backend.preload()
             acquire_chandra(job_id)
+            lmstudio_acquired = True
         elif engine == "qwen" and settings.qwen_base_url:
             strip_backend = create_ocr_engine(
                 "qwen",
@@ -170,6 +172,7 @@ def run_ocr_task(self, job_id: str) -> dict:
             )
             strip_backend.preload()
             acquire_lmstudio("qwen", job_id)
+            lmstudio_acquired = True
         elif engine == "datalab" and settings.datalab_api_key:
             strip_backend = create_ocr_engine(
                 "datalab",
@@ -345,17 +348,17 @@ def run_ocr_task(self, job_id: str) -> dict:
                 logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
 
         # Выгрузить модель LM Studio (только если нет других активных задач)
-        if engine == "chandra" and strip_backend is not None and hasattr(strip_backend, "unload_model"):
+        if engine == "chandra" and lmstudio_acquired:
             remaining = release_chandra(job_id)
-            if remaining == 0:
+            if remaining == 0 and strip_backend is not None and hasattr(strip_backend, "unload_model"):
                 strip_backend.unload_model()
                 logger.info(f"Chandra: последняя задача завершена, модель выгружена")
             else:
                 logger.info(f"Chandra: модель НЕ выгружена, активных задач: {remaining}")
 
-        if engine == "qwen" and strip_backend is not None and hasattr(strip_backend, "unload_model"):
+        if engine == "qwen" and lmstudio_acquired:
             remaining = release_lmstudio("qwen", job_id)
-            if remaining == 0:
+            if remaining == 0 and strip_backend is not None and hasattr(strip_backend, "unload_model"):
                 strip_backend.unload_model()
                 logger.info(f"Qwen: последняя задача завершена, модель выгружена")
             else:

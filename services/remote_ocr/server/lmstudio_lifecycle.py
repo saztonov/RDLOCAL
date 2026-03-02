@@ -1,8 +1,14 @@
 """Управление lifecycle моделей LM Studio при параллельных Celery задачах.
 
 Celery prefork = отдельные процессы. Каждый создаёт Backend
-и вызывает unload_model() в finally. Redis reference counter координирует
+и вызывает unload_model() в finally. Redis SET координирует
 выгрузку: модель выгружается только когда последняя задача завершится.
+
+Используется Redis SET (SADD/SREM/SCARD) вместо INCR/DECR:
+- SET не может уйти в минус
+- Не допускает дублей (повторный acquire одного job_id — no-op)
+- release без acquire — безопасный no-op (SREM несуществующего элемента)
+- TTL 24h как страховка от крашей
 
 Поддерживает несколько движков (chandra, qwen и т.д.) через параметрический ключ.
 """
@@ -21,10 +27,13 @@ logger = get_logger(__name__)
 _redis_pool: redis.ConnectionPool | None = None
 _pool_lock = threading.Lock()
 
+# TTL для SET-ключа — страховка от крашей (24 часа)
+_SAFETY_TTL = 86400
+
 
 def _active_key(engine: str) -> str:
-    """Redis key для счётчика активных задач данного движка."""
-    return f"lmstudio:{engine}:active_tasks"
+    """Redis key для множества активных задач данного движка."""
+    return f"lmstudio:{engine}:active_jobs"
 
 
 def _get_redis_pool() -> redis.ConnectionPool:
@@ -56,9 +65,10 @@ def acquire_lmstudio(engine: str, job_id: str) -> int:
     try:
         client = _get_redis_client()
         key = _active_key(engine)
-        count = client.incr(key)
-        # TTL обновляется при каждом INCR — защита от зависших значений при crash
-        client.expire(key, settings.task_hard_timeout)
+        client.sadd(key, job_id)
+        # TTL обновляется при каждом acquire — страховка от крашей
+        client.expire(key, _SAFETY_TTL)
+        count = client.scard(key)
         logger.info(
             f"{engine} acquire: job={job_id}, active_tasks={count}",
             extra={"event": f"{engine}_acquire", "job_id": job_id},
@@ -74,14 +84,11 @@ def release_lmstudio(engine: str, job_id: str) -> int:
     try:
         client = _get_redis_client()
         key = _active_key(engine)
-        count = client.decr(key)
-        if count < 0:
-            client.set(key, 0)
-            count = 0
-            logger.warning(
-                f"{engine} counter went negative, reset to 0",
-                extra={"event": f"{engine}_counter_reset", "job_id": job_id},
-            )
+        client.srem(key, job_id)
+        count = client.scard(key)
+        if count > 0:
+            # Обновляем TTL пока есть активные задачи
+            client.expire(key, _SAFETY_TTL)
         logger.info(
             f"{engine} release: job={job_id}, active_tasks={count}",
             extra={"event": f"{engine}_release", "job_id": job_id},
