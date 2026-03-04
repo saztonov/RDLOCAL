@@ -12,13 +12,14 @@ class OCRStatus(Enum):
 
 
 _ERROR_PREFIX = "[Ошибка"
+_NON_RETRIABLE_PREFIX = "[НеПовторяемая"
 
 
 def get_ocr_status(ocr_text: Optional[str]) -> OCRStatus:
     """Определить статус OCR по тексту результата."""
     if not ocr_text or not ocr_text.strip():
         return OCRStatus.NOT_RECOGNIZED
-    if ocr_text.startswith(_ERROR_PREFIX):
+    if ocr_text.startswith(_ERROR_PREFIX) or ocr_text.startswith(_NON_RETRIABLE_PREFIX):
         return OCRStatus.ERROR
     return OCRStatus.SUCCESS
 

@@ -305,7 +305,9 @@ def run_ocr_task(self, job_id: str) -> dict:
         # Подсчёт распознанных блоков для информативного статуса
         recognized = sum(
             1 for b in blocks
-            if b.ocr_text and not b.ocr_text.startswith("[Ошибка")
+            if b.ocr_text
+            and not b.ocr_text.startswith("[Ошибка")
+            and not b.ocr_text.startswith("[НеПовторяемая")
         )
         if recognized == total_blocks:
             status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"

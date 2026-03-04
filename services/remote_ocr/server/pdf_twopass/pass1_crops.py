@@ -80,6 +80,11 @@ def pass1_prepare_crops(
                 try:
                     crop = processor.crop_block_image(block, padding)
                     if not crop:
+                        block.ocr_text = "[НеПовторяемая ошибка: не удалось вырезать блок — невалидные координаты]"
+                        logger.warning(
+                            f"PASS1: блок {block.id} пропущен (crop=None), "
+                            f"координаты невалидны"
+                        )
                         continue
 
                     # Разделяем большие кропы
@@ -137,6 +142,7 @@ def pass1_prepare_crops(
                                         break
 
                 except Exception as e:
+                    block.ocr_text = f"[НеПовторяемая ошибка: ошибка crop — {e}]"
                     logger.error(
                         f"PASS1: crop error for block {block.id}",
                         extra={

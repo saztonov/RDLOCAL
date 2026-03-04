@@ -375,6 +375,9 @@ class QwenBackend:
                 logger.error(
                     f"Qwen API error: {response.status_code} - {error_detail}"
                 )
+                # Детерминированная ошибка: context size exceeded — retry бессмысленно
+                if response.status_code == 400 and "context size" in error_detail.lower():
+                    return "[НеПовторяемая ошибка: контекст превышен — блок слишком большой для модели]"
                 return f"[Ошибка Qwen API: {response.status_code}]"
 
             result = response.json()

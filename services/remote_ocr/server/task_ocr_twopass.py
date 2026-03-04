@@ -114,8 +114,12 @@ def run_two_pass_ocr(
         # Выбор между async и sync режимом
         if USE_ASYNC_PASS2:
             from .pdf_twopass.pass2_ocr_async import pass2_ocr_from_manifest_async
+            from .rate_limiter import reset_async_limiter
 
             logger.info("PASS2: используется async режим (asyncio.gather)")
+
+            # Сброс asyncio-привязанного rate limiter перед новым event loop
+            reset_async_limiter()
 
             # Для LM Studio бэкендов: ограничение параллельности (Max Concurrent Predictions)
             if engine in ("chandra", "qwen"):

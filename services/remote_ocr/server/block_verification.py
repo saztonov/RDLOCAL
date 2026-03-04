@@ -13,6 +13,8 @@ logger = get_logger(__name__)
 
 # Паттерн ошибки в ocr_text, генерируемый бэкендами при сбоях API
 _ERROR_PREFIX = "[Ошибка"
+# Детерминированные ошибки (context exceeded и др.) — retry бессмысленно
+_NON_RETRIABLE_PREFIX = "[НеПовторяемая"
 
 # Пауза между retry для бэкендов с ограничением concurrency (Chandra/LM Studio)
 def _get_chandra_retry_delay() -> int:
@@ -140,6 +142,10 @@ def verify_and_retry_missing_blocks(
 
             # Проверяем только текстовые и табличные блоки
             if block_type not in ["text", "table"]:
+                continue
+
+            # Неповторяемые ошибки (context exceeded, невалидные координаты) — не ретраим
+            if ocr_text.startswith(_NON_RETRIABLE_PREFIX):
                 continue
 
             # Блок нуждается в retry если: нет HTML ИЛИ ocr_text содержит ошибку API

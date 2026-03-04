@@ -1,4 +1,5 @@
 """Async Chandra OCR Backend (LM Studio / OpenAI-compatible API)"""
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -178,6 +179,11 @@ class AsyncChandraBackend:
         """Chandra не поддерживает прямой ввод PDF"""
         return False
 
+    # Transient HTTP коды, при которых имеет смысл retry (ngrok tunnel issues)
+    _TRANSIENT_CODES = {404, 429, 500, 502, 503, 504}
+    _MAX_APP_RETRIES = 2
+    _APP_RETRY_DELAYS = [15, 30]
+
     async def recognize_async(
         self,
         image: Optional[Image.Image],
@@ -231,20 +237,61 @@ class AsyncChandraBackend:
                 "top_p": 0.1,
             }
 
-            response = await client.post(
-                f"{self.base_url}/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "ngrok-skip-browser-warning": "true",
-                },
-                json=payload,
-            )
+            last_error = None
+            response = None
+            for attempt in range(self._MAX_APP_RETRIES + 1):
+                if attempt > 0:
+                    delay = self._APP_RETRY_DELAYS[min(attempt - 1, len(self._APP_RETRY_DELAYS) - 1)]
+                    logger.warning(
+                        f"AsyncChandra retry {attempt}/{self._MAX_APP_RETRIES}, "
+                        f"ожидание {delay}с (предыдущая ошибка: {last_error})"
+                    )
+                    await asyncio.sleep(delay)
 
-            if response.status_code != 200:
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/v1/chat/completions",
+                        headers={
+                            "Content-Type": "application/json",
+                            "ngrok-skip-browser-warning": "true",
+                        },
+                        json=payload,
+                    )
+                except httpx.TimeoutException:
+                    last_error = "Timeout"
+                    logger.warning(f"AsyncChandra timeout (attempt {attempt})")
+                    if attempt < self._MAX_APP_RETRIES:
+                        continue
+                    return "[Ошибка: превышен таймаут запроса к Chandra]"
+                except httpx.ConnectError as e:
+                    last_error = f"ConnectError: {e}"
+                    logger.warning(f"AsyncChandra connection error (attempt {attempt}): {e}")
+                    if attempt < self._MAX_APP_RETRIES:
+                        continue
+                    return f"[Ошибка Chandra: {last_error}]"
+
+                if response.status_code == 200:
+                    break
+
                 error_detail = response.text[:500] if response.text else "No details"
-                logger.error(
-                    f"Chandra API error: {response.status_code} - {error_detail}"
-                )
+
+                # Детерминированная ошибка: context size exceeded — retry бессмысленно
+                if response.status_code == 400 and "context size" in error_detail.lower():
+                    logger.error(f"Chandra API error: {response.status_code} - {error_detail}")
+                    return "[НеПовторяемая ошибка: контекст превышен — блок слишком большой для модели]"
+
+                if response.status_code in self._TRANSIENT_CODES:
+                    last_error = f"HTTP {response.status_code}"
+                    if attempt < self._MAX_APP_RETRIES:
+                        logger.warning(
+                            f"AsyncChandra transient error {response.status_code} "
+                            f"(attempt {attempt}), will retry"
+                        )
+                        continue
+                    return f"[Ошибка Chandra API: {response.status_code}]"
+
+                # Non-transient ошибка — возвращаем сразу
+                logger.error(f"Chandra API error: {response.status_code} - {error_detail}")
                 return f"[Ошибка Chandra API: {response.status_code}]"
 
             result = response.json()
@@ -261,9 +308,6 @@ class AsyncChandraBackend:
             logger.debug(f"AsyncChandra OCR: распознано {len(text)} символов")
             return text
 
-        except httpx.TimeoutException:
-            logger.error("AsyncChandra OCR: превышен таймаут")
-            return "[Ошибка: превышен таймаут запроса к Chandra]"
         except Exception as e:
             logger.error(f"Ошибка AsyncChandra OCR: {e}", exc_info=True)
             return f"[Ошибка Chandra OCR: {e}]"

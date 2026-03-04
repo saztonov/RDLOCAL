@@ -359,3 +359,14 @@ def get_unified_async_limiter() -> UnifiedAsyncRateLimiter:
                 )
 
     return _global_async_limiter
+
+
+def reset_async_limiter():
+    """Сбросить глобальный async rate limiter.
+
+    Вызывать перед каждым asyncio.run() в Celery worker,
+    т.к. asyncio.Semaphore/Lock привязаны к конкретному event loop.
+    """
+    global _global_async_limiter
+    with _async_limiter_lock:
+        _global_async_limiter = None

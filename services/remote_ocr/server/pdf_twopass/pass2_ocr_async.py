@@ -140,6 +140,7 @@ async def pass2_ocr_from_manifest_async(
     _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 0
     _STRIP_RETRY_DELAYS = [30, 60]
     _ERROR_PREFIX = "[Ошибка"
+    _NON_RETRIABLE_PREFIX = "[НеПовторяемая"
 
     async def _process_strip_async(
         strip: StripManifestEntry, strip_idx: int
@@ -216,6 +217,13 @@ async def pass2_ocr_from_manifest_async(
                     # Проверяем результат: если ошибка и есть retry — повторяем
                     if response_text and not response_text.startswith(_ERROR_PREFIX):
                         break  # Успех
+                    # Неповторяемая ошибка (context size exceeded и т.п.) — retry бессмысленно
+                    if response_text and response_text.startswith(_NON_RETRIABLE_PREFIX):
+                        logger.warning(
+                            f"PASS2 ASYNC: strip {strip.strip_id} неповторяемая ошибка, "
+                            f"пропускаем retry"
+                        )
+                        break
                     if strip_attempt < _STRIP_MAX_RETRIES:
                         err_preview = (response_text or "пусто")[:80]
                         logger.warning(
