@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncDatalabOCRBackend:
-    """Асинхронный OCR через Datalab Marker API"""
+    """Асинхронный OCR через Datalab Convert API"""
 
-    API_URL = "https://www.datalab.to/api/v1/marker"
+    API_URL = "https://www.datalab.to/api/v1/convert"
     MAX_WIDTH = 4000
 
     # Дефолтные значения
@@ -279,7 +279,13 @@ class AsyncDatalabOCRBackend:
             )
 
             if status == "complete":
-                logger.info("Datalab: задача успешно завершена")
+                quality = poll_result.get("parse_quality_score")
+                runtime = poll_result.get("runtime")
+                logger.info(
+                    f"Datalab: задача успешно завершена"
+                    f"{f', quality={quality}' if quality is not None else ''}"
+                    f"{f', runtime={runtime}ms' if runtime is not None else ''}"
+                )
                 html_result = poll_result.get("html", "")
                 logger.debug(f"Datalab: ключи ответа: {list(poll_result.keys())}")
                 self.last_html_result = html_result if html_result else None
