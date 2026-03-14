@@ -25,16 +25,12 @@ class InitialLoadWorker(QThread):
     Воркер для начальной загрузки дерева проектов.
 
     Выполняет последовательно:
-    1. Загрузку типов (stage_types, section_types)
-    2. Загрузку корневых узлов
-    3. Загрузку статистики дерева
-    4. Загрузку PDF статусов для документов
-
-    Каждый этап эмитит соответствующий сигнал для обновления UI.
+    1. Загрузку корневых узлов
+    2. Загрузку статистики дерева
+    3. Загрузку PDF статусов для документов
     """
 
     # Сигналы для поэтапного обновления UI
-    types_loaded = Signal(list, list)  # stage_types, section_types
     roots_loaded = Signal(list)  # корневые узлы
     stats_loaded = Signal(dict)  # статистика дерева
     statuses_loaded = Signal(dict)  # PDF статусы {node_id: (status, message)}
@@ -63,29 +59,21 @@ class InitialLoadWorker(QThread):
     def run(self) -> None:
         """Выполнить загрузку в фоновом потоке."""
         try:
-            # 1. Загружаем типы
-            if not self._running:
-                return
-            logger.debug("InitialLoadWorker: loading types...")
-            stage_types = self.client.get_stage_types()
-            section_types = self.client.get_section_types()
-            self.types_loaded.emit(stage_types, section_types)
-
-            # 2. Загружаем корневые узлы
+            # 1. Загружаем корневые узлы
             if not self._running:
                 return
             logger.debug("InitialLoadWorker: loading root nodes...")
             roots = self.client.get_root_nodes()
             self.roots_loaded.emit(roots)
 
-            # 3. Загружаем статистику
+            # 2. Загружаем статистику
             if not self._running:
                 return
             logger.debug("InitialLoadWorker: loading stats...")
             stats = self.client.get_tree_stats()
             self.stats_loaded.emit(stats)
 
-            # 4. Загружаем PDF статусы (если есть документы)
+            # 3. Загружаем PDF статусы (если есть документы)
             if not self._running:
                 return
             if self._doc_ids:

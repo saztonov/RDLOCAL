@@ -25,23 +25,17 @@ class TreeLoadMixin:
         self.status_label.setText("⏳ Загрузка дерева...")
         self.tree.clear()
         self._node_map.clear()
-        self._sync_statuses.clear()
+
 
         from .initial_load_worker import InitialLoadWorker
 
         self._initial_load_worker = InitialLoadWorker(self.client, self)
-        self._initial_load_worker.types_loaded.connect(self._on_types_loaded)
         self._initial_load_worker.roots_loaded.connect(self._on_roots_loaded)
         self._initial_load_worker.stats_loaded.connect(self._on_stats_loaded)
         self._initial_load_worker.statuses_loaded.connect(self._on_statuses_loaded)
         self._initial_load_worker.error.connect(self._on_load_error)
         self._initial_load_worker.finished_all.connect(self._on_load_finished)
         self._initial_load_worker.start()
-
-    def _on_types_loaded(self, stage_types: list, section_types: list):
-        """Обработка загруженных типов"""
-        self._stage_types = stage_types
-        self._section_types = section_types
 
     def _on_roots_loaded(self, roots: list):
         """Обработка корневых узлов"""
@@ -88,7 +82,6 @@ class TreeLoadMixin:
         """Загрузка завершена"""
         self._loading = False
         QTimer.singleShot(100, self._restore_expanded_state)
-        QTimer.singleShot(500, self._start_sync_check)
 
     # === Обновление дерева ===
 
@@ -110,7 +103,6 @@ class TreeLoadMixin:
 
         QTimer.singleShot(100, self._restore_expanded_state)
         QTimer.singleShot(300, self._update_stats)
-        QTimer.singleShot(500, self._start_sync_check)
 
         if not self._pdf_status_manager.is_loaded:
             QTimer.singleShot(200, self._pdf_status_manager.load_batch)
@@ -183,7 +175,7 @@ class TreeLoadMixin:
                 if idx >= 0:
                     self.tree.takeTopLevelItem(idx)
             else:
-                self._sync_statuses.pop(node_id, None)
+                pass
 
         # Обновить изменённые
         for node in updated:

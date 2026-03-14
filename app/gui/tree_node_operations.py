@@ -105,12 +105,9 @@ class TreeNodeOperationsMixin(
             f"_create_child_node: parent={parent_node.id}, child_type={child_type}"
         )
 
-        stage_types = self._stage_types if child_type == NodeType.STAGE else None
-        section_types = self._section_types if child_type == NodeType.SECTION else None
-
         from app.gui.create_node_dialog import CreateNodeDialog
 
-        dialog = CreateNodeDialog(self, child_type, stage_types, section_types)
+        dialog = CreateNodeDialog(self, child_type)
         if dialog.exec_() == QDialog.Accepted:
             name, code = dialog.get_data()
             logger.debug(f"Dialog result: name={name}, code={code}")

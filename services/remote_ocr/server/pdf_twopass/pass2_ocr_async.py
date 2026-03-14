@@ -142,7 +142,7 @@ async def pass2_ocr_from_manifest_async(
     # --- Обработка strips ---
     # Strip-level retry для LM Studio бэкендов (ngrok tunnel instability)
     _is_lmstudio = type(strip_backend).__name__ in (
-        "ChandraBackend", "QwenBackend", "AsyncChandraBackend", "AsyncQwenBackend",
+        "ChandraBackend", "QwenBackend",
     )
     _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 0
     _STRIP_RETRY_DELAYS = [30, 60]
@@ -220,16 +220,9 @@ async def pass2_ocr_from_manifest_async(
                             return None
 
                         try:
-                            # Асинхронный OCR вызов
-                            if hasattr(strip_backend, "recognize_async"):
-                                response_text = await strip_backend.recognize_async(
-                                    merged_image, prompt=prompt_data
-                                )
-                            else:
-                                # Fallback для sync backend
-                                response_text = await asyncio.to_thread(
-                                    strip_backend.recognize, merged_image, prompt_data
-                                )
+                            response_text = await asyncio.to_thread(
+                                strip_backend.recognize, merged_image, prompt_data
+                            )
                         finally:
                             await rate_limiter.release_async()
                     finally:
@@ -380,29 +373,19 @@ async def pass2_ocr_from_manifest_async(
                 try:
                     if use_pdf:
                         logger.info(f"PASS2 ASYNC: используется PDF-кроп для {entry.block_id}")
-                        if hasattr(backend, "recognize_async"):
-                            text = await backend.recognize_async(
-                                image=None,
-                                prompt=prompt_data,
-                                pdf_file_path=entry.pdf_crop_path,
-                            )
-                        else:
-                            text = await asyncio.to_thread(
-                                backend.recognize,
-                                None,
-                                prompt_data,
-                                None,
-                                entry.pdf_crop_path,
-                            )
+                        text = await asyncio.to_thread(
+                            backend.recognize,
+                            None,
+                            prompt_data,
+                            None,
+                            entry.pdf_crop_path,
+                        )
                     else:
                         crop = await asyncio.to_thread(Image.open, entry.crop_path)
                         try:
-                            if hasattr(backend, "recognize_async"):
-                                text = await backend.recognize_async(crop, prompt=prompt_data)
-                            else:
-                                text = await asyncio.to_thread(
-                                    backend.recognize, crop, prompt_data
-                                )
+                            text = await asyncio.to_thread(
+                                backend.recognize, crop, prompt_data
+                            )
                         finally:
                             crop.close()
                 finally:

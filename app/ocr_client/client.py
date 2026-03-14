@@ -115,9 +115,7 @@ class RemoteOCRClient(
                     continue
                 # Не выбрасываем исключение - просто логируем
                 logger.error(f"Все попытки подключения исчерпаны: {e}")
-                from app.gui.connection_manager import is_network_error
-
-                if is_network_error(e):
+                if isinstance(e, (ConnectionError, TimeoutError, OSError)):
                     raise RemoteOCRError(f"Сервер недоступен: {e}")
                 raise
 

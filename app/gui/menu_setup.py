@@ -66,10 +66,6 @@ class MenuSetupMixin:
         folder_settings_action.triggered.connect(self._show_folder_settings)
         settings_menu.addAction(folder_settings_action)
 
-        tree_settings_action = QAction("🌳 Настройка дерева проектов", self)
-        tree_settings_action.triggered.connect(self._show_tree_settings)
-        settings_menu.addAction(tree_settings_action)
-
         version_settings_action = QAction("📌 Версионность", self)
         version_settings_action.triggered.connect(self._show_version_settings)
         settings_menu.addAction(version_settings_action)
@@ -87,17 +83,6 @@ class MenuSetupMixin:
         hotkeys_action.triggered.connect(self._show_hotkeys_dialog)
         settings_menu.addAction(hotkeys_action)
 
-        settings_menu.addSeparator()
-
-        # Сверка R2/Supabase
-        reconcile_action = QAction("🔍 Сверка R2/Supabase", self)
-        reconcile_action.triggered.connect(self._start_r2_reconciliation)
-        settings_menu.addAction(reconcile_action)
-
-        self.hide_reconcile_action = QAction("🙈 Скрыть результаты сверки", self)
-        self.hide_reconcile_action.triggered.connect(self._hide_reconciliation_status)
-        self.hide_reconcile_action.setEnabled(False)
-        settings_menu.addAction(self.hide_reconcile_action)
 
     def _setup_toolbar(self):
         """Настройка панели инструментов"""

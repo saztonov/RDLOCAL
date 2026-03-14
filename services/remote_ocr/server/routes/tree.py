@@ -87,20 +87,6 @@ class NodeFileResponse(BaseModel):
     created_at: str
 
 
-class StageTypeResponse(BaseModel):
-    id: str
-    code: str
-    name: str
-    sort_order: int
-
-
-class SectionTypeResponse(BaseModel):
-    id: str
-    code: str
-    name: str
-    sort_order: int
-
-
 class ImageCategoryResponse(BaseModel):
     id: str
     name: str
@@ -242,28 +228,6 @@ def delete_node_file_endpoint(file_id: str):
         return {"ok": True}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/stage-types", response_model=List[StageTypeResponse])
-def get_stage_types_endpoint():
-    """Получить типы стадий"""
-    try:
-        client = get_client()
-        result = client.table("stage_types").select("*").order("sort_order").execute()
-        return result.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/section-types", response_model=List[SectionTypeResponse])
-def get_section_types_endpoint():
-    """Получить типы разделов"""
-    try:
-        client = get_client()
-        result = client.table("section_types").select("*").order("sort_order").execute()
-        return result.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

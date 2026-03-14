@@ -43,8 +43,6 @@ class ResultHandlerMixin:
         except Exception as e:
             logger.warning(f"Failed to invalidate R2 metadata cache: {e}")
 
-        # Обновляем отображение элемента
-        tree._start_sync_check()
         logger.info(f"Refreshed document in tree: {node_id}")
 
     def _reload_annotation_from_result(self, extract_dir: str):

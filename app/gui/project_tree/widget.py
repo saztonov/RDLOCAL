@@ -20,18 +20,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.gui.sync_check_worker import SyncCheckWorker, SyncStatus
 from app.gui.tree_context_menu import TreeContextMenuMixin
 from app.gui.tree_delegates import VersionHighlightDelegate
 from app.gui.tree_filter_mixin import TreeFilterMixin
 from app.gui.tree_node_operations import STATUS_COLORS, TreeNodeOperationsMixin
-from app.gui.tree_sync_mixin import TreeSyncMixin
 from app.tree_client import NodeType, TreeClient, TreeNode
 
 from .annotation_operations import AnnotationOperations
 from .initial_load_worker import InitialLoadWorker
 from .pdf_status_manager import PDFStatusManager
-from .r2_viewer_integration import R2ViewerIntegration
 from .tree_expand_mixin import TreeExpandMixin
 from .tree_item_builder import TreeItemBuilder
 from .tree_load_mixin import TreeLoadMixin
@@ -46,7 +43,6 @@ __all__ = ["ProjectTreeWidget"]
 
 class ProjectTreeWidget(
     TreeNodeOperationsMixin,
-    TreeSyncMixin,
     TreeFilterMixin,
     TreeContextMenuMixin,
     TreeLoadMixin,
@@ -64,14 +60,10 @@ class ProjectTreeWidget(
         super().__init__(parent)
         self.client = TreeClient()
         self._node_map: Dict[str, QTreeWidgetItem] = {}
-        self._stage_types: List = []
-        self._section_types: List = []
         self._loading = False
         self._current_document_id: str = ""
         self._auto_refresh_timer: QTimer = None
         self._last_node_count: int = 0
-        self._sync_statuses: Dict[str, SyncStatus] = {}
-        self._sync_worker: SyncCheckWorker = None
         self._expanded_nodes: set = set()
         self._initial_load_worker: InitialLoadWorker = None
 
@@ -91,7 +83,6 @@ class ProjectTreeWidget(
         # Вспомогательные компоненты
         self._pdf_status_manager = PDFStatusManager(self)
         self._annotation_ops = AnnotationOperations(self)
-        self._r2_viewer = R2ViewerIntegration(self)
         self._item_builder = TreeItemBuilder(self)
 
         self._setup_ui()
@@ -99,18 +90,10 @@ class ProjectTreeWidget(
         QTimer.singleShot(100, self._initial_load)
 
     def _setup_auto_refresh(self):
-        """Настроить автообновление"""
-        self._auto_refresh_timer = QTimer(self)
-        self._auto_refresh_timer.timeout.connect(self._auto_refresh_tree)
-        self._auto_refresh_timer.start(30000)
-
+        """Настроить очистку кэша (автообновление дерева убрано — обновлять вручную)"""
         self._cache_cleanup_timer = QTimer(self)
         self._cache_cleanup_timer.timeout.connect(self._pdf_status_manager.cleanup_cache)
         self._cache_cleanup_timer.start(60000)
-
-        self._pdf_status_refresh_timer = QTimer(self)
-        self._pdf_status_refresh_timer.timeout.connect(self._pdf_status_manager.auto_refresh)
-        self._pdf_status_refresh_timer.start(30000)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -257,19 +240,10 @@ class ProjectTreeWidget(
         btn.clicked.connect(callback)
         return btn
 
-    def refresh_types(self):
-        """Обновить кэшированные типы"""
-        try:
-            self._stage_types = self.client.get_stage_types()
-            self._section_types = self.client.get_section_types()
-        except Exception as e:
-            logger.error(f"Failed to load types: {e}")
-
     def _sync_and_refresh(self):
-        """Синхронизация: обновить дерево и проверить синхронизацию"""
+        """Синхронизация: обновить дерево"""
         self._node_cache.clear()
         self._refresh_tree()
-        QTimer.singleShot(500, self._start_sync_check)
 
     def _on_item_expanded(self, item: QTreeWidgetItem):
         """Lazy loading при раскрытии"""
@@ -284,7 +258,6 @@ class ProjectTreeWidget(
                 if isinstance(node, TreeNode):
                     item.removeChild(child)
                     self._load_children(item, node)
-                    QTimer.singleShot(100, self._start_sync_check)
 
     def _on_item_collapsed(self, item: QTreeWidgetItem):
         node = item.data(0, Qt.UserRole)
@@ -348,9 +321,6 @@ class ProjectTreeWidget(
     def _upload_annotation_dialog(self, node: TreeNode):
         self._annotation_ops.upload_from_file(node)
 
-    def _view_on_r2(self, node: TreeNode):
-        self._r2_viewer.view_on_r2(node)
-
     def _get_pdf_status_icon(self, status: str) -> str:
         return PDFStatusManager.get_status_icon(status)
 
@@ -412,12 +382,6 @@ class ProjectTreeWidget(
     def _view_in_supabase(self, node: TreeNode):
         from app.gui.node_files_dialog import NodeFilesDialog
         dialog = NodeFilesDialog(node, self.client, self)
-        dialog.exec()
-
-    def _reconcile_files(self, node: TreeNode):
-        """Открыть диалог сверки файлов R2/Supabase"""
-        from app.gui.file_reconciliation_dialog import FileReconciliationDialog
-        dialog = FileReconciliationDialog(node, self.client, self)
         dialog.exec()
 
     def navigate_to_node(self, node_id: str) -> bool:
@@ -485,7 +449,6 @@ class ProjectTreeWidget(
         node = item.data(0, Qt.UserRole)
         if isinstance(node, TreeNode):
             self._node_map.pop(node.id, None)
-            self._sync_statuses.pop(node.id, None)
 
     def _select_and_scroll(self, node_id: str):
         """Выделить узел в дереве и прокрутить к нему."""

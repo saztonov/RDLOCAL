@@ -39,37 +39,3 @@ def create_retry_session(
     if auth:
         session.auth = auth
     return session
-
-
-def create_async_client(
-    timeout: float = 120.0,
-    connect_timeout: float = 30.0,
-    auth: Optional[Tuple[str, str]] = None,
-    max_connections: int = 10,
-    max_keepalive: int = 5,
-    ngrok_mode: bool = False,
-):
-    """Создать httpx.AsyncClient с retry и connection pooling.
-
-    Args:
-        ngrok_mode: расширенный retry для нестабильного ngrok tunnel
-    """
-    import httpx
-
-    retries = 5 if ngrok_mode else 3
-
-    transport = httpx.AsyncHTTPTransport(
-        retries=retries,
-        limits=httpx.Limits(
-            max_connections=max_connections,
-            max_keepalive_connections=max_keepalive,
-            keepalive_expiry=30.0,
-        ),
-    )
-    return httpx.AsyncClient(
-        transport=transport,
-        timeout=httpx.Timeout(timeout, connect=connect_timeout),
-        auth=auth,
-        # Обход ngrok free tier browser interstitial
-        headers={"ngrok-skip-browser-warning": "true"},
-    )

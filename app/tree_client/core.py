@@ -60,7 +60,7 @@ class TreeClientCore:
         if not self.supabase_url or not self.supabase_key:
             return False
         try:
-            self._request("get", "/stage_types?select=id&limit=1")
+            self._request("get", "/tree_nodes?select=id&limit=1")
             return True
         except Exception as e:
             logger.debug(f"Supabase недоступен: {e}")

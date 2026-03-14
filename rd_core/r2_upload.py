@@ -5,11 +5,7 @@ from typing import Optional
 
 from rd_core.r2_disk_cache import get_disk_cache
 from rd_core.r2_metadata_cache import get_metadata_cache
-from rd_core.r2_errors import (
-    handle_r2_upload_error,
-    create_sync_operation_callback,
-    create_text_sync_operation_callback,
-)
+from rd_core.r2_errors import handle_r2_upload_error
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +69,7 @@ class R2UploadMixin:
             return True
 
         except Exception as e:
-            on_queue = create_sync_operation_callback(local_path, remote_key, content_type)
-            handle_r2_upload_error(e, remote_key, local_path, content_type, on_queue, "upload_file")
+            handle_r2_upload_error(e, remote_key, local_path, content_type, "upload_file")
             return False
 
     def upload_directory(
@@ -171,6 +166,5 @@ class R2UploadMixin:
             logger.info(f"✅ Текст загружен в R2: {remote_key}")
             return True
         except Exception as e:
-            on_queue = create_text_sync_operation_callback(content, remote_key, content_type)
-            handle_r2_upload_error(e, remote_key, None, content_type, on_queue, "upload_text")
+            handle_r2_upload_error(e, remote_key, None, content_type, "upload_text")
             return False

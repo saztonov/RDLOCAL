@@ -269,11 +269,12 @@ class JobDetailsDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть папку:\n{e}")
 
     def _show_r2_files(self, r2_base_url: str, r2_files: list):
-        """Показать диалог со списком файлов на R2"""
-        from app.gui.r2_viewer import R2FilesDialog
-
-        dialog = R2FilesDialog(r2_base_url, r2_files, self)
-        dialog.exec()
+        """Показать список файлов на R2"""
+        from PySide6.QtWidgets import QMessageBox
+        files_text = "\n".join(f"- {f}" for f in r2_files[:50])
+        if len(r2_files) > 50:
+            files_text += f"\n... и ещё {len(r2_files) - 50} файлов"
+        QMessageBox.information(self, "Файлы на R2", files_text or "Нет файлов")
 
     def _open_r2_url(self, url: str):
         """Открыть URL в браузере"""

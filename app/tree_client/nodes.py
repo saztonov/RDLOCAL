@@ -5,41 +5,13 @@ import logging
 import uuid
 from typing import Dict, List, Optional
 
-from app.tree_models import FileType, NodeStatus, NodeType, SectionType, StageType, TreeNode
+from app.tree_models import FileType, NodeStatus, NodeType, TreeNode
 
 logger = logging.getLogger(__name__)
 
 
 class TreeNodesMixin:
     """Миксин для операций с узлами дерева"""
-
-    # === Справочники ===
-
-    def get_stage_types(self) -> List[StageType]:
-        """Получить типы стадий"""
-        resp = self._request("get", "/stage_types?order=sort_order")
-        return [
-            StageType(
-                id=r["id"],
-                code=r["code"],
-                name=r["name"],
-                sort_order=r.get("sort_order", 0),
-            )
-            for r in resp.json()
-        ]
-
-    def get_section_types(self) -> List[SectionType]:
-        """Получить типы разделов"""
-        resp = self._request("get", "/section_types?order=sort_order")
-        return [
-            SectionType(
-                id=r["id"],
-                code=r["code"],
-                name=r["name"],
-                sort_order=r.get("sort_order", 0),
-            )
-            for r in resp.json()
-        ]
 
     # === CRUD для узлов ===
 

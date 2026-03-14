@@ -113,7 +113,6 @@ def handle_r2_upload_error(
     remote_key: str,
     local_path: Optional[str] = None,
     content_type: Optional[str] = None,
-    on_queue_sync: Optional[Callable[[], None]] = None,
     operation: str = "upload"
 ) -> bool:
     """
@@ -124,7 +123,6 @@ def handle_r2_upload_error(
         remote_key: R2 ключ объекта
         local_path: Локальный путь к файлу (для логирования)
         content_type: MIME тип
-        on_queue_sync: Callback для добавления в очередь синхронизации
         operation: Название операции
 
     Returns:
@@ -133,9 +131,8 @@ def handle_r2_upload_error(
     if isinstance(e, ClientError):
         result = classify_client_error(e)
 
-        if result.should_queue and on_queue_sync:
+        if result.is_retryable:
             logger.warning(f"⚠️ Сетевая ошибка при {operation} в R2: {result.error_message}")
-            _try_queue_sync(on_queue_sync, remote_key)
             return True
 
         logger.error(f"❌ ClientError при {operation} в R2: {result.error_code} - {result.error_message}")
@@ -146,8 +143,6 @@ def handle_r2_upload_error(
 
     if isinstance(e, (ConnectionError, TimeoutError)):
         logger.warning(f"⚠️ Сетевая ошибка при {operation} в R2: {e}")
-        if on_queue_sync:
-            _try_queue_sync(on_queue_sync, remote_key)
         return True
 
     logger.error(
@@ -158,92 +153,3 @@ def handle_r2_upload_error(
         logger.error(f"   Файл: {local_path}")
     logger.error(f"   Key: {remote_key}")
     return False
-
-
-def _try_queue_sync(on_queue_sync: Callable[[], None], remote_key: str) -> None:
-    """Попытаться добавить операцию в очередь синхронизации"""
-    try:
-        on_queue_sync()
-        logger.info(f"Операция добавлена в очередь синхронизации: {remote_key}")
-    except Exception as queue_error:
-        logger.error(f"Не удалось добавить в очередь: {queue_error}")
-
-
-def create_sync_operation_callback(
-    local_path: str,
-    r2_key: str,
-    content_type: Optional[str] = None,
-    is_temp: bool = False
-) -> Callable[[], None]:
-    """
-    Создать callback для добавления операции в очередь синхронизации.
-
-    Args:
-        local_path: Локальный путь к файлу
-        r2_key: R2 ключ
-        content_type: MIME тип
-        is_temp: Временный файл (удалить после загрузки)
-
-    Returns:
-        Callable для добавления в очередь
-    """
-    def add_to_queue():
-        from app.gui.sync_queue import get_sync_queue, SyncOperation, SyncOperationType
-        from datetime import datetime
-        import uuid
-
-        queue = get_sync_queue()
-        op = SyncOperation(
-            id=str(uuid.uuid4()),
-            type=SyncOperationType.UPLOAD_FILE,
-            timestamp=datetime.now().isoformat(),
-            local_path=local_path,
-            r2_key=r2_key,
-            data={"content_type": content_type, "is_temp": is_temp}
-        )
-        queue.add_operation(op)
-
-    return add_to_queue
-
-
-def create_text_sync_operation_callback(
-    content: str,
-    r2_key: str,
-    content_type: Optional[str] = None
-) -> Callable[[], None]:
-    """
-    Создать callback для добавления текстовой операции в очередь.
-    Сохраняет текст во временный файл.
-
-    Args:
-        content: Текстовое содержимое
-        r2_key: R2 ключ
-        content_type: MIME тип
-
-    Returns:
-        Callable для добавления в очередь
-    """
-    def add_to_queue():
-        from app.gui.sync_queue import get_sync_queue, SyncOperation, SyncOperationType
-        from datetime import datetime
-        from pathlib import Path
-        import tempfile
-        import uuid
-
-        # Создаём временный файл
-        temp_file = Path(tempfile.gettempdir()) / "RD" / "sync_pending" / f"{uuid.uuid4()}.txt"
-        temp_file.parent.mkdir(parents=True, exist_ok=True)
-        temp_file.write_text(content, encoding='utf-8')
-
-        queue = get_sync_queue()
-        op = SyncOperation(
-            id=str(uuid.uuid4()),
-            type=SyncOperationType.UPLOAD_FILE,
-            timestamp=datetime.now().isoformat(),
-            local_path=str(temp_file),
-            r2_key=r2_key,
-            data={"content_type": content_type, "is_temp": True}
-        )
-        queue.add_operation(op)
-
-    return add_to_queue

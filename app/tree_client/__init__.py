@@ -20,8 +20,6 @@ from app.tree_models import (
     NodeFile,
     NodeStatus,
     NodeType,
-    SectionType,
-    StageType,
     TreeNode,
 )
 
@@ -40,8 +38,6 @@ __all__ = [
     "FileType",
     "NodeFile",
     "TreeNode",
-    "StageType",
-    "SectionType",
     "TreeClient",
     "ALLOWED_CHILDREN",
 ]

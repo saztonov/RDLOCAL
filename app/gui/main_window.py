@@ -8,17 +8,14 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLabel, QMainWindow, QProgressBar, QStatusBar
 
 from app.gui.block_handlers import BlockHandlersMixin
 from app.gui.blocks_tree import BlocksTreeManager
-from app.gui.connection_mixin import ConnectionMixin
 from app.gui.file_operations import FileOperationsMixin
 from app.gui.menu_setup import MenuSetupMixin
 from app.gui.navigation_manager import NavigationManager
 from app.gui.panels_setup import PanelsSetupMixin
-from app.gui.reconciliation_mixin import ReconciliationMixin
 from app.gui.remote_ocr.panel import RemoteOCRPanel
 from app.gui.undo_redo_mixin import UndoRedoMixin
 from rd_core.models import Document
@@ -40,8 +37,6 @@ class MainWindow(
     FileOperationsMixin,
     BlockHandlersMixin,
     UndoRedoMixin,
-    ConnectionMixin,
-    ReconciliationMixin,
     QMainWindow,
 ):
     """Главное окно приложения для аннотирования PDF"""
@@ -72,7 +67,6 @@ class MainWindow(
         self.blocks_tree_manager = None
         self.navigation_manager = None
         self.remote_ocr_panel = None
-        self.connection_manager = None
 
         # Настройка UI
         self._setup_menu()
@@ -97,9 +91,6 @@ class MainWindow(
 
         # Статус-бар для отображения прогресса загрузки
         self._setup_status_bar()
-
-        # Инициализация менеджера соединения (после status bar)
-        self._setup_connection_manager()
 
         # Восстановить настройки окна
         self._restore_settings()
@@ -277,22 +268,6 @@ class MainWindow(
         dialog = FolderSettingsDialog(self)
         dialog.exec()
 
-    def _show_tree_settings(self):
-        """Показать диалог настройки дерева проектов"""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout
-
-        from app.gui.tree_settings_widget import TreeSettingsWidget
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Настройка дерева проектов")
-        dialog.resize(600, 500)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(TreeSettingsWidget(dialog))
-        dialog.exec()
-
-        if hasattr(self, "project_tree_widget"):
-            self.project_tree_widget.refresh_types()
-
     def _show_version_settings(self):
         """Показать диалог настройки версионности"""
         from app.gui.folder_settings_dialog import VersionSettingsDialog
@@ -344,23 +319,8 @@ class MainWindow(
         self._status_progress.setTextVisible(True)
         self._status_progress.hide()
 
-        self._connection_status_label = QLabel("⚪ Проверка...")
-        self._connection_status_label.setStyleSheet("color: #888; font-size: 9pt;")
-        self._connection_status_label.setToolTip("Статус подключения к серверу")
-
-        self._sync_queue_label = QLabel("")
-        self._sync_queue_label.setStyleSheet("color: #888; font-size: 9pt;")
-        self._sync_queue_label.setToolTip("Операции ожидают синхронизации")
-        self._sync_queue_label.hide()
-
-        self._status_bar.addPermanentWidget(self._sync_queue_label)
-        self._status_bar.addPermanentWidget(self._connection_status_label)
         self._status_bar.addPermanentWidget(self._status_label)
         self._status_bar.addPermanentWidget(self._status_progress)
-
-        self._sync_queue_timer = QTimer(self)
-        self._sync_queue_timer.timeout.connect(self._update_sync_queue_indicator)
-        self._sync_queue_timer.start(2000)
 
     def show_transfer_progress(self, message: str, current: int = 0, total: int = 0):
         """Показать прогресс загрузки/скачивания"""

@@ -212,23 +212,3 @@ class TreeNode:
 
     def get_allowed_child_types(self) -> List[NodeType]:
         return ALLOWED_CHILDREN.get(self.node_type, [])
-
-
-@dataclass
-class StageType:
-    """Тип стадии"""
-
-    id: int
-    code: str
-    name: str
-    sort_order: int = 0
-
-
-@dataclass
-class SectionType:
-    """Тип раздела"""
-
-    id: int
-    code: str
-    name: str
-    sort_order: int = 0

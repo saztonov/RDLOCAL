@@ -1,6 +1,5 @@
 """Кеш аннотаций с асинхронной синхронизацией в Supabase"""
 import copy
-import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -70,33 +69,9 @@ class AnnotationCache(QObject):
 
         document = self._cache[node_id]
 
-        # Проверяем офлайн статус
-        if self._is_offline():
-            self._add_to_sync_queue(node_id, document)
-            logger.debug(f"Офлайн: добавлена в очередь синхронизация {node_id}")
-            return
-
         # Копируем для фонового потока
         doc_copy = copy.deepcopy(document)
         self._executor.submit(self._background_sync_db, node_id, doc_copy)
-
-    def _is_offline(self) -> bool:
-        """Проверить, работаем ли мы в офлайн режиме"""
-        try:
-            from app.gui.main_window import MainWindow
-            from PySide6.QtWidgets import QApplication
-            from app.gui.connection_manager import ConnectionStatus
-
-            app = QApplication.instance()
-            if app:
-                for widget in app.topLevelWidgets():
-                    if isinstance(widget, MainWindow):
-                        if hasattr(widget, 'connection_manager'):
-                            status = widget.connection_manager.get_status()
-                            return status != ConnectionStatus.CONNECTED
-            return False
-        except Exception:
-            return False
 
     def _background_sync_db(self, node_id: str, doc: Document):
         """Фоновая синхронизация с Supabase"""
@@ -109,56 +84,16 @@ class AnnotationCache(QObject):
                 self.synced.emit(node_id)
                 self._update_has_annotation_flag(node_id)
             else:
-                self._add_to_sync_queue(node_id, doc)
+                # Retry через debounce
+                logger.warning(f"DB sync failed for {node_id}, will retry")
+                self._dirty[node_id] = time.time()
                 self.sync_failed.emit(node_id, "Не удалось сохранить в Supabase")
 
         except Exception as e:
             logger.error(f"DB sync failed for {node_id}: {e}")
-            self._add_to_sync_queue(node_id, doc)
+            # Retry через debounce
+            self._dirty[node_id] = time.time()
             self.sync_failed.emit(node_id, str(e))
-
-    def _add_to_sync_queue(self, node_id: str, document: Document):
-        """Добавить операцию в очередь отложенной синхронизации"""
-        try:
-            from uuid import uuid4
-            from datetime import datetime
-            from rd_core.annotation_io import ANNOTATION_FORMAT_VERSION
-            from app.gui.sync_queue import SyncOperation, SyncOperationType, get_sync_queue
-
-            queue = get_sync_queue()
-
-            # Проверяем, нет ли уже такой операции в очереди
-            for op in queue.get_pending_operations():
-                if (op.type == SyncOperationType.SAVE_ANNOTATION
-                        and op.node_id == node_id):
-                    # Обновляем данные в существующей операции
-                    op.data = {
-                        "annotation_data": document.to_dict(),
-                        "format_version": ANNOTATION_FORMAT_VERSION,
-                    }
-                    logger.debug(f"Обновлена операция в очереди: {node_id}")
-                    return
-
-            data = document.to_dict()
-            data["format_version"] = ANNOTATION_FORMAT_VERSION
-
-            operation = SyncOperation(
-                id=str(uuid4()),
-                type=SyncOperationType.SAVE_ANNOTATION,
-                timestamp=datetime.now().isoformat(),
-                local_path="",
-                r2_key="",
-                node_id=node_id,
-                data={
-                    "annotation_data": data,
-                    "format_version": ANNOTATION_FORMAT_VERSION,
-                },
-            )
-            queue.add_operation(operation)
-            logger.info(f"Добавлена операция в очередь: annotation для {node_id}")
-
-        except Exception as e:
-            logger.error(f"Ошибка добавления в очередь: {e}")
 
     def _update_has_annotation_flag(self, node_id: str):
         """Обновить флаг has_annotation в tree_nodes"""
