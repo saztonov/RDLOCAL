@@ -28,6 +28,16 @@ PDF_PREVIEW_DPI = 150
 PDF_PREVIEW_ZOOM = PDF_PREVIEW_DPI / 72.0  # ≈ 2.08
 
 
+def _get_effective_render_zoom(page: fitz.Page, zoom: float) -> float:
+    """Вычислить фактический zoom с учётом лимита по пикселям."""
+    rect = page.rect
+    max_pixels = 100_000_000
+    estimated_pixels = (rect.width * zoom) * (rect.height * zoom)
+    if estimated_pixels <= max_pixels:
+        return zoom
+    return (max_pixels / (rect.width * rect.height)) ** 0.5
+
+
 def open_pdf(path: str) -> fitz.Document:
     """
     Открыть PDF-документ
@@ -111,11 +121,8 @@ def render_page_to_image(
 
         # Адаптивный zoom для больших страниц (лимит ~100 млн пикселей для скорости)
         rect = page.rect
-        max_pixels = 100_000_000
-        estimated_pixels = (rect.width * zoom) * (rect.height * zoom)
-        effective_zoom = zoom
-        if estimated_pixels > max_pixels:
-            effective_zoom = (max_pixels / (rect.width * rect.height)) ** 0.5
+        effective_zoom = _get_effective_render_zoom(page, zoom)
+        if effective_zoom != zoom:
             logger.warning(
                 f"Страница {page_index} слишком большая, zoom снижен: {zoom:.2f} -> {effective_zoom:.2f}"
             )
@@ -232,8 +239,9 @@ class PDFDocument:
         try:
             page = self.doc[page_number]
             rect = page.rect
-            width = int(rect.width * zoom)
-            height = int(rect.height * zoom)
+            effective_zoom = _get_effective_render_zoom(page, zoom)
+            width = int(rect.width * effective_zoom)
+            height = int(rect.height * effective_zoom)
             return (width, height)
         except Exception as e:
             logger.error(f"Ошибка получения размеров страницы {page_number}: {e}")

@@ -6,6 +6,8 @@ import logging
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence
 
+from rd_core.annotation_canonicalizer import sync_block_to_page
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,6 +92,12 @@ class BlockEventsMixin:
                 skipped_count += 1
                 continue
 
+            sync_block_to_page(
+                new_block,
+                page_width=page_width,
+                page_height=page_height,
+                prefer_coords_px=True,
+            )
             current_page_data.blocks.append(new_block)
             pasted_count += 1
 

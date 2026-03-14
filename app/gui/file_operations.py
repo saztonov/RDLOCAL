@@ -10,6 +10,10 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.gui.file_auto_save import FileAutoSaveMixin
 from app.gui.file_download import FileDownloadMixin
+from rd_core.annotation_canonicalizer import (
+    canonicalize_annotation_document,
+    get_pdf_preview_page_sizes,
+)
 from rd_core.annotation_io import AnnotationIO
 from rd_core.models import Document, Page
 from rd_core.pdf_utils import PDFDocument
@@ -25,6 +29,34 @@ except ImportError:
 
 class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
     """Миксин для операций с файлами"""
+
+    def _canonicalize_loaded_annotation(self, pdf_path: str):
+        """Align annotation geometry with the actual preview sizes of the opened PDF."""
+        if not self.annotation_document or not self.pdf_document:
+            return
+
+        try:
+            page_sizes = get_pdf_preview_page_sizes(self.pdf_document)
+            prefer_coords_px = bool(
+                getattr(self.annotation_document, "_prefer_coords_px", False)
+            )
+            result = canonicalize_annotation_document(
+                self.annotation_document,
+                pdf_path=pdf_path,
+                pdf_page_sizes=page_sizes,
+                prefer_coords_px=prefer_coords_px,
+            )
+            if hasattr(self.annotation_document, "_prefer_coords_px"):
+                delattr(self.annotation_document, "_prefer_coords_px")
+
+            if result.changed:
+                logger.info(
+                    "Annotation canonicalized for %s using %s strategy",
+                    pdf_path,
+                    result.strategy,
+                )
+        except Exception as e:
+            logger.warning(f"Annotation canonicalization failed for {pdf_path}: {e}")
 
     def _update_has_annotation_flag(self, has_annotation: bool):
         """Обновить флаг has_annotation в узле дерева"""
@@ -92,6 +124,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 loaded = AnnotationIO.load_from_db(self._current_node_id)
                 if loaded:
                     self.annotation_document = loaded
+                    self._canonicalize_loaded_annotation(pdf_path)
                     logger.info(f"Annotation loaded from Supabase: {self._current_node_id}")
 
                     # Инициализируем кеш аннотаций
@@ -137,9 +170,12 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
 
             if loaded:
                 self.annotation_document = loaded
+                self._canonicalize_loaded_annotation(pdf_path)
 
                 # Мигрируем в Supabase
-                success = AnnotationIO.save_to_db(loaded, self._current_node_id)
+                success = AnnotationIO.save_to_db(
+                    self.annotation_document, self._current_node_id
+                )
                 if success:
                     # Удаляем JSON файл после успешной миграции
                     try:
@@ -186,9 +222,12 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                     loaded, result = AnnotationIO.load_and_migrate(tmp_path)
                     if result.success and loaded:
                         self.annotation_document = loaded
+                        self._canonicalize_loaded_annotation(pdf_path)
 
                         # Мигрируем в Supabase
-                        AnnotationIO.save_to_db(loaded, self._current_node_id)
+                        AnnotationIO.save_to_db(
+                            self.annotation_document, self._current_node_id
+                        )
 
                         # Инициализируем кеш
                         from app.gui.annotation_cache import get_annotation_cache
@@ -279,6 +318,8 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             # Создаём пустой документ аннотации
             self.annotation_document = self._create_empty_annotation(pdf_path)
 
+        self._canonicalize_loaded_annotation(pdf_path)
+
         # Рендерим первую страницу
         self._render_current_page()
         self._update_ui()
@@ -363,8 +404,15 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             pdf_path = loaded_doc.pdf_path
             if Path(pdf_path).exists():
                 self._open_pdf_file(pdf_path)
-                # Восстанавливаем аннотацию после открытия
                 self.annotation_document = loaded_doc
+                self._canonicalize_loaded_annotation(pdf_path)
+
+                if self._current_node_id:
+                    from app.gui.annotation_cache import get_annotation_cache
+
+                    cache = get_annotation_cache()
+                    cache.set(self._current_node_id, self.annotation_document, pdf_path)
+
                 self._render_current_page()
 
             # Сохраняем в Supabase если есть node_id
@@ -396,7 +444,17 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
 
             # Заменяем текущую аннотацию
             self.annotation_document = loaded_doc
+            self._canonicalize_loaded_annotation(self._current_pdf_path)
             self._annotation_synced = True
+
+            from app.gui.annotation_cache import get_annotation_cache
+
+            cache = get_annotation_cache()
+            cache.set(
+                self._current_node_id,
+                self.annotation_document,
+                self._current_pdf_path,
+            )
 
             # Обновляем отображение
             self._render_current_page()

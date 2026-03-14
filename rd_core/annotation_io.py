@@ -327,8 +327,10 @@ class AnnotationIO:
                 return None
 
             # Проверка на плоский формат v0 (legacy)
+            format_migrated = False
             if is_flat_format(data):
                 data = migrate_flat_to_structured(data)
+                format_migrated = True
 
             # Миграция v1 → v2
             migrated_data, result = migrate_annotation_data(data)
@@ -336,13 +338,16 @@ class AnnotationIO:
                 logger.error(f"Миграция аннотации из БД не удалась: {result.errors}")
                 return None
 
-            doc, _ = Document.from_dict(migrated_data, migrate_ids=True)
+            format_migrated = format_migrated or result.migrated
+            doc, ids_migrated = Document.from_dict(migrated_data, migrate_ids=True)
+            setattr(doc, "_prefer_coords_px", format_migrated)
 
-            # Пересохранить если была миграция формата
-            if result.migrated:
-                migrated_data["format_version"] = ANNOTATION_FORMAT_VERSION
-                client.save_annotation(node_id, migrated_data, ANNOTATION_FORMAT_VERSION)
-                logger.info(f"Аннотация мигрирована и пересохранена: node_id={node_id}")
+            # Безопасно автосохраняем только миграцию ID.
+            if ids_migrated and not format_migrated:
+                AnnotationIO.save_to_db(doc, node_id)
+                logger.info(
+                    f"Аннотация пересохранена после миграции ID: node_id={node_id}"
+                )
 
             logger.info(f"Аннотация загружена из БД: node_id={node_id}")
             return doc
@@ -490,7 +495,8 @@ class AnnotationIO:
             doc, ids_migrated = Document.from_dict(migrated_data, migrate_ids=True)
 
             # Объединить флаги миграции
-            any_migration = v0_migrated or result.migrated or ids_migrated
+            format_migration = v0_migrated or result.migrated
+            any_migration = format_migration or ids_migrated
             warnings = result.warnings.copy()
 
             if v0_migrated:
@@ -506,6 +512,7 @@ class AnnotationIO:
                     warnings=warnings,
                 )
 
+            setattr(doc, "_prefer_coords_px", format_migration)
             return doc, result
         except Exception as e:
             return None, MigrationResult(
