@@ -155,35 +155,22 @@ if not client.is_available():
 # Получение корневых проектов
 projects = client.get_root_nodes()
 
-# Создание иерархии
+# Создание иерархии (v2: folder | document)
 project = client.create_node(
-    node_type=NodeType.PROJECT,
+    node_type=NodeType.FOLDER,
     name="Новый проект"
 )
 
-stage = client.create_node(
-    node_type=NodeType.STAGE,
-    name="Рабочая документация",
-    parent_id=project.id,
-    code="РД"
-)
-
 section = client.create_node(
-    node_type=NodeType.SECTION,
+    node_type=NodeType.FOLDER,
     name="Архитектурные решения",
-    parent_id=stage.id,
+    parent_id=project.id,
     code="АР"
-)
-
-folder = client.create_node(
-    node_type=NodeType.TASK_FOLDER,
-    name="Задание 1",
-    parent_id=section.id
 )
 
 # Добавление документа (с автоверсионированием)
 doc = client.add_document(
-    parent_id=folder.id,
+    parent_id=section.id,
     name="План этажа.pdf",
     r2_key="documents/plan.pdf",
     file_size=1234567,
@@ -192,10 +179,6 @@ doc = client.add_document(
 
 # Lazy loading дочерних узлов
 children = client.get_children(project.id)
-
-# Справочники
-stage_types = client.get_stage_types()  # ПД, РД
-section_types = client.get_section_types()  # АР, КР, ОВ...
 
 # Обновление и удаление
 client.update_node(doc.id, name="Новое имя")
@@ -286,6 +269,19 @@ text = engine.recognize(
 engine = create_ocr_engine(
     backend="datalab",
     api_key="..."
+)
+
+# Chandra (LM Studio, через ngrok)
+engine = create_ocr_engine(
+    backend="chandra",
+    base_url="https://xxx.ngrok-free.app"
+)
+
+# Qwen (LM Studio, два режима)
+engine = create_ocr_engine(
+    backend="qwen",
+    base_url="https://xxx.ngrok-free.app",
+    mode="text"   # или mode="stamp" для штампов
 )
 
 # JSON mode (автоопределение или явный)

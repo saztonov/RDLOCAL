@@ -31,7 +31,7 @@
 |-----------|------------|
 | GUI | PySide6 (Qt 6) |
 | PDF | PyMuPDF (fitz) |
-| OCR | OpenRouter API, Datalab API |
+| OCR | OpenRouter API, Datalab API, LM Studio (Chandra, Qwen) |
 | Storage | Cloudflare R2 (S3-совместимое) |
 | Database | Supabase (PostgreSQL) |
 | Queue | Celery + Redis |
@@ -117,7 +117,7 @@ class Block:
     page_index: int                   # Номер страницы (0-based)
     coords_px: Tuple[int, int, int, int]    # Координаты в пикселях (x1, y1, x2, y2)
     coords_norm: Tuple[float, float, float, float]  # Нормализованные (0..1)
-    block_type: BlockType             # TEXT | TABLE | IMAGE
+    block_type: BlockType             # TEXT | IMAGE
     source: BlockSource               # USER | AUTO
     shape_type: ShapeType             # RECTANGLE | POLYGON
     polygon_points: Optional[List[Tuple[int, int]]]  # Вершины полигона
@@ -133,7 +133,6 @@ class Block:
 ```python
 class BlockType(Enum):
     TEXT = "text"      # Текстовый блок
-    TABLE = "table"    # Таблица
     IMAGE = "image"    # Изображение/схема
 ```
 
@@ -310,7 +309,7 @@ class ProjectTreeWidget(QWidget):
 ```
 services/remote_ocr/server/
 ├── main.py              # FastAPI приложение
-├── settings.py          # Конфигурация из env
+├── settings.py          # Конфигурация (config.yaml → env → default)
 ├── celery_app.py        # Конфигурация Celery
 ├── tasks.py             # Celery задача run_ocr_task
 ├── rate_limiter.py      # Rate limiting для Datalab API
@@ -370,32 +369,29 @@ services/remote_ocr/server/
 | `error` | Ошибка при обработке |
 | `paused` | Приостановлена пользователем |
 
-### Celery Worker
+### Celery Worker (Two-Pass)
 
 ```python
 @celery_app.task(bind=True, name="run_ocr_task", max_retries=3)
 def run_ocr_task(self, job_id: str) -> dict:
     # 1. Скачать PDF и blocks.json из R2
-    pdf_path, blocks_path = _download_job_files(job, work_dir)
-
-    # 2. Вырезать кропы блоков
-    strip_paths, strip_images, strips, image_blocks, _ = \
-        crop_and_merge_blocks_from_pdf(pdf_path, blocks, crops_dir)
-
-    # 3. OCR для TEXT/TABLE (объединённые полосы)
-    for strip in strips:
-        result = strip_backend.recognize(merged_image, prompt=prompt_data)
-
-    # 4. OCR для IMAGE блоков (индивидуально)
-    for block, crop, part_idx, total_parts in image_blocks:
-        text = image_backend.recognize(crop, prompt=prompt_data)
-
-    # 5. Генерация результатов
-    generate_structured_markdown(pages, "result.md")
-
-    # 6. Создание ZIP и загрузка в R2
-    _upload_results_to_r2(job, work_dir)
+    # 2. Создать бэкенды через backend_factory.create_job_backends()
+    # 3. Acquire LM Studio lifecycle (если chandra/qwen)
+    # 4. Two-pass OCR (task_ocr_twopass.py):
+    #    PASS 1: Stream PDF → crops to disk (pdf_twopass/pass1_crops.py)
+    #    PASS 2: Async OCR from manifest (pdf_twopass/pass2_ocr_async.py)
+    # 5. Block verification + retry failed blocks
+    # 6. Generate results (annotation.json + HTML/MD)
+    # 7. Upload to R2
+    # 8. Register in node_files (if node_id set)
+    # 9. Release LM Studio + cleanup
 ```
+
+Ключевые механизмы:
+- **Checkpoint/resume** (`checkpoint_models.py`): сохраняет прогресс при паузе
+- **Debounced updater** (`debounced_updater.py`): -90% DB вызовов
+- **Dynamic timeout** (`timeout_utils.py`): base + seconds_per_block
+- **LM Studio lifecycle** (`lmstudio_lifecycle.py`): Redis-координация загрузки/выгрузки моделей
 
 ---
 
@@ -404,11 +400,10 @@ def run_ocr_task(self, job_id: str) -> dict:
 ### Иерархия узлов
 
 ```
-PROJECT (Проект)
-└── STAGE (Стадия: ПД / РД)
-    └── SECTION (Раздел: АР, КР, ОВ...)
-        └── TASK_FOLDER (Папка заданий)
-            └── DOCUMENT (Документ PDF)
+folder (Произвольная вложенность)
+└── folder
+    └── folder
+        └── document (Документ PDF)
 ```
 
 ### TreeClient
@@ -441,7 +436,7 @@ class TreeNode:
     id: str
     parent_id: Optional[str]
     client_id: str
-    node_type: NodeType      # project|stage|section|task_folder|document
+    node_type: NodeType      # folder|document (v2)
     name: str
     code: Optional[str]      # Шифр (AR-01)
     version: int             # Версия документа
@@ -530,8 +525,12 @@ rd1/
 class OCRBackend(Protocol):
     def recognize(self, image: Image.Image,
                   prompt: Optional[dict] = None,
-                  json_mode: bool = None) -> str:
-        """Распознать текст на изображении"""
+                  json_mode: bool = None,
+                  pdf_file_path: Optional[str] = None) -> str:
+        """Распознать текст на изображении (или PDF файле)"""
+
+    def supports_pdf_input(self) -> bool:
+        """Поддерживает ли бэкенд прямую отправку PDF"""
 ```
 
 ### OpenRouterBackend
@@ -541,16 +540,6 @@ class OCRBackend(Protocol):
 ```python
 class OpenRouterBackend:
     DEFAULT_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"
-
-    def __init__(self, api_key: str, model_name: str):
-        self.api_key = api_key
-        self.model_name = model_name
-
-    def recognize(self, image, prompt=None, json_mode=None) -> str:
-        # 1. Конвертация изображения в base64
-        # 2. Построение payload с system/user messages
-        # 3. POST запрос к openrouter.ai/api/v1/chat/completions
-        # 4. Парсинг ответа
 ```
 
 Особенности:
@@ -560,28 +549,40 @@ class OpenRouterBackend:
 
 ### DatalabOCRBackend
 
-Использует Datalab Marker API для сегментации и OCR:
+Использует Datalab Marker API для сегментации и OCR. Async polling до готовности.
+
+### ChandraBackend
+
+LM Studio через OpenAI-совместимый API (ngrok tunnel):
 
 ```python
-class DatalabOCRBackend:
-    def recognize(self, image, prompt=None, json_mode=None) -> str:
-        # 1. Конвертация в PDF
-        # 2. POST к api.datalab.to/api/v1/marker
-        # 3. Polling до готовности
-        # 4. Получение Markdown результата
+class ChandraBackend:
+    # Всегда использует собственные промпты (CHANDRA_DEFAULT_SYSTEM/PROMPT)
+    # Поддержка model lifecycle: _ensure_model_loaded() / unload_model()
+```
+
+### QwenBackend
+
+LM Studio, два режима работы:
+
+```python
+class QwenBackend:
+    # mode="text" — TEXT/TABLE блоки (QWEN_TEXT_SYSTEM/PROMPT)
+    # mode="stamp" — штампы и титульные блоки (QWEN_STAMP_SYSTEM/PROMPT)
+    # URL fallback: QWEN_BASE_URL → CHANDRA_BASE_URL (shared tunnel)
 ```
 
 ### Фабрика create_ocr_engine
 
 ```python
 def create_ocr_engine(backend: str = "dummy", **kwargs) -> OCRBackend:
-    if backend == "openrouter":
-        return OpenRouterBackend(**kwargs)
-    elif backend == "datalab":
-        return DatalabOCRBackend(**kwargs)
-    else:
-        return DummyOCRBackend()
+    # Поддерживаемые бэкенды: openrouter, datalab, chandra, qwen, dummy
 ```
+
+На сервере `backend_factory.py` создаёт тройку бэкендов на основе engine:
+- `strip_backend` — для TEXT блоков (chandra/qwen → datalab → openrouter)
+- `image_backend` — для IMAGE блоков (openrouter → dummy)
+- `stamp_backend` — для штампов (qwen stamp mode → openrouter → dummy)
 
 ---
 
@@ -608,7 +609,7 @@ Form fields:
   - document_id: str (SHA256 хеш PDF)
   - document_name: str
   - task_name: str
-  - engine: str (openrouter|datalab)
+  - engine: str (openrouter|datalab|chandra|qwen)
   - text_model: str
   - table_model: str
   - image_model: str
@@ -687,7 +688,7 @@ GET /jobs/{job_id}/details
 Response:
 {
   ...JobInfo,
-  "block_stats": {"total": 10, "text": 5, "table": 3, "image": 2},
+  "block_stats": {"total": 10, "text": 5, "image": 5},
   "job_settings": {"text_model": "...", "table_model": "..."},
   "r2_base_url": "https://pub-xxx.r2.dev/ocr_jobs/uuid",
   "r2_files": [{"name": "result.md", "path": "result.md", "icon": "📄"}]
@@ -729,7 +730,7 @@ DELETE /jobs/{job_id}        → {"ok": true, "deleted_job_id": "..."}
 | task_name | text | Название задачи |
 | status | text | draft\|queued\|processing\|done\|error\|paused |
 | progress | real | Прогресс 0..1 |
-| engine | text | openrouter\|datalab |
+| engine | text | openrouter\|datalab\|chandra\|qwen |
 | r2_prefix | text | Префикс в R2 |
 | error_message | text | Сообщение об ошибке |
 | created_at | timestamptz | |
@@ -763,7 +764,7 @@ DELETE /jobs/{job_id}        → {"ok": true, "deleted_job_id": "..."}
 | id | uuid PK | |
 | parent_id | uuid FK | → tree_nodes.id (CASCADE) |
 | client_id | text | ID клиента |
-| node_type | text | project\|stage\|section\|task_folder\|document |
+| node_type | text | folder\|document (v2) |
 | name | text | Название |
 | code | text | Шифр (AR-01) |
 | version | integer | Версия |
@@ -804,11 +805,12 @@ DATALAB_API_KEY=...
 # Redis (для Celery)
 REDIS_URL=redis://redis:6379/0
 
-# Лимиты
-MAX_CONCURRENT_JOBS=2
-DATALAB_MAX_RPM=180
-DATALAB_MAX_CONCURRENT=5
+# LM Studio (локальные OCR бэкенды)
+CHANDRA_BASE_URL=https://xxx.ngrok-free.app
+QWEN_BASE_URL=                              # fallback → CHANDRA_BASE_URL
 ```
+
+Серверные числовые настройки (concurrency, timeouts, DPI и др.) в `services/remote_ocr/server/config.yaml`.
 
 ### Docker Compose (Development)
 

@@ -82,30 +82,33 @@ DATALAB_API_KEY=...
 REMOTE_OCR_API_KEY=        # Если задан — требуется X-API-Key
 REMOTE_OCR_DATA_DIR=/data  # Директория для временных файлов
 
-# Лимиты
-MAX_CONCURRENT_JOBS=2      # Параллельных задач
-DATALAB_MAX_RPM=180        # Запросов в минуту к Datalab
-DATALAB_MAX_CONCURRENT=5   # Параллельных запросов к Datalab
-POLL_INTERVAL=10           # Интервал polling очереди (сек)
+# LM Studio (локальные OCR бэкенды)
+CHANDRA_BASE_URL=https://xxx.ngrok-free.app
+QWEN_BASE_URL=             # Fallback → CHANDRA_BASE_URL
 ```
+
+Числовые настройки (concurrency, timeouts, DPI и др.) вынесены в `config.yaml`.
+
+### config.yaml (основной конфиг сервера)
+
+Путь: `services/remote_ocr/server/config.yaml`. Override: `OCR_CONFIG_PATH` env.
+
+Принцип приоритетов: **config.yaml → env → default**.
+
+Ключевые секции:
+- **celery_worker**: max_concurrent_jobs, soft/hard timeouts, max_tasks
+- **ocr_threading**: max_global_ocr_requests, ocr_threads_per_job, timeout
+- **datalab_api**: rpm_limit, concurrent_requests, polling_interval
+- **chandra / qwen**: max_concurrent, retry_delay
+- **ocr_settings**: png_compress_level, max_batch_size, dpi, max_strip_height
+- **dynamic_timeout**: base, seconds_per_block, min, max
+- **queue**: poll_interval, max_size, default_priority
+- **default_models**: default_engine, image_model, stamp_model
 
 ### settings.py
 
-```python
-@dataclass(frozen=True)
-class Settings:
-    data_dir: str = os.getenv("REMOTE_OCR_DATA_DIR", "/data")
-    api_key: str = os.getenv("REMOTE_OCR_API_KEY", "")
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    datalab_api_key: str = os.getenv("DATALAB_API_KEY", "")
-    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
-    supabase_url: str = os.getenv("SUPABASE_URL", "")
-    supabase_key: str = os.getenv("SUPABASE_KEY", "")
-    datalab_max_rpm: int = 180
-    datalab_max_concurrent: int = 5
-    max_concurrent_jobs: int = 2
-    poll_interval: float = 10
-```
+Использует `_cfg(key)` для чтения из YAML и `_env(key)` для секретов из `.env`.
+Секреты (API keys, URLs) **только из .env**, числовые настройки **из config.yaml**.
 
 ---
 
@@ -134,7 +137,7 @@ Form fields:
   document_id: string (SHA256 хеш PDF)
   document_name: string
   task_name: string
-  engine: string (openrouter|datalab)
+  engine: string (openrouter|datalab|chandra|qwen)
   text_model: string
   table_model: string
   image_model: string
@@ -252,9 +255,7 @@ Response 200:
   "block_stats": {
     "total": 15,
     "text": 8,
-    "table": 5,
-    "image": 2,
-    "grouped": 13
+    "image": 7
   },
   "job_settings": {
     "text_model": "qwen/qwen3-vl-30b",
@@ -347,54 +348,55 @@ celery_app.conf.update(
 @celery_app.task(bind=True, name="run_ocr_task", max_retries=3)
 def run_ocr_task(self, job_id: str) -> dict:
     """
-    Обработка OCR-задачи:
+    Two-pass OCR обработка:
     1. Скачать PDF и blocks.json из R2
-    2. Вырезать кропы блоков
-    3. Группировка TEXT/TABLE в полосы
-    4. OCR для полос через выбранный движок
-    5. OCR для IMAGE блоков
-    6. Генерация result.md и annotation.json
-    7. Создание result.zip
-    8. Загрузка результатов в R2
-    9. Обновление статуса в Supabase
+    2. Создать бэкенды (backend_factory.create_job_backends)
+    3. Acquire LM Studio lifecycle (если chandra/qwen)
+    4. PASS 1: Stream PDF → crops to disk (pass1_crops.py)
+    5. PASS 2: Async OCR from manifest (pass2_ocr_async.py)
+    6. Block verification + retry
+    7. Генерация результатов (annotation.json + HTML/MD)
+    8. Загрузка в R2
+    9. Регистрация в node_files (если node_id)
     """
 ```
 
 ### Этапы обработки
 
 1. **Инициализация** (progress: 0.05)
-   - Получение задачи из Supabase
-   - Проверка на паузу
-   - Создание временной директории
+   - Получение задачи из Supabase, проверка на паузу
+   - Stale task detection (сравнение celery_task_id)
+   - Protection from loops (retry_count, max_runtime)
 
 2. **Скачивание файлов** (progress: 0.10)
-   - PDF из R2
-   - blocks.json из R2
+   - PDF + blocks.json из R2
 
-3. **Кропы блоков** (progress: 0.10-0.20)
-   - Рендеринг страниц
-   - Вырезание кропов
-   - Группировка в полосы
+3. **PASS 1: Crops** (progress: 0.10-0.20)
+   - Streaming PDF → рендеринг страниц (pdf_streaming_core.py)
+   - TEXT блоки → объединение в strips (вертикальные полосы)
+   - IMAGE блоки → индивидуальные кропы
+   - Результат: TwoPassManifest JSON
 
-4. **OCR обработка** (progress: 0.20-0.90)
-   - TEXT/TABLE полосы
-   - IMAGE блоки (индивидуально)
-   - Параллельное выполнение (ThreadPoolExecutor)
+4. **PASS 2: OCR** (progress: 0.20-0.90)
+   - Async обработка strips через strip_backend
+   - Async обработка images через image_backend
+   - Stamps через stamp_backend
+   - Checkpoint/resume при паузе (checkpoint_models.py)
+   - Debounced status updates (-90% DB calls)
 
-5. **Генерация результатов** (progress: 0.90-0.95)
-   - result.md (Markdown)
-   - annotation.json (полная разметка)
-   - result.zip (архив)
+5. **Verification** (progress: 0.90-0.92)
+   - Block verification + retry failed blocks
 
-6. **Загрузка в R2** (progress: 0.95-1.0)
-   - result.md
-   - annotation.json
-   - result.zip
-   - crops/*.pdf
+6. **Генерация результатов** (progress: 0.92-0.95)
+   - annotation.json, ocr_result.html, document.md, result.json
 
-7. **Завершение**
-   - update_job_status(done)
-   - Очистка temp директории
+7. **Загрузка в R2** (progress: 0.95-1.0)
+   - Результаты + crops
+
+8. **Завершение**
+   - Регистрация в node_files (node_storage/)
+   - Release LM Studio lifecycle
+   - Очистка temp + GC
 
 ### Обработка ошибок
 
@@ -729,11 +731,10 @@ services:
 
 ### Вертикальное
 
-```env
-# Больше параллельных задач
-MAX_CONCURRENT_JOBS=5
-DATALAB_MAX_CONCURRENT=10
-```
+Настраивается в `config.yaml`:
+- `celery_worker.max_concurrent_jobs` — параллельных задач
+- `datalab_api.concurrent_requests` — параллельных запросов к Datalab
+- `ocr_threading.max_global_ocr_requests` — глобальный OCR concurrency
 
 ### Redis Cluster
 

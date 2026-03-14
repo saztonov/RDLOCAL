@@ -62,7 +62,7 @@ Desktop Client (PySide6)
 | `app/ocr_client/` | Remote OCR HTTP client (6 modules) |
 | `app/tree_client/` | Supabase tree API (6 mixins) |
 | `rd_core/` | Core logic: models, PDF utils, R2 storage, OCR engines |
-| `rd_core/ocr/` | OCR backends (OpenRouter, Datalab). Protocol: `base.py` |
+| `rd_core/ocr/` | OCR backends (OpenRouter, Datalab, Chandra, Qwen). Protocol: `base.py` |
 | `services/remote_ocr/server/` | FastAPI server + Celery tasks |
 | `services/remote_ocr/server/node_storage/` | OCR results registration in tree |
 | `services/remote_ocr/server/pdf_twopass/` | Two-pass PDF (pass1_crops, pass2_ocr) |
@@ -74,20 +74,32 @@ Desktop Client (PySide6)
 
 **Mixin Pattern (GUI)**: `MainWindow` composes multiple mixins - each handles specific responsibility (menus, file ops, block handlers).
 
-**Protocol Pattern (OCR)**: `OCRBackend` protocol in `rd_core/ocr/base.py`. Implementations: `OpenRouterBackend`, `DatalabOCRBackend`. Factory: `create_ocr_engine()`.
+**Protocol Pattern (OCR)**: `OCRBackend` protocol in `rd_core/ocr/base.py`. Implementations: `OpenRouterBackend`, `DatalabOCRBackend`, `ChandraBackend`, `QwenBackend`. Factory: `create_ocr_engine()`.
 
 **Context Manager (PDF)**: `PDFDocument` in `rd_core/pdf_utils.py` uses `__enter__`/`__exit__` for resource cleanup.
 
+### OCR Backends (`rd_core/ocr/`)
+
+| Backend | Engine key | API | Notes |
+|---------|-----------|-----|-------|
+| `OpenRouterBackend` | `openrouter` | OpenRouter (VLM) | Cloud, default for IMAGE blocks |
+| `DatalabOCRBackend` | `datalab` | Datalab Marker | Cloud, segmentation + OCR |
+| `ChandraBackend` | `chandra` | LM Studio (ngrok) | Local, shared tunnel with Qwen |
+| `QwenBackend` | `qwen` | LM Studio (ngrok) | Local, mode="text" or "stamp" |
+| `DummyBackend` | `dummy` | — | Testing stub |
+
+Server uses `backend_factory.py` to create a trio: `strip_backend` (TEXT), `image_backend` (IMAGE), `stamp_backend` (stamps/titles).
+
 ### GUI Mixin Composition
 
-| Widget | Mixins | Lines |
-|--------|--------|-------|
-| `MainWindow` | MenuSetup, PanelsSetup, FileOperations, BlockHandlers | 755 |
-| `PageViewer` | ContextMenu, MouseEvents, BlockRendering, Polygon, ResizeHandles | 237 |
-| `ProjectTreeWidget` | TreeNodeOps, TreeSync, TreeFilter, TreeContextMenu | 652 |
-| `RemoteOCRPanel` | JobOps, Download, PollingController, ResultHandler, TableManager | 313 |
-| `TreeClient` | Core, Nodes, Status, Files, Categories, PathV2 | - |
-| `R2Storage` | Upload, Download, Utils (Singleton) | - |
+| Widget | Mixins |
+|--------|--------|
+| `MainWindow` | MenuSetup, PanelsSetup, FileOperations, BlockHandlers |
+| `PageViewer` | ContextMenu, MouseEvents, BlockRendering, Polygon, ResizeHandles |
+| `ProjectTreeWidget` | TreeNodeOps, TreeSync, TreeFilter, TreeContextMenu |
+| `RemoteOCRPanel` | JobOps, Download, PollingController, ResultHandler, TableManager |
+| `TreeClient` | Core, Nodes, Status, Files, Categories, PathV2 |
+| `R2Storage` | Upload, Download, Utils (Singleton) |
 
 ### Key Dialogs (`app/gui/`)
 
@@ -103,7 +115,7 @@ Desktop Client (PySide6)
 ### Data Models (`rd_core/models/`)
 
 ```python
-Block      # block.py - annotation with coords, groups, categories
+Block      # block.py - annotation with coords, categories
 ArmorID    # armor_id.py - OCR-resistant ID format (XXXX-XXXX-XXX)
 Document   # document.py - collection of pages
 Page       # document.py - page with blocks list
@@ -142,9 +154,14 @@ node_type v2: `folder` | `document` (legacy types in attributes.legacy_node_type
 #### Core Processing
 | Module | Purpose |
 |--------|---------|
-| `task_ocr_twopass.py` | Two-pass OCR task |
-| `pdf_streaming_twopass.py` | Streaming PDF for large files |
+| `task_ocr_twopass.py` | Two-pass OCR task with checkpoint/resume |
+| `task_dispatch.py` | Unified task dispatch + dynamic timeout |
+| `backend_factory.py` | Backend trio factory (strip/image/stamp) |
+| `pdf_streaming_core.py` | Memory-efficient PDF page rendering |
 | `pdf_twopass/` | Pass1 crops → Pass2 OCR → Cleanup |
+| `lmstudio_lifecycle.py` | Redis-coordinated LM Studio model lifecycle |
+| `checkpoint_models.py` | OCR checkpoint/resume for paused jobs |
+| `worker_prompts.py` | Prompt building + batch response parsing |
 | `block_verification.py` | Verify + retry missing blocks |
 | `block_id_matcher.py` | ArmorID + fuzzy matching |
 
@@ -155,14 +172,15 @@ node_type v2: `folder` | `document` (legacy types in attributes.legacy_node_type
 | `rate_limiter.py` | Token bucket for Datalab API |
 | `memory_utils.py` | Memory monitoring (psutil) |
 | `queue_checker.py` | Backpressure mechanism |
-| `db_metrics.py` | Track DB operations per job |
+| `timeout_utils.py` | Dynamic timeout calculation |
 
 #### Storage & Configuration
 | Module | Purpose |
 |--------|---------|
 | `async_r2_storage.py` | Async R2 (aioboto3) |
 | `node_storage/` | Register OCR results in tree |
-| `settings.py` | Dynamic config (Supabase → env → default) |
+| `settings.py` | Dynamic config (config.yaml → env → default) |
+| `config.yaml` | Main server config (timeouts, concurrency, engines) |
 
 ### Client Infrastructure
 
@@ -175,11 +193,9 @@ node_type v2: `folder` | `document` (legacy types in attributes.legacy_node_type
 | `cache_base.py` | ThreadSafeCache base class |
 | `tree_cache_ops.py` | Tree operations caching |
 
-#### Network & Sync
+#### Utilities
 | Module | Purpose |
 |--------|---------|
-| `connection_manager.py` | Network status + offline mode |
-| `sync_queue.py` | Offline sync queue |
 | `logging_manager.py` | Dynamic log folder switching |
 
 ### OCR Job Lifecycle (Two-Pass)
@@ -227,16 +243,17 @@ routes/
 Required `.env` variables:
 - `SUPABASE_URL`, `SUPABASE_KEY` - Database
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` - Storage
-- `OPENROUTER_API_KEY` and/or `DATALAB_API_KEY` - OCR engines
+- `OPENROUTER_API_KEY` and/or `DATALAB_API_KEY` - OCR engines (cloud)
+- `CHANDRA_BASE_URL` - LM Studio URL for Chandra (via ngrok)
+- `QWEN_BASE_URL` - LM Studio URL for Qwen (fallback: `CHANDRA_BASE_URL`)
 - `REMOTE_OCR_BASE_URL` - Server URL (default: http://localhost:8000)
 - `REDIS_URL` - For server (default: redis://redis:6379/0)
 
-Server-specific (dynamic loading via `settings.py`):
+Server-specific (dynamic loading via `settings.py` from `config.yaml`):
 - `REMOTE_OCR_DATA_DIR` - Work directory (default: /data)
 - `REMOTE_OCR_API_KEY` - API authentication
-- `MAX_QUEUE_SIZE` - Backpressure limit (0 = unlimited)
-- `DATALAB_MAX_CONCURRENT` - Parallel Datalab requests (default: 5)
-- `DEBOUNCE_INTERVAL` - Status update interval (default: 3.0s)
+- `config.yaml` - Main config file (timeouts, concurrency, engines, DPI, queue settings)
+- `OCR_CONFIG_PATH` - Override path to config.yaml
 
 ## Logging (Server)
 
