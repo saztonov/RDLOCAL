@@ -106,6 +106,6 @@ default_task_priority: 5
 # Движок по умолчанию: datalab | chandra | openrouter
 default_engine: "datalab"
 # Модель для распознавания изображений (OpenRouter)
-default_image_model: "google/gemini-3-flash-preview"
+default_image_model: "google/gemini-3.1-flash-lite-preview"
 # Модель для распознавания штампов (OpenRouter)
-default_stamp_model: "xiaomi/mimo-v2-flash:free"
+default_stamp_model: "qwen/qwen3.5-9b"

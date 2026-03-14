@@ -46,10 +46,10 @@ def get_ocr_defaults() -> Dict[str, str]:
     config = _load_config()
     return {
         "image_model": config.get(
-            "default_image_model", "google/gemini-3-flash-preview"
+            "default_image_model", "google/gemini-3.1-flash-lite-preview"
         ),
         "stamp_model": config.get(
-            "default_stamp_model", "xiaomi/mimo-v2-flash:free"
+            "default_stamp_model", "qwen/qwen3.5-9b"
         ),
         "engine": config.get("default_engine", "datalab"),
     }
