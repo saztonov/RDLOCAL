@@ -8,7 +8,7 @@ import httpx
 from PIL import Image
 
 from rd_core.ocr.http_utils import create_async_client
-from rd_core.ocr.utils import image_to_base64, image_to_pdf_base64
+from rd_core.ocr.utils import extract_message_text, image_to_base64, image_to_pdf_base64
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,18 @@ class AsyncOpenRouterBackend:
                 logger.error(f"OpenRouter: 'choices' missing. Keys: {list(result.keys())}")
                 return "[Ошибка OpenRouter: некорректный ответ API]"
 
-            text = result["choices"][0]["message"]["content"].strip()
+            choice = result["choices"][0]
+            message = choice.get("message") or {}
+            text = extract_message_text(message)
+            if not text:
+                text = extract_message_text({"content": choice.get("text")})
+
+            if not text:
+                logger.warning(
+                    "OpenRouter returned an empty content payload. Choice keys: %s",
+                    list(choice.keys()),
+                )
+                return "[Ошибка OpenRouter: empty response content]"
             logger.debug(f"AsyncOpenRouter OCR: распознано {len(text)} символов")
             return text
 

@@ -5,10 +5,13 @@ Streaming обработка PDF через fitz (PyMuPDF)
 from __future__ import annotations
 
 import gc
+import math
 from typing import Dict, List, Optional, Tuple
 
 import fitz
 from PIL import Image, ImageDraw
+
+from rd_core.pdf_utils import normalize_coords_norm
 
 from .logging_config import get_logger
 from .memory_utils import get_pil_image_size_mb
@@ -135,7 +138,17 @@ class StreamingPDFProcessor:
 
         from rd_core.models import ShapeType
 
-        nx1, ny1, nx2, ny2 = block.coords_norm
+        normalized_coords = normalize_coords_norm(block.coords_norm)
+        if normalized_coords is None:
+            logger.warning(
+                "Invalid normalized coordinates for block %s on page %s: %s",
+                block.id,
+                block.page_index,
+                block.coords_norm,
+            )
+            return None
+
+        nx1, ny1, nx2, ny2 = normalized_coords
         img_w, img_h = page_image.width, page_image.height
 
         x1, y1 = int(nx1 * img_w), int(ny1 * img_h)
@@ -144,6 +157,15 @@ class StreamingPDFProcessor:
         x1, y1 = max(0, x1 - padding), max(0, y1 - padding)
         x2, y2 = min(img_w, x2 + padding), min(img_h, y2 + padding)
 
+        if x2 <= x1 or y2 <= y1:
+            logger.warning(
+                "Empty raster crop for block %s on page %s after padding: %s",
+                block.id,
+                block.page_index,
+                (x1, y1, x2, y2),
+            )
+            return None
+
         if block.shape_type == ShapeType.RECTANGLE or not block.polygon_points:
             return page_image.crop((x1, y1, x2, y2)).copy()
 
@@ -151,6 +173,9 @@ class StreamingPDFProcessor:
         crop_w, crop_h = x2 - x1, y2 - y1
         orig_x1, orig_y1, orig_x2, orig_y2 = block.coords_px
         bbox_w, bbox_h = orig_x2 - orig_x1, orig_y2 - orig_y1
+
+        if crop_w <= 0 or crop_h <= 0 or bbox_w <= 0 or bbox_h <= 0:
+            return page_image.crop((x1, y1, x2, y2)).copy()
 
         adjusted_points = []
         for px, py in block.polygon_points:
@@ -182,11 +207,30 @@ class StreamingPDFProcessor:
             rect = page.rect
             rotation = page.rotation
 
-            nx1, ny1, nx2, ny2 = block.coords_norm
+            normalized_coords = normalize_coords_norm(block.coords_norm)
+            if normalized_coords is None:
+                logger.warning(
+                    "Skipping PDF crop for block %s on page %s due to invalid coords: %s",
+                    block.id,
+                    block.page_index,
+                    block.coords_norm,
+                )
+                return None
+
+            nx1, ny1, nx2, ny2 = normalized_coords
             x1_pt = max(rect.x0, rect.x0 + nx1 * rect.width - padding_pt)
             y1_pt = max(rect.y0, rect.y0 + ny1 * rect.height - padding_pt)
             x2_pt = min(rect.x1, rect.x0 + nx2 * rect.width + padding_pt)
             y2_pt = min(rect.y1, rect.y0 + ny2 * rect.height + padding_pt)
+
+            if x2_pt <= x1_pt or y2_pt <= y1_pt:
+                logger.warning(
+                    "Skipping PDF crop for block %s on page %s due to empty clip: %s",
+                    block.id,
+                    block.page_index,
+                    (x1_pt, y1_pt, x2_pt, y2_pt),
+                )
+                return None
 
             clip_rect = fitz.Rect(x1_pt, y1_pt, x2_pt, y2_pt)
 
@@ -194,10 +238,32 @@ class StreamingPDFProcessor:
                 clip_rect = clip_rect * page.derotation_matrix
                 clip_rect.normalize()
 
+            rect_values = (
+                clip_rect.x0,
+                clip_rect.y0,
+                clip_rect.x1,
+                clip_rect.y1,
+            )
+            if (
+                not all(math.isfinite(v) for v in rect_values)
+                or clip_rect.width <= 0
+                or clip_rect.height <= 0
+            ):
+                logger.warning(
+                    "Skipping PDF crop for block %s on page %s due to invalid rotated clip: %s",
+                    block.id,
+                    block.page_index,
+                    rect_values,
+                )
+                return None
+
             if rotation in (90, 270):
                 crop_width, crop_height = clip_rect.height, clip_rect.width
             else:
                 crop_width, crop_height = clip_rect.width, clip_rect.height
+
+            if crop_width <= 0 or crop_height <= 0:
+                return None
 
             new_doc = fitz.open()
             new_page = new_doc.new_page(width=crop_width, height=crop_height)
@@ -213,20 +279,21 @@ class StreamingPDFProcessor:
                 orig_x1, orig_y1, orig_x2, orig_y2 = block.coords_px
                 bbox_w, bbox_h = orig_x2 - orig_x1, orig_y2 - orig_y1
 
-                polygon_pts = []
-                for px, py in block.polygon_points:
-                    norm_px = (px - orig_x1) / bbox_w if bbox_w else 0
-                    norm_py = (py - orig_y1) / bbox_h if bbox_h else 0
-                    polygon_pts.append(
-                        fitz.Point(norm_px * crop_width, norm_py * crop_height)
-                    )
+                if bbox_w > 0 and bbox_h > 0:
+                    polygon_pts = []
+                    for px, py in block.polygon_points:
+                        norm_px = (px - orig_x1) / bbox_w if bbox_w else 0
+                        norm_py = (py - orig_y1) / bbox_h if bbox_h else 0
+                        polygon_pts.append(
+                            fitz.Point(norm_px * crop_width, norm_py * crop_height)
+                        )
 
-                shape = new_page.new_shape()
-                shape.draw_rect(new_page.rect)
-                if polygon_pts:
-                    shape.draw_polyline(polygon_pts + [polygon_pts[0]])
-                shape.finish(color=None, fill=(1, 1, 1), even_odd=True)
-                shape.commit()
+                    shape = new_page.new_shape()
+                    shape.draw_rect(new_page.rect)
+                    if polygon_pts:
+                        shape.draw_polyline(polygon_pts + [polygon_pts[0]])
+                    shape.finish(color=None, fill=(1, 1, 1), even_odd=True)
+                    shape.commit()
 
             new_doc.save(output_path, deflate=True, garbage=4)
             new_doc.close()

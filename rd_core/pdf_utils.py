@@ -5,6 +5,7 @@
 """
 
 import logging
+import math
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -251,6 +252,30 @@ class PDFDocument:
 # ========== ФУНКЦИИ ИЗВЛЕЧЕНИЯ ТЕКСТА PyMuPDF ==========
 
 
+def normalize_coords_norm(
+    coords_norm: Tuple[float, float, float, float],
+) -> Optional[Tuple[float, float, float, float]]:
+    """Clamp and normalize block bounds to a valid 0..1 rectangle.
+
+    Returns None for invalid/degenerate coordinates (NaN, Inf, zero-area).
+    """
+    try:
+        x1, y1, x2, y2 = (float(v) for v in coords_norm)
+    except (TypeError, ValueError):
+        return None
+
+    if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+        return None
+
+    x1, x2 = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
+    y1, y2 = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+
+    if x2 - x1 <= 1e-6 or y2 - y1 <= 1e-6:
+        return None
+
+    return x1, y1, x2, y2
+
+
 def extract_text_pdfplumber(
     pdf_path: str,
     page_index: int,
@@ -313,10 +338,16 @@ def extract_text_for_block(
         Извлечённый текст
     """
     # Конвертируем нормализованные координаты в PDF-координаты
-    x0 = coords_norm[0] * page_width_pdf
-    y0 = coords_norm[1] * page_height_pdf
-    x1 = coords_norm[2] * page_width_pdf
-    y1 = coords_norm[3] * page_height_pdf
+    normalized = normalize_coords_norm(coords_norm)
+    if normalized is None:
+        return ""
+
+    x0_norm, y0_norm, x1_norm, y1_norm = normalized
+
+    x0 = x0_norm * page_width_pdf
+    y0 = y0_norm * page_height_pdf
+    x1 = x1_norm * page_width_pdf
+    y1 = y1_norm * page_height_pdf
 
     # PyMuPDF использует (x0, y0, x1, y1)
     bbox = (x0, y0, x1, y1)

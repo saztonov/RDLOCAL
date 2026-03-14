@@ -35,7 +35,7 @@ def _save_annotation_to_db(node_id: str, ann_data: dict) -> bool:
         "apikey": supabase_key,
         "Authorization": f"Bearer {supabase_key}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
     }
 
     format_version = ann_data.get("format_version", 2)
@@ -47,12 +47,30 @@ def _save_annotation_to_db(node_id: str, ann_data: dict) -> bool:
         "updated_at": datetime.utcnow().isoformat(),
     }
 
+    annotations_url = f"{supabase_url}/rest/v1/annotations"
     resp = httpx.post(
-        f"{supabase_url}/rest/v1/annotations",
+        annotations_url,
+        params={"on_conflict": "node_id"},
         json=payload,
         headers=headers,
         timeout=15.0,
     )
+
+    # Some PostgREST/Supabase setups still return 409 on unique(node_id) without applying
+    # the merge. In that case, fall back to an explicit update of the existing row.
+    if resp.status_code == 409:
+        resp = httpx.patch(
+            annotations_url,
+            params={"node_id": f"eq.{node_id}"},
+            json={
+                "data": ann_data,
+                "format_version": format_version,
+                "updated_at": payload["updated_at"],
+            },
+            headers=headers,
+            timeout=15.0,
+        )
+
     resp.raise_for_status()
     return True
 
@@ -113,9 +131,11 @@ def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
         try:
             with open(annotation_path, "r", encoding="utf-8") as f:
                 ann_data = json.load(f)
-            _save_annotation_to_db(node_id, ann_data)
-            registered += 1
-            logger.info(f"Annotation saved to Supabase annotations table: node_id={node_id}")
+            if _save_annotation_to_db(node_id, ann_data):
+                registered += 1
+                logger.info(
+                    f"Annotation saved to Supabase annotations table: node_id={node_id}"
+                )
         except Exception as e:
             logger.warning(f"Failed to save annotation to Supabase: {e}")
 
@@ -235,8 +255,6 @@ def update_node_pdf_status(node_id: str):
         sys.path.insert(0, str(project_root))
 
     try:
-        import httpx
-
         # Graceful degradation: rd_core.pdf_status может зависеть от app модуля,
         # недоступного в Docker окружении сервера
         try:

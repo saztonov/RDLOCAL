@@ -1,46 +1,107 @@
-"""Утилиты для работы со статусами PDF документов"""
-import json
+"""Utilities for PDF document status checks."""
+from __future__ import annotations
+
 import logging
+import os
 from enum import Enum
+from pathlib import PurePosixPath
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
 
 class PDFStatus(str, Enum):
-    """Статус PDF документа"""
+    """Status of a PDF document."""
 
-    COMPLETE = "complete"  # Все файлы есть, блоки размечены
-    MISSING_FILES = "missing_files"  # Не хватает файлов
-    MISSING_BLOCKS = "missing_blocks"  # Нет annotation или есть страницы без блоков
-    UNKNOWN = "unknown"  # Статус неизвестен
+    COMPLETE = "complete"
+    MISSING_FILES = "missing_files"
+    MISSING_BLOCKS = "missing_blocks"
+    UNKNOWN = "unknown"
+
+
+class _SupabaseStatusClient:
+    """Minimal REST client for server environments without the desktop `app` package."""
+
+    def __init__(self):
+        self._base_url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+        self._api_key = os.getenv("SUPABASE_KEY") or ""
+        if not self._base_url or not self._api_key:
+            raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not set")
+
+        self._headers = {
+            "apikey": self._api_key,
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _get(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        response = httpx.get(
+            f"{self._base_url}/rest/v1{path}",
+            params=params,
+            headers=self._headers,
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, list) else []
+
+    def get_node_files(self, node_id: str) -> list[dict[str, Any]]:
+        return self._get(
+            "/node_files",
+            {"node_id": f"eq.{node_id}", "select": "file_type"},
+        )
+
+    def has_annotation_in_db(self, node_id: str) -> bool:
+        rows = self._get(
+            "/annotations",
+            {"node_id": f"eq.{node_id}", "select": "id", "limit": 1},
+        )
+        return bool(rows)
+
+    def get_annotation_data_for_status(self, node_id: str) -> dict[str, Any] | None:
+        rows = self._get(
+            "/annotations",
+            {"node_id": f"eq.{node_id}", "select": "data", "limit": 1},
+        )
+        if not rows:
+            return None
+        return rows[0].get("data")
+
+
+def _create_status_client():
+    """Prefer the desktop client when available, otherwise use direct REST calls."""
+    try:
+        from app.tree_client import TreeClient
+
+        return TreeClient()
+    except Exception as exc:
+        logger.debug("Using Supabase REST fallback for PDF status checks: %s", exc)
+        return _SupabaseStatusClient()
+
+
+def _normalize_file_type(value: Any) -> str:
+    if hasattr(value, "value"):
+        value = value.value
+    elif isinstance(value, dict):
+        value = value.get("file_type")
+
+    if value is None:
+        return ""
+    return str(value).strip().lower()
 
 
 def calculate_pdf_status(
     r2_storage, node_id: str, r2_key: str, check_blocks: bool = True
 ) -> tuple[PDFStatus, str]:
-    """
-    Вычислить статус PDF документа
-
-    Args:
-        r2_storage: Экземпляр R2Storage
-        node_id: ID узла документа
-        r2_key: R2 ключ PDF файла
-        check_blocks: Проверять ли наличие блоков в аннотации
-
-    Returns:
-        Кортеж (статус, сообщение)
-    """
-    from pathlib import PurePosixPath
-
-    from app.tree_client import FileType, TreeClient
-
+    """Calculate PDF document status from R2 and Supabase state."""
     if not r2_key:
         return PDFStatus.UNKNOWN, "Нет R2 ключа"
 
     try:
-        client = TreeClient()
+        client = _create_status_client()
 
-        # Формируем ключи для связанных файлов
         pdf_path = PurePosixPath(r2_key)
         pdf_stem = pdf_path.stem
         pdf_parent = str(pdf_path.parent)
@@ -48,53 +109,52 @@ def calculate_pdf_status(
         ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
         res_r2_key = f"{pdf_parent}/{pdf_stem}_result.json"
 
-        # Проверяем наличие файлов на R2 одним запросом list_objects
         r2_objects = r2_storage.list_objects_with_metadata(f"{pdf_parent}/")
         r2_keys = {obj["Key"] for obj in r2_objects}
 
         has_ocr_html_r2 = ocr_r2_key in r2_keys
         has_result_json_r2 = res_r2_key in r2_keys
 
-        # Проверяем наличие аннотации в таблице annotations (Supabase)
         has_annotation = client.has_annotation_in_db(node_id)
 
-        # Проверяем наличие файлов в node_files (Supabase)
         try:
             node_files = client.get_node_files(node_id)
-            file_types_in_db = {nf.file_type for nf in node_files}
-        except Exception as e:
-            logger.error(f"Failed to get node files for {node_id}: {e}", exc_info=True)
+            file_types_in_db = {
+                _normalize_file_type(getattr(item, "file_type", item))
+                for item in node_files
+            }
+        except Exception as exc:
+            logger.error(
+                "Failed to get node files for %s: %s", node_id, exc, exc_info=True
+            )
             raise
 
-        has_ocr_html_db = FileType.OCR_HTML in file_types_in_db
-        has_result_json_db = FileType.RESULT_JSON in file_types_in_db
+        has_ocr_html_db = "ocr_html" in file_types_in_db
+        has_result_json_db = "result_json" in file_types_in_db
 
-        # Проверяем блоки если требуется — загружаем из Supabase
-        pages_without_blocks = []
+        pages_without_blocks: list[int] = []
         if check_blocks and has_annotation:
             try:
                 ann_data = client.get_annotation_data_for_status(node_id)
-                if ann_data:
-                    # Поддержка двух форматов: {"pages": [...]} или просто [...]
-                    if isinstance(ann_data, dict):
-                        pages = ann_data.get("pages", [])
-                    elif isinstance(ann_data, list):
-                        pages = ann_data
-                    else:
-                        pages = []
+                if isinstance(ann_data, dict):
+                    pages = ann_data.get("pages", [])
+                elif isinstance(ann_data, list):
+                    pages = ann_data
+                else:
+                    pages = []
 
-                    for page in pages:
-                        if isinstance(page, dict):
-                            page_num = page.get("page_number", -1)
-                            blocks = page.get("blocks", [])
-                            if not blocks:
-                                pages_without_blocks.append(page_num)
-            except Exception as e:
-                logger.error(f"Failed to check annotation blocks: {e}")
+                for page in pages:
+                    if not isinstance(page, dict):
+                        continue
+                    page_num = page.get("page_number", -1)
+                    blocks = page.get("blocks", [])
+                    if not blocks:
+                        pages_without_blocks.append(page_num)
+            except Exception as exc:
+                logger.error("Failed to check annotation blocks: %s", exc)
 
-        # Определяем статус и сообщение
-        missing_r2 = []
-        missing_db = []
+        missing_r2: list[str] = []
+        missing_db: list[str] = []
 
         if not has_ocr_html_r2:
             missing_r2.append("ocr.html")
@@ -105,49 +165,35 @@ def calculate_pdf_status(
         if not has_result_json_db:
             missing_db.append("result.json")
 
-        # Приоритет 3: Нет аннотации или есть страницы без блоков
         if not has_annotation:
             return PDFStatus.MISSING_BLOCKS, "Нет аннотации в базе данных"
-        elif pages_without_blocks:
+        if pages_without_blocks:
             pages_str = ", ".join(str(p) for p in sorted(pages_without_blocks))
             return PDFStatus.MISSING_BLOCKS, f"Страницы без блоков: {pages_str}"
-        # Приоритет 2: Не хватает файлов
-        elif missing_r2 or missing_db:
-            parts = []
+        if missing_r2 or missing_db:
+            parts: list[str] = []
             if missing_r2:
                 parts.append(f"R2: {', '.join(missing_r2)}")
             if missing_db:
                 parts.append(f"БД: {', '.join(missing_db)}")
-            message = "Отсутствует:\n" + "\n".join(parts)
-            return PDFStatus.MISSING_FILES, message
-        # Приоритет 1: Всё в порядке
-        else:
-            return PDFStatus.COMPLETE, "Все файлы на месте, блоки размечены"
+            return PDFStatus.MISSING_FILES, "Отсутствует:\n" + "\n".join(parts)
+        return PDFStatus.COMPLETE, "Все файлы на месте, блоки размечены"
 
-    except Exception as e:
-        logger.error(f"Failed to calculate PDF status: {e}", exc_info=True)
-        return PDFStatus.UNKNOWN, f"Ошибка проверки: {e}"
+    except Exception as exc:
+        logger.error("Failed to calculate PDF status: %s", exc, exc_info=True)
+        return PDFStatus.UNKNOWN, f"Ошибка проверки: {exc}"
 
 
 def update_pdf_status_in_db(
     client, node_id: str, status: PDFStatus, message: str = None
 ):
-    """
-    Обновить статус PDF в БД
-
-    Args:
-        client: TreeClient
-        node_id: ID узла документа
-        status: Статус
-        message: Сообщение (опционально)
-    """
+    """Update PDF status via the existing TreeClient-like interface."""
     try:
-        # Используем RPC функцию для обновления
-        response = client._request(
+        client._request(
             "post",
             "/rpc/update_pdf_status",
             json={"p_node_id": node_id, "p_status": status.value, "p_message": message},
         )
-        logger.debug(f"Updated PDF status for {node_id}: {status.value}")
-    except Exception as e:
-        logger.error(f"Failed to update PDF status in DB: {e}")
+        logger.debug("Updated PDF status for %s: %s", node_id, status.value)
+    except Exception as exc:
+        logger.error("Failed to update PDF status in DB: %s", exc)

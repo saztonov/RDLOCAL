@@ -91,6 +91,38 @@ def strip_untagged_reasoning(text: str, backend_name: str = "LLM") -> str:
     return html_part
 
 
+def extract_message_text(message: dict) -> str:
+    """Normalize provider-specific message payloads to plain text.
+
+    Handles content as str, list[str|dict], None, or other types.
+    Used by OpenRouter sync/async backends.
+    """
+    content = message.get("content")
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                text = item
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
+            else:
+                text = ""
+
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+
+        return "\n".join(parts).strip()
+
+    if content is None:
+        return ""
+
+    return str(content).strip()
+
+
 def image_to_base64(image: Image.Image, max_size: int = 1500) -> str:
     """
     Конвертировать PIL Image в base64 с опциональным ресайзом
