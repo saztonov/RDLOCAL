@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+from app.annotation_db import AnnotationDBIO
 from app.gui.folder_settings_dialog import get_projects_dir
 from app.tree_client import NodeType, TreeNode
 from rd_core.annotation_canonicalizer import (
@@ -49,7 +50,7 @@ class AnnotationOperations:
     def copy_annotation(self, node: TreeNode) -> None:
         """Скопировать аннотацию документа из Supabase в буфер"""
         try:
-            document = AnnotationIO.load_from_db(node.id)
+            document = AnnotationDBIO.load_from_db(node.id)
 
             if document:
                 self._copied_annotation = {
@@ -217,7 +218,7 @@ class AnnotationOperations:
                 )
                 return
 
-            success = AnnotationIO.save_to_db(document, node.id)
+            success = AnnotationDBIO.save_to_db(document, node.id)
             if success:
                 # Обновляем флаг has_annotation
                 attrs = node.attributes.copy()
@@ -284,7 +285,7 @@ class AnnotationOperations:
                 return
 
             # Сохраняем в Supabase
-            success = AnnotationIO.save_to_db(loaded_doc, node.id)
+            success = AnnotationDBIO.save_to_db(loaded_doc, node.id)
             if not success:
                 QMessageBox.critical(
                     self._widget, "Ошибка", "Не удалось сохранить аннотацию в Supabase"
@@ -328,7 +329,6 @@ class AnnotationOperations:
             return
 
         from app.tree_client import TreeClient
-        from rd_core.annotation_io import AnnotationIO
         from rd_core.models import BlockType, Document
 
         try:
@@ -387,7 +387,7 @@ class AnnotationOperations:
                 return
 
             # Сохранить аннотацию обратно в Supabase
-            success = AnnotationIO.save_to_db(doc, node.id)
+            success = AnnotationDBIO.save_to_db(doc, node.id)
             if not success:
                 QMessageBox.critical(
                     self._widget, "Ошибка", "Не удалось сохранить аннотацию"
@@ -424,7 +424,7 @@ class AnnotationOperations:
         from rd_core.pdf_status import calculate_pdf_status
         from app.gui.tree_node_operations import NODE_ICONS
 
-        status, message = calculate_pdf_status(r2, node.id, r2_key)
+        status, message = calculate_pdf_status(r2, node.id, r2_key, client=self._widget.client)
         self._widget.client.update_pdf_status(node.id, status.value, message)
 
         # Обновляем отображение в дереве

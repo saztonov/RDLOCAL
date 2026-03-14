@@ -200,13 +200,13 @@ class TreeSplitMixin:
 
     def _split_annotation_if_exists(self, node_id, local_path, r2, parts):
         """Загрузить и разделить аннотацию, если она существует."""
-        from rd_core.annotation_io import AnnotationIO
+        from app.annotation_db import AnnotationDBIO
         from rd_core.annotation_split import split_annotation
 
         # Загружаем аннотацию из Supabase (привязана к node_id)
         source_doc = None
         if node_id:
-            source_doc = AnnotationIO.load_from_db(node_id)
+            source_doc = AnnotationDBIO.load_from_db(node_id)
 
         if not source_doc or not source_doc.pages:
             return None
@@ -293,9 +293,9 @@ class TreeSplitMixin:
 
     def _upload_split_annotation(self, ann_result, doc_node, pdf_r2_key, r2):
         """Сохранить аннотацию для одной части в Supabase."""
-        from rd_core.annotation_io import AnnotationIO
+        from app.annotation_db import AnnotationDBIO
 
-        success = AnnotationIO.save_to_db(ann_result.document, doc_node.id)
+        success = AnnotationDBIO.save_to_db(ann_result.document, doc_node.id)
         if not success:
             raise RuntimeError("Не удалось сохранить аннотацию в Supabase")
 

@@ -71,14 +71,8 @@ class _SupabaseStatusClient:
 
 
 def _create_status_client():
-    """Prefer the desktop client when available, otherwise use direct REST calls."""
-    try:
-        from app.tree_client import TreeClient
-
-        return TreeClient()
-    except Exception as exc:
-        logger.debug("Using Supabase REST fallback for PDF status checks: %s", exc)
-        return _SupabaseStatusClient()
+    """Create a Supabase REST client for PDF status checks."""
+    return _SupabaseStatusClient()
 
 
 def _normalize_file_type(value: Any) -> str:
@@ -93,14 +87,21 @@ def _normalize_file_type(value: Any) -> str:
 
 
 def calculate_pdf_status(
-    r2_storage, node_id: str, r2_key: str, check_blocks: bool = True
+    r2_storage, node_id: str, r2_key: str, check_blocks: bool = True,
+    client=None,
 ) -> tuple[PDFStatus, str]:
-    """Calculate PDF document status from R2 and Supabase state."""
+    """Calculate PDF document status from R2 and Supabase state.
+
+    Args:
+        client: Optional pre-created client (TreeClient or compatible).
+                If None, uses Supabase REST fallback.
+    """
     if not r2_key:
         return PDFStatus.UNKNOWN, "Нет R2 ключа"
 
     try:
-        client = _create_status_client()
+        if client is None:
+            client = _create_status_client()
 
         pdf_path = PurePosixPath(r2_key)
         pdf_stem = pdf_path.stem

@@ -115,6 +115,42 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/health/ready")
+async def readiness() -> JSONResponse:
+    """Readiness check — проверяет Redis, Supabase и наличие OCR API-ключей."""
+    checks: dict[str, bool] = {"redis": False, "supabase": False, "config": False}
+
+    # Redis: ping через Celery broker
+    try:
+        from .celery_app import celery_app
+
+        conn = celery_app.connection()
+        conn.ensure_connection(max_retries=1, timeout=3)
+        conn.close()
+        checks["redis"] = True
+    except Exception:
+        _logger.warning("Readiness: Redis ping failed", exc_info=True)
+
+    # Supabase: простой запрос
+    try:
+        from .storage_client import get_client
+
+        client = get_client()
+        client.table("jobs").select("id").limit(1).execute()
+        checks["supabase"] = True
+    except Exception:
+        _logger.warning("Readiness: Supabase check failed", exc_info=True)
+
+    # Config: хотя бы один OCR ключ
+    checks["config"] = bool(settings.openrouter_api_key or settings.datalab_api_key)
+
+    ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"ready": ready, "checks": checks},
+    )
+
+
 @app.get("/queue")
 def queue_status() -> dict:
     """Queue status для мониторинга backpressure"""

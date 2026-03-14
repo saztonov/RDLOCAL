@@ -107,10 +107,10 @@ class JobCreationMixin:
                 # чтобы сервер увидел новые блоки при merge
                 should_save = cleared > 0 or is_smart_mode
                 if should_save:
-                    from rd_core.annotation_io import AnnotationIO
+                    from app.annotation_db import AnnotationDBIO
 
                     if node_id and self.main_window.annotation_document:
-                        success = AnnotationIO.save_to_db(
+                        success = AnnotationDBIO.save_to_db(
                             self.main_window.annotation_document, node_id
                         )
                         if success:

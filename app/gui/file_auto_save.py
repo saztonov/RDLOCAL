@@ -88,7 +88,7 @@ class FileAutoSaveMixin:
                     if r2_key:
                         client = TreeClient()
                         r2 = R2Storage()
-                        status, message = calculate_pdf_status(r2, node_id, r2_key)
+                        status, message = calculate_pdf_status(r2, node_id, r2_key, client=client)
                         client.update_pdf_status(node_id, status.value, message)
 
                         item = self.project_tree._node_map.get(node_id)

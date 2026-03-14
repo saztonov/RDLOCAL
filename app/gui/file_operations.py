@@ -14,6 +14,7 @@ from rd_core.annotation_canonicalizer import (
     canonicalize_annotation_document,
     get_pdf_preview_page_sizes,
 )
+from app.annotation_db import AnnotationDBIO
 from rd_core.annotation_io import AnnotationIO
 from rd_core.models import Document, Page
 from rd_core.pdf_utils import PDFDocument
@@ -80,7 +81,8 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 if node.node_type.value == "document" and self._current_r2_key:
                     r2 = R2Storage()
                     status, message = calculate_pdf_status(
-                        r2, self._current_node_id, self._current_r2_key
+                        r2, self._current_node_id, self._current_r2_key,
+                        client=client,
                     )
                     client.update_pdf_status(
                         self._current_node_id, status.value, message
@@ -121,7 +123,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         # 1. Попытка загрузить из Supabase (основной источник)
         if self._current_node_id:
             try:
-                loaded = AnnotationIO.load_from_db(self._current_node_id)
+                loaded = AnnotationDBIO.load_from_db(self._current_node_id)
                 if loaded:
                     self.annotation_document = loaded
                     self._canonicalize_loaded_annotation(pdf_path)
@@ -173,7 +175,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                 self._canonicalize_loaded_annotation(pdf_path)
 
                 # Мигрируем в Supabase
-                success = AnnotationIO.save_to_db(
+                success = AnnotationDBIO.save_to_db(
                     self.annotation_document, self._current_node_id
                 )
                 if success:
@@ -225,7 +227,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
                         self._canonicalize_loaded_annotation(pdf_path)
 
                         # Мигрируем в Supabase
-                        AnnotationIO.save_to_db(
+                        AnnotationDBIO.save_to_db(
                             self.annotation_document, self._current_node_id
                         )
 
@@ -348,7 +350,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
 
         # Если есть node_id — сохраняем в Supabase
         if self._current_node_id:
-            success = AnnotationIO.save_to_db(
+            success = AnnotationDBIO.save_to_db(
                 self.annotation_document, self._current_node_id
             )
             if success:
@@ -417,7 +419,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
 
             # Сохраняем в Supabase если есть node_id
             if self._current_node_id:
-                AnnotationIO.save_to_db(loaded_doc, self._current_node_id)
+                AnnotationDBIO.save_to_db(loaded_doc, self._current_node_id)
                 show_toast(self, "Разметка загружена и сохранена в Supabase", success=True)
             else:
                 show_toast(self, "Разметка загружена", success=True)
@@ -437,7 +439,7 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
 
         try:
             # Загружаем из Supabase
-            loaded_doc = AnnotationIO.load_from_db(self._current_node_id)
+            loaded_doc = AnnotationDBIO.load_from_db(self._current_node_id)
             if not loaded_doc:
                 logger.warning(f"Не удалось загрузить аннотацию из Supabase: {self._current_node_id}")
                 return

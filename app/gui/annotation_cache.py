@@ -101,9 +101,9 @@ class AnnotationCache(QObject):
     def _background_sync_db(self, node_id: str, doc: Document):
         """Фоновая синхронизация с Supabase"""
         try:
-            from rd_core.annotation_io import AnnotationIO
+            from app.annotation_db import AnnotationDBIO
 
-            success = AnnotationIO.save_to_db(doc, node_id)
+            success = AnnotationDBIO.save_to_db(doc, node_id)
             if success:
                 logger.info(f"Annotation synced to Supabase: {node_id}")
                 self.synced.emit(node_id)

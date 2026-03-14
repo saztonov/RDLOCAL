@@ -5,14 +5,13 @@ import json
 import shutil
 import tempfile
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .celery_app import celery_app
 from .debounced_updater import cleanup_updater, get_debounced_updater
 from .logging_config import get_logger
 from .memory_utils import force_gc, log_memory, log_memory_delta
-from .rate_limiter import get_datalab_limiter
 from .settings import settings
 from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
 from .storage import get_job, register_ocr_results_to_node, update_job_status
@@ -69,14 +68,8 @@ def run_ocr_task(self, job_id: str) -> dict:
         # Проверка 2: общее время выполнения
         if job.started_at:
             try:
-                # Парсим ISO формат с учётом возможного наличия 'Z' или '+00:00'
-                started_str = job.started_at.replace('Z', '+00:00')
-                if '+' not in started_str and started_str.endswith('+00:00') is False:
-                    started = datetime.fromisoformat(started_str)
-                else:
-                    # Убираем timezone info для сравнения с utcnow()
-                    started = datetime.fromisoformat(started_str.split('+')[0])
-                runtime_hours = (datetime.utcnow() - started).total_seconds() / 3600
+                started = datetime.fromisoformat(job.started_at.replace('Z', '+00:00'))
+                runtime_hours = (datetime.now(timezone.utc) - started).total_seconds() / 3600
 
                 if runtime_hours > settings.job_max_runtime_hours:
                     error_msg = f"Превышено время выполнения: {runtime_hours:.1f}h (лимит: {settings.job_max_runtime_hours}h)"
@@ -133,7 +126,6 @@ def run_ocr_task(self, job_id: str) -> dict:
             return {"status": "done", "job_id": job_id}
 
         from rd_core.models import Block
-        from rd_core.ocr import create_ocr_engine
 
         blocks = [Block.from_dict(b, migrate_ids=False)[0] for b in blocks_data]
         total_blocks = len(blocks)
@@ -145,103 +137,21 @@ def run_ocr_task(self, job_id: str) -> dict:
 
         update_job_status(job.id, "processing", progress=0.1, status_message=f"⚙️ Подготовка: {total_blocks} блоков")
 
-        # Настройки из Supabase
-        job_settings = job.settings
-        text_model = (job_settings.text_model if job_settings else "") or ""
-        table_model = (job_settings.table_model if job_settings else "") or ""
-        image_model = (job_settings.image_model if job_settings else "") or ""
-        stamp_model = (job_settings.stamp_model if job_settings else "") or ""
+        # Создание бэкендов через фабрику
+        from .backend_factory import create_job_backends
 
-        engine = job.engine or "openrouter"
-        datalab_limiter = get_datalab_limiter() if engine == "datalab" else None
+        backends = create_job_backends(job)
+        engine = backends.engine
+        strip_backend = backends.strip
+        image_backend = backends.image
+        stamp_backend = backends.stamp
 
-        if engine == "chandra" and settings.chandra_base_url:
-            strip_backend = create_ocr_engine(
-                "chandra",
-                base_url=settings.chandra_base_url,
-            )
-            strip_backend.preload()
-            acquire_chandra(job_id)
+        if backends.needs_lmstudio:
+            if engine == "chandra":
+                acquire_chandra(job_id)
+            elif engine == "qwen":
+                acquire_lmstudio("qwen", job_id)
             lmstudio_acquired = True
-        elif engine == "qwen" and settings.qwen_base_url:
-            strip_backend = create_ocr_engine(
-                "qwen",
-                base_url=settings.qwen_base_url,
-                mode="text",
-            )
-            strip_backend.preload()
-            acquire_lmstudio("qwen", job_id)
-            lmstudio_acquired = True
-        elif engine == "datalab" and settings.datalab_api_key:
-            strip_backend = create_ocr_engine(
-                "datalab",
-                api_key=settings.datalab_api_key,
-                rate_limiter=datalab_limiter,
-                poll_interval=settings.datalab_poll_interval,
-                poll_max_attempts=settings.datalab_poll_max_attempts,
-                max_retries=settings.datalab_max_retries,
-                extras=settings.datalab_extras,
-                quality_threshold=settings.datalab_quality_threshold,
-            )
-        elif settings.openrouter_api_key:
-            strip_model = text_model or table_model or "qwen/qwen3-vl-30b-a3b-instruct"
-            strip_backend = create_ocr_engine(
-                "openrouter",
-                api_key=settings.openrouter_api_key,
-                model_name=strip_model,
-                base_url=settings.openrouter_base_url,
-            )
-        else:
-            strip_backend = create_ocr_engine("dummy")
-
-        if settings.openrouter_api_key:
-            img_model = (
-                image_model
-                or text_model
-                or table_model
-                or "qwen/qwen3-vl-30b-a3b-instruct"
-            )
-            logger.info(f"IMAGE модель: {img_model}")
-            image_backend = create_ocr_engine(
-                "openrouter",
-                api_key=settings.openrouter_api_key,
-                model_name=img_model,
-                base_url=settings.openrouter_base_url,
-            )
-
-            # Штампы: через Qwen (локальная модель) или OpenRouter
-            if engine == "qwen" and settings.qwen_base_url:
-                logger.info("STAMP модель: Qwen (LM Studio, mode=stamp)")
-                stamp_backend = create_ocr_engine(
-                    "qwen",
-                    base_url=settings.qwen_base_url,
-                    mode="stamp",
-                )
-            else:
-                stmp_model = (
-                    stamp_model
-                    or image_model
-                    or text_model
-                    or table_model
-                    or "qwen/qwen3-vl-30b-a3b-instruct"
-                )
-                logger.info(f"STAMP модель: {stmp_model}")
-                stamp_backend = create_ocr_engine(
-                    "openrouter",
-                    api_key=settings.openrouter_api_key,
-                    model_name=stmp_model,
-                    base_url=settings.openrouter_base_url,
-                )
-        else:
-            image_backend = create_ocr_engine("dummy")
-            if engine == "qwen" and settings.qwen_base_url:
-                stamp_backend = create_ocr_engine(
-                    "qwen",
-                    base_url=settings.qwen_base_url,
-                    mode="stamp",
-                )
-            else:
-                stamp_backend = create_ocr_engine("dummy")
 
         # OCR обработка (двухпроходный алгоритм)
         run_two_pass_ocr(
