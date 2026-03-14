@@ -87,17 +87,6 @@ class NodeFileResponse(BaseModel):
     created_at: str
 
 
-class ImageCategoryResponse(BaseModel):
-    id: str
-    name: str
-    code: str
-    description: Optional[str]
-    system_prompt: Optional[str]
-    user_prompt: Optional[str]
-    is_default: bool
-    sort_order: int
-
-
 # === Endpoints ===
 
 
@@ -226,37 +215,6 @@ def delete_node_file_endpoint(file_id: str):
         if not success:
             raise HTTPException(status_code=404, detail="File not found")
         return {"ok": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/image-categories", response_model=List[ImageCategoryResponse])
-def get_image_categories_endpoint():
-    """Получить категории изображений"""
-    try:
-        client = get_client()
-        result = (
-            client.table("image_categories")
-            .select("*")
-            .order("sort_order,name")
-            .execute()
-        )
-        return result.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/image-categories/code/{code}", response_model=ImageCategoryResponse)
-def get_image_category_by_code_endpoint(code: str):
-    """Получить категорию по коду"""
-    try:
-        client = get_client()
-        result = client.table("image_categories").select("*").eq("code", code).execute()
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Category not found")
-        return result.data[0]
     except HTTPException:
         raise
     except Exception as e:

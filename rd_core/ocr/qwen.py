@@ -165,7 +165,11 @@ class QwenBackend:
         try:
             model_id = self._discover_model()
             img_b64 = image_to_base64(image)
-            payload = build_payload(model_id, self.mode, img_b64)
+            payload = build_payload(
+                model_id, self.mode, img_b64,
+                system_prompt=prompt.get("system") if prompt else None,
+                user_prompt=prompt.get("user") if prompt else None,
+            )
 
             last_error = None
             for attempt in range(self._MAX_APP_RETRIES + 1):

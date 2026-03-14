@@ -45,12 +45,14 @@ class JobReadMixin:
         return None
 
     def list_jobs(
-        self, document_id: Optional[str] = None
+        self, document_id: Optional[str] = None, since: Optional[str] = None
     ) -> tuple[List[JobInfo], str]:
-        """Получить список задач."""
+        """Получить список задач. При since — только изменённые."""
         params = {}
         if document_id:
             params["document_id"] = document_id
+        if since:
+            params["since"] = since
 
         logger.debug(f"list_jobs: GET {self.base_url}/jobs params={params}")
         resp = self._request_with_retry("get", "/jobs", params=params)
@@ -61,16 +63,8 @@ class JobReadMixin:
         return jobs, data.get("server_time", "")
 
     def get_jobs_changes(self, since: str) -> tuple[List[JobInfo], str]:
-        """Получить задачи, изменённые после указанного времени."""
-        params = {"since": since}
-        logger.debug(
-            f"get_jobs_changes: GET {self.base_url}/jobs/changes params={params}"
-        )
-        resp = self._request_with_retry("get", "/jobs/changes", params=params)
-        data = resp.json()
-
-        jobs = [_parse_job(j) for j in data.get("jobs", [])]
-        return jobs, data.get("server_time", "")
+        """Deprecated: используйте list_jobs(since=...)."""
+        return self.list_jobs(since=since)
 
     def get_job(self, job_id: str) -> JobInfo:
         """Получить информацию о задаче."""

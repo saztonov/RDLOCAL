@@ -127,13 +127,10 @@ async def restart_job_handler(
 
             s3_client, bucket_name = get_r2_sync_client()
 
-            from services.remote_ocr.server.r2_keys import annotation_key, resolve_r2_prefix
+            from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key, resolve_r2_prefix
 
             r2_prefix = resolve_r2_prefix(job)
-            if job.node_id:
-                blocks_key = annotation_key(r2_prefix, job.document_name)
-            else:
-                blocks_key = f"{job.r2_prefix}/annotation.json"
+            blocks_key = make_blocks_key(r2_prefix, job.document_name, is_node=bool(job.node_id))
 
             s3_client.put_object(
                 Bucket=bucket_name,

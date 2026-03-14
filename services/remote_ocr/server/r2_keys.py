@@ -76,3 +76,25 @@ def blocks_index_key(r2_prefix: str, doc_name: str) -> str:
 def crop_key(r2_prefix: str, block_id: str) -> str:
     """R2-ключ для кропа блока: {prefix}/crops/{block_id}.pdf"""
     return f"{r2_prefix}/crops/{block_id}.pdf"
+
+
+def pdf_key(r2_prefix: str, doc_name: str, *, is_node: bool) -> str:
+    """R2-ключ для PDF.
+
+    Node: {prefix}/{doc_name} (оригинальное имя файла).
+    Standalone: {prefix}/document.pdf (фиксированное имя).
+    """
+    if is_node:
+        return f"{r2_prefix}/{doc_name}"
+    return f"{r2_prefix}/document.pdf"
+
+
+def blocks_key(r2_prefix: str, doc_name: str, *, is_node: bool) -> str:
+    """R2-ключ для blocks/annotation файла.
+
+    Node: {prefix}/{stem}_annotation.json.
+    Standalone: {prefix}/blocks.json.
+    """
+    if is_node:
+        return annotation_key(r2_prefix, doc_name)
+    return f"{r2_prefix}/blocks.json"

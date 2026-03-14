@@ -13,20 +13,21 @@ def get_image_block_prompt(
     block_prompt: Optional[dict],
     category_id: Optional[str] = None,
     category_code: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> Optional[dict]:
     """
-    Получить промпт для IMAGE блока с учётом категории.
-    Приоритет: block.prompt > category prompt > default category
+    Получить промпт для IMAGE блока с учётом категории и движка.
+    Приоритет: block.prompt > category prompt (из config.yaml)
     """
     # Если блок имеет собственный промпт — используем его
     if block_prompt and (block_prompt.get("system") or block_prompt.get("user")):
         return block_prompt
 
-    # Иначе получаем промпт из категории
+    # Иначе получаем промпт из config.yaml
     try:
         from .storage_settings import get_category_prompt
 
-        category_prompt = get_category_prompt(category_id, category_code)
+        category_prompt = get_category_prompt(category_id, category_code, engine=engine)
         if category_prompt:
             return category_prompt
     except Exception as e:
@@ -44,10 +45,11 @@ def fill_image_prompt_variables(
     pdfplumber_text: str,
     category_id: Optional[str] = None,
     category_code: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> dict:
     """
     Заполнить переменные в промпте для IMAGE блока.
-    Если prompt_data пуст — берёт промпт из категории.
+    Если prompt_data пуст — берёт промпт из config.yaml по категории и движку.
 
     Переменные:
         {DOC_NAME} - имя PDF документа
@@ -56,8 +58,10 @@ def fill_image_prompt_variables(
         {OPERATOR_HINT} - подсказка оператора (или пустая строка)
         {PDFPLUMBER_TEXT} - извлечённый текст pdfplumber (или пустая строка)
     """
-    # Получаем промпт с учётом категории
-    effective_prompt = get_image_block_prompt(prompt_data, category_id, category_code)
+    # Получаем промпт с учётом категории и движка
+    effective_prompt = get_image_block_prompt(
+        prompt_data, category_id, category_code, engine=engine
+    )
 
     if not effective_prompt:
         return {

@@ -275,13 +275,6 @@ class MainWindow(
         dialog = VersionSettingsDialog(self)
         dialog.exec()
 
-    def _show_image_categories(self):
-        """Показать диалог настройки категорий изображений"""
-        from app.gui.image_categories_dialog import ImageCategoriesDialog
-
-        dialog = ImageCategoriesDialog(self)
-        dialog.exec()
-
     def _show_hotkeys_dialog(self):
         """Показать диалог настройки горячих клавиш"""
         from app.gui.hotkeys_dialog import HotkeysDialog

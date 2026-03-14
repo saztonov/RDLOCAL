@@ -72,13 +72,6 @@ class MenuSetupMixin:
 
         settings_menu.addSeparator()
 
-        # Настройка категорий изображений
-        image_categories_action = QAction("🖼️ Настройка категорий изображений", self)
-        image_categories_action.triggered.connect(self._show_image_categories)
-        settings_menu.addAction(image_categories_action)
-
-        settings_menu.addSeparator()
-
         hotkeys_action = QAction("⌨️ Горячие клавиши", self)
         hotkeys_action.triggered.connect(self._show_hotkeys_dialog)
         settings_menu.addAction(hotkeys_action)

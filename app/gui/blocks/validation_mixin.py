@@ -6,8 +6,6 @@ from PySide6.QtWidgets import QMessageBox
 class BlockValidationMixin:
     """Миксин для валидации документа и блоков"""
 
-    _categories_cache = None
-
     def _check_document_locked_for_editing(self) -> bool:
         """
         Проверить заблокирован ли текущий документ.
@@ -34,23 +32,10 @@ class BlockValidationMixin:
                 return True
         return False
 
+    _CATEGORY_NAMES = {"default": "По умолчанию", "stamp": "Штамп"}
+
     def _get_category_name(self, category_id: str) -> str:
-        """Получить название категории по ID"""
+        """Получить название категории по ID/коду"""
         if not category_id:
             return ""
-
-        if BlockValidationMixin._categories_cache is None:
-            try:
-                from app.tree_client import TreeClient
-
-                client = TreeClient()
-                if client.is_available():
-                    BlockValidationMixin._categories_cache = {
-                        cat["id"]: cat["name"] for cat in client.get_image_categories()
-                    }
-                else:
-                    BlockValidationMixin._categories_cache = {}
-            except Exception:
-                BlockValidationMixin._categories_cache = {}
-
-        return BlockValidationMixin._categories_cache.get(category_id, "")
+        return self._CATEGORY_NAMES.get(category_id, category_id)

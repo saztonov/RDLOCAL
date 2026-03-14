@@ -21,70 +21,57 @@ class PollingControllerMixin:
         self._is_fetching = True
         self._is_manual_refresh = manual
 
-        # Проверяем флаг принудительной полной загрузки (после ошибки)
-        force_full = getattr(self, "_force_full_refresh", False)
-
-        if manual or force_full:
-            self.status_label.setText("🔄 Загрузка...")
-            # При ручном обновлении или после ошибки - полный список
-            self._executor.submit(self._fetch_jobs_bg)
-        elif self._last_server_time and self._jobs_cache:
-            # Incremental polling - только изменения
-            self._executor.submit(self._fetch_changes_bg)
-        else:
-            # Первая загрузка - полный список
-            self._executor.submit(self._fetch_jobs_bg)
-
-    def _fetch_jobs_bg(self):
-        """Фоновая загрузка полного списка задач"""
-        client = self._get_client()
-        if client is None:
-            self._signals.jobs_error.emit("Ошибка клиента")
-            return
-        try:
-            logger.debug(f"Fetching full jobs list from {client.base_url}")
-            jobs, server_time = client.list_jobs(document_id=None)
-            logger.debug(f"Fetched {len(jobs)} jobs, server_time={server_time}")
-            self._signals.jobs_loaded.emit(jobs, server_time)
-        except Exception as e:
-            logger.error(
-                f"Ошибка получения списка задач от {client.base_url}: {e}",
-                exc_info=True,
-            )
-            self._signals.jobs_error.emit(str(e))
-
-    def _fetch_changes_bg(self):
-        """Фоновая загрузка только изменений (incremental polling)"""
-        client = self._get_client()
-        if client is None:
-            self._signals.jobs_error.emit("Ошибка клиента")
-            return
-        try:
-            logger.debug(f"Fetching job changes since {self._last_server_time}")
-            changed_jobs, server_time = client.get_jobs_changes(self._last_server_time)
-            logger.debug(f"Fetched {len(changed_jobs)} changed jobs")
-
-            if changed_jobs:
-                logger.info(f"Получено {len(changed_jobs)} изменений с сервера")
-
-            # Обновляем кеш изменёнными задачами
-            for job in changed_jobs:
-                self._jobs_cache[job.id] = job
-
-            # Обновляем server_time
-            if server_time:
-                self._last_server_time = server_time
-
-            # Отправляем полный список из кеша
-            all_jobs = list(self._jobs_cache.values())
-            # Сортируем по приоритету (меньше = раньше), затем по времени создания
-            all_jobs.sort(key=lambda j: (j.priority, j.created_at))
-            self._signals.jobs_loaded.emit(all_jobs, server_time or self._last_server_time or "")
-        except Exception as e:
-            logger.error(f"Ошибка получения изменений: {e}", exc_info=True)
-            # При ошибке incremental - НЕ очищаем кеш, пробуем полную загрузку
-            # при следующем poll
+        if manual:
             self._force_full_refresh = True
+            self.status_label.setText("🔄 Загрузка...")
+
+        self._executor.submit(self._fetch_bg)
+
+    def _fetch_bg(self):
+        """Фоновая загрузка задач (полная или дельта через единый endpoint)."""
+        client = self._get_client()
+        if client is None:
+            self._signals.jobs_error.emit("Ошибка клиента")
+            return
+
+        force_full = getattr(self, "_force_full_refresh", False)
+        use_delta = (
+            self._last_server_time
+            and self._jobs_cache
+            and not force_full
+        )
+
+        try:
+            if use_delta:
+                logger.debug(f"Fetching job changes since {self._last_server_time}")
+                jobs, server_time = client.list_jobs(since=self._last_server_time)
+                logger.debug(f"Fetched {len(jobs)} changed jobs")
+
+                if jobs:
+                    logger.info(f"Получено {len(jobs)} изменений с сервера")
+
+                # Обновляем кеш изменёнными задачами
+                for job in jobs:
+                    self._jobs_cache[job.id] = job
+
+                if server_time:
+                    self._last_server_time = server_time
+
+                # Отправляем полный список из кеша
+                all_jobs = list(self._jobs_cache.values())
+                all_jobs.sort(key=lambda j: (j.priority, j.created_at))
+                self._signals.jobs_loaded.emit(all_jobs, server_time or self._last_server_time or "")
+            else:
+                logger.debug(f"Fetching full jobs list from {client.base_url}")
+                jobs, server_time = client.list_jobs(document_id=None)
+                logger.debug(f"Fetched {len(jobs)} jobs, server_time={server_time}")
+                self._signals.jobs_loaded.emit(jobs, server_time)
+
+        except Exception as e:
+            logger.error(f"Ошибка получения задач: {e}", exc_info=True)
+            if use_delta:
+                # При ошибке delta — пробуем полную загрузку при следующем poll
+                self._force_full_refresh = True
             self._signals.jobs_error.emit(str(e))
 
     def _on_jobs_loaded(self, jobs, server_time: str = ""):

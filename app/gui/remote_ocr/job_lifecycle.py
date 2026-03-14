@@ -84,8 +84,8 @@ class JobLifecycleMixin:
             return
 
         try:
-            jobs, _ = client.list_jobs()
-            active_jobs = [j for j in jobs if j.status in ("queued", "processing", "paused")]
+            cached_jobs = list(self._jobs_cache.values()) if self._jobs_cache else client.list_jobs()[0]
+            active_jobs = [j for j in cached_jobs if j.status in ("queued", "processing", "paused")]
 
             if not active_jobs:
                 from app.gui.toast import show_toast
@@ -166,7 +166,7 @@ class JobLifecycleMixin:
             return
 
         try:
-            jobs, _ = client.list_jobs()
+            jobs = list(self._jobs_cache.values()) if self._jobs_cache else client.list_jobs()[0]
             deleted = 0
             errors = 0
 

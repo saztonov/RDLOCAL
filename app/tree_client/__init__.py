@@ -6,7 +6,6 @@
 - nodes.py - CRUD операции с узлами
 - status.py - PDF статусы и блокировка
 - files.py - Работа с node_files
-- categories.py - Категории изображений
 - path_v2.py - Materialized path операции
 - annotations.py - CRUD аннотаций (таблица annotations)
 """
@@ -24,7 +23,6 @@ from app.tree_models import (
 )
 
 from .annotations import TreeAnnotationsMixin
-from .categories import TreeCategoriesMixin
 from .core import TreeClientCore
 from .files import TreeFilesMixin
 from .nodes import TreeNodesMixin
@@ -49,7 +47,6 @@ class TreeClient(
     TreeNodesMixin,
     TreeStatusMixin,
     TreeFilesMixin,
-    TreeCategoriesMixin,
     TreePathMixin,
     TreeAnnotationsMixin,
 ):
@@ -61,7 +58,6 @@ class TreeClient(
     - TreeNodesMixin: CRUD узлов (get_node, create_node, update_node, delete_node)
     - TreeStatusMixin: PDF статусы (get_pdf_status, update_pdf_status, lock/unlock)
     - TreeFilesMixin: Файлы узлов (add_node_file, get_node_files, upsert_node_file)
-    - TreeCategoriesMixin: Категории изображений
     - TreePathMixin: Операции с materialized path (get_descendants, get_ancestors)
     - TreeAnnotationsMixin: CRUD аннотаций (таблица annotations)
     """

@@ -21,10 +21,34 @@ from ..memory_utils import force_gc, log_memory, log_memory_delta
 from ..rate_limiter import get_unified_async_limiter
 from ..settings import settings
 
+from ..ocr_constants import ERROR_PREFIX, NON_RETRIABLE_PREFIX
+
 logger = get_logger(__name__)
 
 # Интервал сохранения checkpoint (каждые N обработанных элементов)
 CHECKPOINT_SAVE_INTERVAL = 10
+
+
+def _should_retry_ocr(text: Optional[str], item_id: str, attempt: int, max_retries: int) -> bool:
+    """Проверить результат OCR и решить, нужен ли retry.
+
+    Returns:
+        True если нужно продолжить retry, False если результат финальный.
+    """
+    # Успех
+    if text and not text.startswith(ERROR_PREFIX):
+        return False
+    # Неповторяемая ошибка — retry бессмысленно
+    if text and text.startswith(NON_RETRIABLE_PREFIX):
+        logger.warning(f"PASS2 ASYNC: {item_id} неповторяемая ошибка, пропускаем retry")
+        return False
+    # Есть ещё попытки
+    if attempt < max_retries:
+        err_preview = (text or "пусто")[:80]
+        logger.warning(f"PASS2 ASYNC: {item_id} ошибка OCR ({err_preview}), будет retry")
+        return True
+    # Последняя попытка — оставляем как есть
+    return False
 
 
 async def pass2_ocr_from_manifest_async(
@@ -146,9 +170,6 @@ async def pass2_ocr_from_manifest_async(
     )
     _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 1
     _STRIP_RETRY_DELAYS = [30, 60] if _is_lmstudio else [5]
-    _ERROR_PREFIX = "[Ошибка"
-    _NON_RETRIABLE_PREFIX = "[НеПовторяемая"
-
     # Retry для IMAGE блоков (одинаковая логика)
     _IMAGE_MAX_RETRIES = 2 if _is_lmstudio else 1
     _IMAGE_RETRY_DELAYS = [30, 60] if _is_lmstudio else [10]
@@ -232,24 +253,8 @@ async def pass2_ocr_from_manifest_async(
                     finally:
                         merged_image.close()
 
-                    # Проверяем результат: если ошибка и есть retry — повторяем
-                    if response_text and not response_text.startswith(_ERROR_PREFIX):
-                        break  # Успех
-                    # Неповторяемая ошибка (context size exceeded и т.п.) — retry бессмысленно
-                    if response_text and response_text.startswith(_NON_RETRIABLE_PREFIX):
-                        logger.warning(
-                            f"PASS2 ASYNC: strip {strip.strip_id} неповторяемая ошибка, "
-                            f"пропускаем retry"
-                        )
+                    if not _should_retry_ocr(response_text, f"strip {strip.strip_id}", strip_attempt, _STRIP_MAX_RETRIES):
                         break
-                    if strip_attempt < _STRIP_MAX_RETRIES:
-                        err_preview = (response_text or "пусто")[:80]
-                        logger.warning(
-                            f"PASS2 ASYNC: strip {strip.strip_id} ошибка OCR "
-                            f"({err_preview}), будет retry"
-                        )
-                        continue
-                    # Последняя попытка, оставляем как есть
 
                 response_len = len(response_text) if response_text else 0
                 if response_len == 0:
@@ -345,6 +350,7 @@ async def pass2_ocr_from_manifest_async(
 
                 category_id = getattr(block, "category_id", None)
                 category_code = getattr(block, "category_code", None)
+                engine = "qwen" if "Qwen" in type(backend).__name__ else None
 
                 prompt_data = fill_image_prompt_variables(
                     prompt_data=block.prompt,
@@ -355,6 +361,7 @@ async def pass2_ocr_from_manifest_async(
                     pdfplumber_text=pdfplumber_text,
                     category_id=category_id,
                     category_code=category_code,
+                    engine=engine,
                 )
 
                 logger.info(
@@ -409,18 +416,8 @@ async def pass2_ocr_from_manifest_async(
                     finally:
                         await rate_limiter.release_async()
 
-                    # Проверяем результат
-                    if text and not text.startswith(_ERROR_PREFIX):
-                        break  # Успех
-                    if text and text.startswith(_NON_RETRIABLE_PREFIX):
-                        break  # Неповторяемая ошибка
-                    if img_attempt < _IMAGE_MAX_RETRIES:
-                        err_preview = (text or "пусто")[:80]
-                        logger.warning(
-                            f"PASS2 ASYNC: image {entry.block_id} ошибка OCR "
-                            f"({err_preview}), будет retry"
-                        )
-                        continue
+                    if not _should_retry_ocr(text, f"image {entry.block_id}", img_attempt, _IMAGE_MAX_RETRIES):
+                        break
 
                 logger.info(
                     f"PASS2 ASYNC: завершена обработка IMAGE блока {entry.block_id}",

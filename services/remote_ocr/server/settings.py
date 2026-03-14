@@ -152,5 +152,15 @@ class Settings:
     default_image_model: str = _cfg("default_image_model", "DEFAULT_IMAGE_MODEL")
     default_stamp_model: str = _cfg("default_stamp_model", "DEFAULT_STAMP_MODEL")
 
+    # ===== ПРОМПТЫ ДЛЯ OCR =====
+    openrouter_image_system_prompt: str = _cfg("openrouter_image_system_prompt", "OPENROUTER_IMAGE_SYSTEM_PROMPT")
+    openrouter_image_user_prompt: str = _cfg("openrouter_image_user_prompt", "OPENROUTER_IMAGE_USER_PROMPT")
+    openrouter_stamp_system_prompt: str = _cfg("openrouter_stamp_system_prompt", "OPENROUTER_STAMP_SYSTEM_PROMPT")
+    openrouter_stamp_user_prompt: str = _cfg("openrouter_stamp_user_prompt", "OPENROUTER_STAMP_USER_PROMPT")
+    qwen_text_system_prompt: str = _cfg("qwen_text_system_prompt", "QWEN_TEXT_SYSTEM_PROMPT")
+    qwen_text_user_prompt: str = _cfg("qwen_text_user_prompt", "QWEN_TEXT_USER_PROMPT")
+    qwen_stamp_system_prompt: str = _cfg("qwen_stamp_system_prompt", "QWEN_STAMP_SYSTEM_PROMPT")
+    qwen_stamp_user_prompt: str = _cfg("qwen_stamp_user_prompt", "QWEN_STAMP_USER_PROMPT")
+
 
 settings = Settings()

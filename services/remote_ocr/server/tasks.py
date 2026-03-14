@@ -13,6 +13,7 @@ from .celery_app import celery_app
 from .debounced_updater import cleanup_updater, get_debounced_updater
 from .logging_config import get_logger
 from .memory_utils import force_gc, log_memory, log_memory_delta
+from .ocr_constants import ERROR_PREFIX, NON_RETRIABLE_PREFIX
 from .settings import settings
 from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
 from .storage import get_job, register_ocr_results_to_node, update_job_status
@@ -230,8 +231,8 @@ def run_ocr_task(self, job_id: str) -> dict:
         recognized = sum(
             1 for b in blocks
             if b.ocr_text
-            and not b.ocr_text.startswith("[Ошибка")
-            and not b.ocr_text.startswith("[НеПовторяемая")
+            and not b.ocr_text.startswith(ERROR_PREFIX)
+            and not b.ocr_text.startswith(NON_RETRIABLE_PREFIX)
         )
         if recognized == total_blocks:
             status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"

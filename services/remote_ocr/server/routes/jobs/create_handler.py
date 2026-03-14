@@ -7,6 +7,8 @@ from fastapi import File, Form, Header, HTTPException, UploadFile
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.queue_checker import check_queue_capacity
+from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key
+from services.remote_ocr.server.r2_keys import pdf_key as make_pdf_key
 from services.remote_ocr.server.routes.common import (
     check_api_key,
     get_r2_sync_client,
@@ -139,76 +141,47 @@ async def create_job_handler(
     try:
         s3_client, bucket_name = get_r2_sync_client()
 
-        if node_id:
-            from pathlib import PurePosixPath
+        is_node = bool(node_id)
 
-            doc_stem = PurePosixPath(document_name).stem
-
-            if pdf_needs_upload:
-                pdf_content = await pdf.read()
-                pdf_key = pdf_r2_key or f"{r2_prefix}/{document_name}"
-                s3_client.put_object(
-                    Bucket=bucket_name,
-                    Key=pdf_key,
-                    Body=pdf_content,
-                    ContentType="application/pdf",
-                )
-                _logger.info(
-                    f"Uploaded PDF to R2: {pdf_key} ({len(pdf_content)} bytes)"
-                )
-
-                add_node_file(
-                    node_id,
-                    "pdf",
-                    pdf_key,
-                    document_name,
-                    len(pdf_content),
-                    "application/pdf",
-                )
-                update_node_r2_key(node_id, pdf_key)
-            else:
-                pdf_key = pdf_r2_key
-
-            blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode(
-                "utf-8"
-            )
-            blocks_key = f"{r2_prefix}/{doc_stem}_annotation.json"
-            s3_client.put_object(
-                Bucket=bucket_name,
-                Key=blocks_key,
-                Body=blocks_bytes,
-                ContentType="application/json",
-            )
-            add_job_file(
-                job.id,
-                "blocks",
-                blocks_key,
-                f"{doc_stem}_annotation.json",
-                len(blocks_bytes),
-            )
-            add_job_file(job.id, "pdf", pdf_key, document_name, 0)
-        else:
+        # --- Upload PDF ---
+        if pdf_needs_upload or not is_node:
             pdf_content = await pdf.read()
-            pdf_key = f"{r2_prefix}/document.pdf"
+            actual_pdf_key = pdf_r2_key or make_pdf_key(r2_prefix, document_name, is_node=is_node)
             s3_client.put_object(
                 Bucket=bucket_name,
-                Key=pdf_key,
+                Key=actual_pdf_key,
                 Body=pdf_content,
                 ContentType="application/pdf",
             )
-            add_job_file(job.id, "pdf", pdf_key, "document.pdf", len(pdf_content))
+            _logger.info(f"Uploaded PDF to R2: {actual_pdf_key} ({len(pdf_content)} bytes)")
 
-            blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode(
-                "utf-8"
-            )
-            blocks_key = f"{r2_prefix}/blocks.json"
-            s3_client.put_object(
-                Bucket=bucket_name,
-                Key=blocks_key,
-                Body=blocks_bytes,
-                ContentType="application/json",
-            )
-            add_job_file(job.id, "blocks", blocks_key, "blocks.json", len(blocks_bytes))
+            if is_node:
+                add_node_file(
+                    node_id, "pdf", actual_pdf_key,
+                    document_name, len(pdf_content), "application/pdf",
+                )
+                update_node_r2_key(node_id, actual_pdf_key)
+            pdf_size = len(pdf_content)
+        else:
+            actual_pdf_key = pdf_r2_key
+            pdf_size = 0
+
+        # --- Upload Blocks ---
+        blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
+        actual_blocks_key = make_blocks_key(r2_prefix, document_name, is_node=is_node)
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=actual_blocks_key,
+            Body=blocks_bytes,
+            ContentType="application/json",
+        )
+
+        # --- Register job files ---
+        from pathlib import PurePosixPath
+        pdf_file_name = document_name if is_node else "document.pdf"
+        blocks_file_name = PurePosixPath(actual_blocks_key).name
+        add_job_file(job.id, "pdf", actual_pdf_key, pdf_file_name, pdf_size)
+        add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
 
     except Exception as e:
         _logger.error(f"R2 upload failed: {e}")

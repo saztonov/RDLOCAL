@@ -92,13 +92,23 @@ def get_prompts(mode: str) -> Tuple[str, str]:
     return QWEN_TEXT_SYSTEM, QWEN_TEXT_PROMPT
 
 
-def build_payload(model_id: str, mode: str, img_b64: str) -> dict:
-    """Собрать payload для Qwen API."""
-    system_prompt, user_prompt = get_prompts(mode)
+def build_payload(
+    model_id: str,
+    mode: str,
+    img_b64: str,
+    system_prompt: Optional[str] = None,
+    user_prompt: Optional[str] = None,
+) -> dict:
+    """Собрать payload для Qwen API. Внешние промпты имеют приоритет над хардкоженными."""
+    if system_prompt or user_prompt:
+        sys_p = system_prompt or get_prompts(mode)[0]
+        usr_p = user_prompt or get_prompts(mode)[1]
+    else:
+        sys_p, usr_p = get_prompts(mode)
 
     messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
+    if sys_p:
+        messages.append({"role": "system", "content": sys_p})
     messages.append({
         "role": "user",
         "content": [
@@ -108,7 +118,7 @@ def build_payload(model_id: str, mode: str, img_b64: str) -> dict:
             },
             {
                 "type": "text",
-                "text": user_prompt,
+                "text": usr_p,
             },
         ],
     })

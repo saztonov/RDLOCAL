@@ -11,10 +11,8 @@ from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Паттерн ошибки в ocr_text, генерируемый бэкендами при сбоях API
-_ERROR_PREFIX = "[Ошибка"
-# Детерминированные ошибки (context exceeded и др.) — retry бессмысленно
-_NON_RETRIABLE_PREFIX = "[НеПовторяемая"
+from .ocr_constants import ERROR_PREFIX as _ERROR_PREFIX
+from .ocr_constants import NON_RETRIABLE_PREFIX as _NON_RETRIABLE_PREFIX
 
 # Пауза между retry для бэкендов с ограничением concurrency (Chandra/LM Studio)
 def _get_chandra_retry_delay() -> int:

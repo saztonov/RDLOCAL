@@ -10,92 +10,41 @@ from .storage_models import JobSettings
 
 logger = get_logger(__name__)
 
-# Кэш категорий изображений (время жизни ~ 5 минут)
-_image_categories_cache: Optional[List[Dict[str, Any]]] = None
-_image_categories_cache_time: Optional[datetime] = None
-
-
-def get_image_categories() -> List[Dict[str, Any]]:
-    """Получить все категории изображений (с кэшированием)"""
-    global _image_categories_cache, _image_categories_cache_time
-
-    # Проверяем кэш (5 минут)
-    if _image_categories_cache is not None and _image_categories_cache_time is not None:
-        age = (datetime.utcnow() - _image_categories_cache_time).total_seconds()
-        if age < 300:  # 5 минут
-            return _image_categories_cache
-
-    try:
-        client = get_client()
-        result = (
-            client.table("image_categories").select("*").order("sort_order").execute()
-        )
-        _image_categories_cache = result.data or []
-        _image_categories_cache_time = datetime.utcnow()
-        logger.info(f"Загружено {len(_image_categories_cache)} категорий изображений")
-        return _image_categories_cache
-    except Exception as e:
-        logger.warning(f"Ошибка загрузки категорий: {e}")
-        return []
-
-
-def get_image_category_by_id(category_id: str) -> Optional[Dict[str, Any]]:
-    """Получить категорию по ID"""
-    categories = get_image_categories()
-    for cat in categories:
-        if cat.get("id") == category_id:
-            return cat
-    return None
-
-
-def get_image_category_by_code(code: str) -> Optional[Dict[str, Any]]:
-    """Получить категорию по коду"""
-    categories = get_image_categories()
-    for cat in categories:
-        if cat.get("code") == code:
-            return cat
-    return None
-
-
-def get_default_image_category() -> Optional[Dict[str, Any]]:
-    """Получить категорию по умолчанию (code='default' или is_default=True)"""
-    categories = get_image_categories()
-    # Приоритет: категория с code='default'
-    for cat in categories:
-        if cat.get("code") == "default":
-            return cat
-    # Fallback: категория с is_default=True
-    for cat in categories:
-        if cat.get("is_default"):
-            return cat
-    # Fallback: первая категория
-    return categories[0] if categories else None
-
 
 def get_category_prompt(
-    category_id: Optional[str] = None, category_code: Optional[str] = None
+    category_id: Optional[str] = None,
+    category_code: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:
     """
-    Получить промпт категории по ID или коду.
+    Получить промпт по категории и движку из config.yaml.
     Возвращает {"system": "...", "user": "..."}
     """
-    category = None
+    from .settings import settings
 
-    if category_id:
-        category = get_image_category_by_id(category_id)
-    elif category_code:
-        category = get_image_category_by_code(category_code)
+    code = category_code or "default"
 
-    if not category:
-        category = get_default_image_category()
-
-    if category:
+    if engine == "qwen":
+        if code == "stamp":
+            return {
+                "system": settings.qwen_stamp_system_prompt,
+                "user": settings.qwen_stamp_user_prompt,
+            }
         return {
-            "system": category.get("system_prompt", ""),
-            "user": category.get("user_prompt", ""),
+            "system": settings.qwen_text_system_prompt,
+            "user": settings.qwen_text_user_prompt,
         }
-
-    return None
+    else:
+        # openrouter / datalab / chandra / default
+        if code == "stamp":
+            return {
+                "system": settings.openrouter_stamp_system_prompt,
+                "user": settings.openrouter_stamp_user_prompt,
+            }
+        return {
+            "system": settings.openrouter_image_system_prompt,
+            "user": settings.openrouter_image_user_prompt,
+        }
 
 
 def save_job_settings(

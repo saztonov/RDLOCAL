@@ -23,36 +23,47 @@ from services.remote_ocr.server.storage import (
 _logger = get_logger(__name__)
 
 
+def _job_to_list_item(j) -> dict:
+    """Сериализация Job в dict для списка задач."""
+    return {
+        "id": j.id,
+        "status": j.status,
+        "progress": j.progress,
+        "document_name": j.document_name,
+        "task_name": j.task_name,
+        "document_id": j.document_id,
+        "created_at": j.created_at,
+        "updated_at": j.updated_at,
+        "error_message": j.error_message,
+        "node_id": j.node_id,
+        "status_message": j.status_message,
+        "priority": j.priority,
+    }
+
+
 def list_jobs_handler(
     document_id: Optional[str] = None,
+    since: Optional[str] = Query(None, description="ISO timestamp — вернуть только изменения после этого времени"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
-    """Получить список задач"""
+    """Получить список задач. При since — только изменённые."""
     check_api_key(x_api_key)
-    _logger.info(
-        "Запрос списка задач",
-        extra={"event": "jobs_list_request", "action": "list", "document_id": document_id},
-    )
 
-    jobs = list_jobs(document_id)
+    if since:
+        _logger.debug(
+            f"Polling changes since={since}",
+            extra={"event": "jobs_poll", "action": "poll"},
+        )
+        jobs = list_jobs_changed_since(since)
+    else:
+        _logger.info(
+            "Запрос списка задач",
+            extra={"event": "jobs_list_request", "action": "list", "document_id": document_id},
+        )
+        jobs = list_jobs(document_id)
+
     return {
-        "jobs": [
-            {
-                "id": j.id,
-                "status": j.status,
-                "progress": j.progress,
-                "document_name": j.document_name,
-                "task_name": j.task_name,
-                "document_id": j.document_id,
-                "created_at": j.created_at,
-                "updated_at": j.updated_at,
-                "error_message": j.error_message,
-                "node_id": j.node_id,
-                "status_message": j.status_message,
-                "priority": j.priority,
-            }
-            for j in jobs
-        ],
+        "jobs": [_job_to_list_item(j) for j in jobs],
         "server_time": datetime.utcnow().isoformat(),
     }
 
@@ -70,23 +81,7 @@ def get_jobs_changes_handler(
 
     jobs = list_jobs_changed_since(since)
     return {
-        "jobs": [
-            {
-                "id": j.id,
-                "status": j.status,
-                "progress": j.progress,
-                "document_name": j.document_name,
-                "task_name": j.task_name,
-                "document_id": j.document_id,
-                "created_at": j.created_at,
-                "updated_at": j.updated_at,
-                "error_message": j.error_message,
-                "node_id": j.node_id,
-                "status_message": j.status_message,
-                "priority": j.priority,
-            }
-            for j in jobs
-        ],
+        "jobs": [_job_to_list_item(j) for j in jobs],
         "server_time": datetime.utcnow().isoformat(),
     }
 

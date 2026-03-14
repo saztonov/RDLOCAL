@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 class BlocksTreeManager(ContextMenuMixin, HintMixin):
     """Управление деревом блоков"""
 
-    _categories_cache = None
-    _categories_code_cache = None
-
     def __init__(self, parent, blocks_tree: QTreeWidget):
         self.parent = parent
         self.blocks_tree = blocks_tree
@@ -37,38 +34,12 @@ class BlocksTreeManager(ContextMenuMixin, HintMixin):
             self._view_state_manager = ViewStateManager(self.parent.page_viewer)
         return self._view_state_manager
 
+    _CATEGORY_NAMES = {"default": "По умолчанию", "stamp": "Штамп"}
+
     def _get_category_name(self, category_id: str, category_code: str = None) -> str:
-        """Получить название категории по ID или коду"""
-        if BlocksTreeManager._categories_cache is None:
-            try:
-                from app.tree_client import TreeClient
-
-                client = TreeClient()
-                if client.is_available():
-                    cats = client.get_image_categories()
-                    BlocksTreeManager._categories_cache = {
-                        cat["id"]: cat["name"] for cat in cats
-                    }
-                    BlocksTreeManager._categories_code_cache = {
-                        cat["code"]: cat["name"] for cat in cats
-                    }
-                else:
-                    BlocksTreeManager._categories_cache = {}
-                    BlocksTreeManager._categories_code_cache = {}
-            except Exception:
-                BlocksTreeManager._categories_cache = {}
-                BlocksTreeManager._categories_code_cache = {}
-
-        if category_id:
-            name = BlocksTreeManager._categories_cache.get(category_id, "")
-            if name:
-                return name
-
-        if category_code:
-            code_cache = BlocksTreeManager._categories_code_cache or {}
-            return code_cache.get(category_code, category_code)
-
-        return ""
+        """Получить название категории по коду или ID"""
+        code = category_code or category_id or ""
+        return self._CATEGORY_NAMES.get(code, code)
 
     def update_blocks_tree(self):
         """Обновить дерево блоков со всех страниц, группировка по страницам"""
