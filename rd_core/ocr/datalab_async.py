@@ -3,30 +3,27 @@ import asyncio
 import json
 import logging
 import os
-import tempfile
 from typing import Optional
 
 import httpx
 from PIL import Image
 
+from rd_core.ocr._datalab_common import (
+    API_URL,
+    build_request_data,
+    handle_http_error,
+    handle_immediate_result,
+    handle_poll_complete,
+    init_params,
+    prepare_source,
+)
 from rd_core.ocr.http_utils import create_async_client
 
 logger = logging.getLogger(__name__)
 
-# Дефолтный порог качества
-DEFAULT_QUALITY_THRESHOLD = 2.0
-
 
 class AsyncDatalabOCRBackend:
     """Асинхронный OCR через Datalab Convert API"""
-
-    API_URL = "https://www.datalab.to/api/v1/convert"
-    MAX_WIDTH = 4000
-
-    # Дефолтные значения
-    DEFAULT_POLL_INTERVAL = 3
-    DEFAULT_POLL_MAX_ATTEMPTS = 90
-    DEFAULT_MAX_RETRIES = 3
 
     def __init__(
         self,
@@ -38,23 +35,16 @@ class AsyncDatalabOCRBackend:
         extras: Optional[str] = None,
         quality_threshold: Optional[float] = None,
     ):
-        if not api_key:
-            raise ValueError("DATALAB_API_KEY не указан")
         self.api_key = api_key
         self.headers = {"X-Api-Key": api_key}
         self.rate_limiter = rate_limiter
         self.last_html_result: Optional[str] = None
         self.last_quality_score: Optional[float] = None
 
-        self.poll_interval = poll_interval if poll_interval is not None else self.DEFAULT_POLL_INTERVAL
-        self.poll_max_attempts = poll_max_attempts if poll_max_attempts is not None else self.DEFAULT_POLL_MAX_ATTEMPTS
-        self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
-        self.extras = extras or None
-        self.quality_threshold = quality_threshold if quality_threshold is not None else DEFAULT_QUALITY_THRESHOLD
+        self.poll_interval, self.poll_max_attempts, self.max_retries, self.extras, self.quality_threshold = \
+            init_params(api_key, poll_interval, poll_max_attempts, max_retries, extras, quality_threshold)
 
-        # httpx async client с connection pooling и retry
         self._client: Optional[httpx.AsyncClient] = None
-
         logger.info(
             f"AsyncDatalabOCRBackend инициализирован (poll_interval={self.poll_interval}s, "
             f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries}, "
@@ -62,19 +52,16 @@ class AsyncDatalabOCRBackend:
         )
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Получить или создать httpx AsyncClient"""
         if self._client is None or self._client.is_closed:
             self._client = create_async_client(timeout=120.0)
         return self._client
 
     async def close(self):
-        """Закрыть HTTP клиент"""
         if self._client and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
 
     def supports_pdf_input(self) -> bool:
-        """Datalab поддерживает PDF ввод"""
         return True
 
     async def recognize_async(
@@ -84,43 +71,17 @@ class AsyncDatalabOCRBackend:
         json_mode: bool = None,
         pdf_file_path: Optional[str] = None,
     ) -> str:
-        """Асинхронно распознать изображение или PDF через Datalab API"""
-
-        # Определяем источник: PDF или изображение
-        if pdf_file_path and os.path.exists(pdf_file_path):
-            tmp_path = pdf_file_path
-            mime_type = "application/pdf"
-            need_cleanup = False
-            logger.info(f"Datalab: используем PDF ввод: {pdf_file_path}")
-        elif image is not None:
-            mime_type = "image/png"
-            need_cleanup = True
-        else:
+        source = prepare_source(image, pdf_file_path)
+        if source is None:
             return "[Ошибка: Datalab требует изображение или PDF]"
+        tmp_path, mime_type, need_cleanup = source
 
-        # Async rate limiter
         if self.rate_limiter:
             acquired = await self._acquire_rate_limiter()
             if not acquired:
                 return "[Ошибка: таймаут ожидания rate limiter]"
 
         try:
-            # Подготовка изображения (только для image, не для PDF)
-            if need_cleanup:
-                if image.width > self.MAX_WIDTH:
-                    ratio = self.MAX_WIDTH / image.width
-                    new_width = self.MAX_WIDTH
-                    new_height = int(image.height * ratio)
-                    logger.info(
-                        f"Сжатие изображения {image.width}x{image.height} -> {new_width}x{new_height}"
-                    )
-                    image = image.resize((new_width, new_height), Image.LANCZOS)
-
-                # Сохранить во временный файл
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                    image.save(tmp, format="PNG")
-                    tmp_path = tmp.name
-
             try:
                 return await self._process_with_retries(tmp_path, mime_type)
             finally:
@@ -135,70 +96,43 @@ class AsyncDatalabOCRBackend:
                 await self._release_rate_limiter()
 
     async def _acquire_rate_limiter(self) -> bool:
-        """Асинхронно получить разрешение от rate limiter"""
         if hasattr(self.rate_limiter, "acquire_async"):
             return await self.rate_limiter.acquire_async()
         elif hasattr(self.rate_limiter, "acquire"):
-            # Fallback для sync rate limiter
             return await asyncio.to_thread(self.rate_limiter.acquire)
         return True
 
     async def _release_rate_limiter(self):
-        """Асинхронно освободить rate limiter"""
         if hasattr(self.rate_limiter, "release_async"):
             await self.rate_limiter.release_async()
         elif hasattr(self.rate_limiter, "release"):
             self.rate_limiter.release()
 
-    async def _process_with_retries(self, tmp_path: str, mime_type: str = "image/png") -> str:
-        """Обработка с полными retry циклами"""
+    async def _process_with_retries(self, tmp_path: str, mime_type: str) -> str:
         client = await self._get_client()
 
         for full_retry in range(self.max_retries):
             if full_retry > 0:
-                logger.warning(
-                    f"Datalab: повторная отправка запроса (попытка {full_retry + 1}/{self.max_retries})"
-                )
+                logger.warning(f"Datalab: повторная отправка запроса (попытка {full_retry + 1}/{self.max_retries})")
 
-            # Отправка запроса с retry для 429
-            skip_cache = full_retry > 0
-            response = await self._send_request_with_429_retry(client, tmp_path, mime_type, skip_cache)
+            response = await self._send_request_with_429_retry(client, tmp_path, mime_type, skip_cache=full_retry > 0)
 
             if response is None:
                 return "[Ошибка Datalab API: превышен лимит запросов (429)]"
 
             if response.status_code != 200:
-                logger.error(
-                    f"Datalab API error: {response.status_code} - {response.text}"
-                )
-                if response.status_code == 401:
-                    return "[Ошибка Datalab API 401: Неверный или просроченный DATALAB_API_KEY]"
-                elif response.status_code == 403:
-                    return "[Ошибка Datalab API 403: Доступ запрещён]"
-                return f"[Ошибка Datalab API: {response.status_code}]"
+                return handle_http_error(response.status_code, response.text)
 
             result = response.json()
+            immediate = handle_immediate_result(result)
+            if immediate is not None:
+                return immediate
 
-            if not result.get("success"):
-                error = result.get("error", "Unknown error")
-                return f"[Ошибка Datalab: {error}]"
-
-            check_url = result.get("request_check_url")
-            if not check_url:
-                # Результат сразу в ответе
-                if "json" in result:
-                    json_result = result["json"]
-                    if isinstance(json_result, dict):
-                        return json.dumps(json_result, ensure_ascii=False)
-                    return json_result
-                return "[Ошибка: нет request_check_url]"
-
-            # Polling результата
+            check_url = result["request_check_url"]
             logger.info(f"Datalab: начало поллинга результата по URL: {check_url}")
             poll_result = await self._poll_result(client, check_url)
 
             if poll_result is not None:
-                # Проверка качества — retry если score ниже порога
                 if (self.last_quality_score is not None
                         and self.last_quality_score < self.quality_threshold
                         and full_retry < self.max_retries - 1):
@@ -212,29 +146,23 @@ class AsyncDatalabOCRBackend:
                     continue
                 return poll_result
 
-            # Таймаут поллинга
             logger.warning(
                 f"Datalab: таймаут поллинга после {self.poll_max_attempts} попыток, "
                 f"retry {full_retry + 1}/{self.max_retries}"
             )
-
             if full_retry < self.max_retries - 1:
                 wait_time = (full_retry + 1) * 10
                 logger.info(f"Datalab: ожидание {wait_time}с перед повторной отправкой")
                 await asyncio.sleep(wait_time)
 
-        # Все retry исчерпаны
-        logger.error(
-            f"Datalab: превышено время ожидания после {self.max_retries} полных попыток"
-        )
+        logger.error(f"Datalab: превышено время ожидания после {self.max_retries} полных попыток")
         logger.warning("Datalab: пропускаем блок из-за таймаута, продолжаем обработку")
         return ""
 
     async def _send_request_with_429_retry(
         self, client: httpx.AsyncClient, tmp_path: str,
-        mime_type: str = "image/png", skip_cache: bool = False,
+        mime_type: str, skip_cache: bool = False,
     ) -> Optional[httpx.Response]:
-        """Отправить запрос с обработкой 429 ошибок"""
         response = None
 
         for retry in range(self.max_retries):
@@ -242,58 +170,31 @@ class AsyncDatalabOCRBackend:
                 file_content = f.read()
 
             files = {"file": (os.path.basename(tmp_path), file_content, mime_type)}
-            data = {
-                "mode": "accurate",
-                "paginate": "true",
-                "output_format": "html",
-                "disable_image_extraction": "true",
-                "disable_image_captions": "true",
-                "additional_config": json.dumps({"keep_pageheader_in_output": True}),
-            }
-            if self.extras:
-                data["extras"] = self.extras
-            if skip_cache:
-                data["skip_cache"] = "true"
+            data = build_request_data(self.extras, skip_cache=skip_cache)
 
             response = await client.post(
-                self.API_URL,
-                headers=self.headers,
-                files=files,
-                data=data,
+                API_URL, headers=self.headers, files=files, data=data,
             )
 
             if response.status_code == 429:
                 wait_time = min(60, (2**retry) * 10)
-                logger.warning(
-                    f"Datalab API 429: ждём {wait_time}с (попытка {retry + 1}/{self.max_retries})"
-                )
+                logger.warning(f"Datalab API 429: ждём {wait_time}с (попытка {retry + 1}/{self.max_retries})")
                 await asyncio.sleep(wait_time)
                 continue
-
             break
 
         if response is not None and response.status_code == 429:
             return None
-
         return response
 
-    async def _poll_result(
-        self, client: httpx.AsyncClient, check_url: str
-    ) -> Optional[str]:
-        """Асинхронный polling результата"""
+    async def _poll_result(self, client: httpx.AsyncClient, check_url: str) -> Optional[str]:
         for attempt in range(self.poll_max_attempts):
             await asyncio.sleep(self.poll_interval)
 
-            logger.debug(
-                f"Datalab: попытка поллинга {attempt + 1}/{self.poll_max_attempts}"
-            )
+            logger.debug(f"Datalab: попытка поллинга {attempt + 1}/{self.poll_max_attempts}")
 
             try:
-                poll_response = await client.get(
-                    check_url,
-                    headers=self.headers,
-                    timeout=30.0,
-                )
+                poll_response = await client.get(check_url, headers=self.headers, timeout=30.0)
             except httpx.TimeoutException:
                 logger.warning("Datalab: таймаут при поллинге, продолжаем")
                 continue
@@ -304,31 +205,19 @@ class AsyncDatalabOCRBackend:
                 continue
 
             if poll_response.status_code != 200:
-                logger.warning(
-                    f"Datalab: поллинг вернул статус {poll_response.status_code}: {poll_response.text}"
-                )
+                logger.warning(f"Datalab: поллинг вернул статус {poll_response.status_code}: {poll_response.text}")
                 continue
 
             poll_result = poll_response.json()
             status = poll_result.get("status", "")
 
-            logger.info(
-                f"Datalab: текущий статус задачи: '{status}' (попытка {attempt + 1}/{self.poll_max_attempts})"
-            )
+            logger.info(f"Datalab: текущий статус задачи: '{status}' (попытка {attempt + 1}/{self.poll_max_attempts})")
 
             if status == "complete":
-                quality = poll_result.get("parse_quality_score")
-                runtime = poll_result.get("runtime")
+                html_result, quality = handle_poll_complete(poll_result)
                 self.last_quality_score = quality
-                logger.info(
-                    f"Datalab: задача успешно завершена"
-                    f"{f', quality={quality}' if quality is not None else ''}"
-                    f"{f', runtime={runtime}ms' if runtime is not None else ''}"
-                )
-                html_result = poll_result.get("html", "")
-                logger.debug(f"Datalab: ключи ответа: {list(poll_result.keys())}")
                 self.last_html_result = html_result if html_result else None
-                return html_result if html_result else ""
+                return html_result
 
             elif status == "failed":
                 error = poll_result.get("error", "Unknown error")
@@ -336,15 +225,10 @@ class AsyncDatalabOCRBackend:
                 return f"[Ошибка Datalab: {error}]"
 
             elif status not in ["processing", "pending", "queued"]:
-                logger.warning(
-                    f"Datalab: неизвестный статус '{status}'. Полный ответ: {poll_result}"
-                )
+                logger.warning(f"Datalab: неизвестный статус '{status}'. Полный ответ: {poll_result}")
 
-        # Таймаут
         return None
 
     def __del__(self):
-        """Cleanup при удалении объекта"""
         if self._client and not self._client.is_closed:
-            # Нельзя использовать await в __del__, просто логируем
             logger.debug("AsyncDatalabOCRBackend: client not closed properly")

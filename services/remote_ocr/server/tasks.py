@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 
 from .celery_app import celery_app
-from .db_metrics import get_metrics_collector
 from .debounced_updater import cleanup_updater, get_debounced_updater
 from .logging_config import get_logger
 from .memory_utils import force_gc, log_memory, log_memory_delta
@@ -338,10 +337,6 @@ def run_ocr_task(self, job_id: str) -> dict:
                 f"{stats['db_calls']} DB calls, {stats['skipped']} skipped "
                 f"({stats['reduction_percent']}% reduction)"
             )
-
-        # Логируем метрики DB
-        get_metrics_collector().log_summary(job_id)
-        get_metrics_collector().pop_metrics(job_id)
 
         # Очистка временной директории
         if work_dir and work_dir.exists():

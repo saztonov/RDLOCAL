@@ -8,10 +8,9 @@ from .checkpoint_models import OCRCheckpoint, get_checkpoint_path
 from .debounced_updater import get_debounced_updater
 from .logging_config import get_logger
 from .memory_utils import log_memory_delta
-from .pdf_streaming_twopass import (
+from .pdf_twopass import (
     cleanup_manifest_files,
     pass1_prepare_crops,
-    pass2_ocr_from_manifest,
 )
 from .storage import Job, is_job_paused
 from .task_helpers import check_paused
@@ -19,9 +18,6 @@ from .task_upload import copy_crops_to_final
 
 logger = get_logger(__name__)
 
-
-# Флаг для включения async режима (можно переключать через settings)
-USE_ASYNC_PASS2 = True
 
 # Флаг для включения checkpoint (можно переключать)
 USE_CHECKPOINT = True
@@ -88,7 +84,6 @@ def run_two_pass_ocr(
         # PASS 2: OCR с загрузкой с диска
         total_strips = len(manifest.strips) if manifest else 0
         total_images = len(manifest.image_blocks) if manifest else 0
-        total_requests = total_strips + total_images
 
         def on_pass2_progress(current, total, block_info: str = None):
             progress = 0.4 + 0.5 * (current / total)
@@ -111,41 +106,21 @@ def run_two_pass_ocr(
             checkpoint.total_strips = total_strips
             checkpoint.total_images = total_images
 
-        # Выбор между async и sync режимом
-        if USE_ASYNC_PASS2:
-            from .pdf_twopass.pass2_ocr_async import pass2_ocr_from_manifest_async
-            from .rate_limiter import reset_async_limiter
+        from .pdf_twopass.pass2_ocr_async import pass2_ocr_from_manifest_async
+        from .rate_limiter import reset_async_limiter
 
-            logger.info("PASS2: используется async режим (asyncio.gather)")
+        # Сброс asyncio-привязанного rate limiter перед новым event loop
+        reset_async_limiter()
 
-            # Сброс asyncio-привязанного rate limiter перед новым event loop
-            reset_async_limiter()
-
-            # Для LM Studio бэкендов: ограничение параллельности (Max Concurrent Predictions)
-            if engine in ("chandra", "qwen"):
-                max_concurrent = getattr(settings, f"{engine}_max_concurrent", 2)
-            else:
-                max_concurrent = None
-
-            # Запуск async pass2 через asyncio.run
-            asyncio.run(
-                pass2_ocr_from_manifest_async(
-                    manifest,
-                    blocks,
-                    strip_backend,
-                    image_backend,
-                    stamp_backend,
-                    str(pdf_path),
-                    on_progress=on_pass2_progress,
-                    check_paused=lambda: is_job_paused(job.id),
-                    max_concurrent=max_concurrent,
-                    checkpoint=checkpoint if USE_CHECKPOINT else None,
-                    work_dir=work_dir if USE_CHECKPOINT else None,
-                )
-            )
+        # Для LM Studio бэкендов: ограничение параллельности (Max Concurrent Predictions)
+        if engine in ("chandra", "qwen"):
+            max_concurrent = getattr(settings, f"{engine}_max_concurrent", 2)
         else:
-            logger.info("PASS2: используется sync режим (ThreadPoolExecutor)")
-            pass2_ocr_from_manifest(
+            max_concurrent = None
+
+        # Запуск async pass2 через asyncio.run
+        asyncio.run(
+            pass2_ocr_from_manifest_async(
                 manifest,
                 blocks,
                 strip_backend,
@@ -154,7 +129,11 @@ def run_two_pass_ocr(
                 str(pdf_path),
                 on_progress=on_pass2_progress,
                 check_paused=lambda: is_job_paused(job.id),
+                max_concurrent=max_concurrent,
+                checkpoint=checkpoint if USE_CHECKPOINT else None,
+                work_dir=work_dir if USE_CHECKPOINT else None,
             )
+        )
 
         log_memory_delta("После PASS2", start_mem)
 

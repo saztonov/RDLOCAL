@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.remote_ocr.download_mixin import DownloadMixin
-from app.gui.remote_ocr.job_operations import JobOperationsMixin
+from app.gui.remote_ocr.job_creation import JobCreationMixin
+from app.gui.remote_ocr.job_lifecycle import JobLifecycleMixin
 from app.gui.remote_ocr.polling_controller import PollingControllerMixin
 from app.gui.remote_ocr.result_handler import ResultHandlerMixin
 from app.gui.remote_ocr.signals import WorkerSignals
@@ -35,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 class RemoteOCRPanel(
-    JobOperationsMixin,
+    JobCreationMixin,
+    JobLifecycleMixin,
     DownloadMixin,
     PollingControllerMixin,
     TableManagerMixin,

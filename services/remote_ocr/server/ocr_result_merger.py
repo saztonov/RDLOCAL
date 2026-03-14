@@ -170,7 +170,7 @@ def regenerate_md_from_result(
     result: dict, output_path: Path, doc_name: Optional[str] = None
 ) -> None:
     """Регенерировать Markdown файл из result.json."""
-    from rd_core.ocr.md_generator import generate_md_from_result
+    from rd_core.ocr.md import generate_md_from_result
 
     try:
         generate_md_from_result(result, output_path, doc_name=doc_name)
