@@ -181,6 +181,16 @@ class Settings:
             _yaml_config, "datalab_max_retries", "DATALAB_MAX_RETRIES", int
         )
     )
+    datalab_extras: str = field(
+        default_factory=lambda: _get(
+            _yaml_config, "datalab_extras", "DATALAB_EXTRAS"
+        )
+    )
+    datalab_quality_threshold: float = field(
+        default_factory=lambda: _get(
+            _yaml_config, "datalab_quality_threshold", "DATALAB_QUALITY_THRESHOLD", float
+        )
+    )
 
     # ===== CHANDRA (LM Studio) =====
     chandra_max_concurrent: int = field(

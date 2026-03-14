@@ -181,6 +181,8 @@ def run_ocr_task(self, job_id: str) -> dict:
                 poll_interval=settings.datalab_poll_interval,
                 poll_max_attempts=settings.datalab_poll_max_attempts,
                 max_retries=settings.datalab_max_retries,
+                extras=settings.datalab_extras,
+                quality_threshold=settings.datalab_quality_threshold,
             )
         elif settings.openrouter_api_key:
             strip_model = text_model or table_model or "qwen/qwen3-vl-30b-a3b-instruct"

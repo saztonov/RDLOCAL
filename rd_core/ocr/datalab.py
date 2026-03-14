@@ -9,6 +9,9 @@ from rd_core.ocr.http_utils import create_retry_session
 
 logger = logging.getLogger(__name__)
 
+# Дефолтный порог качества
+DEFAULT_QUALITY_THRESHOLD = 2.0
+
 
 class DatalabOCRBackend:
     """OCR через Datalab Convert API"""
@@ -28,6 +31,8 @@ class DatalabOCRBackend:
         poll_interval: Optional[int] = None,
         poll_max_attempts: Optional[int] = None,
         max_retries: Optional[int] = None,
+        extras: Optional[str] = None,
+        quality_threshold: Optional[float] = None,
     ):
         if not api_key:
             raise ValueError("DATALAB_API_KEY не указан")
@@ -35,21 +40,25 @@ class DatalabOCRBackend:
         self.headers = {"X-Api-Key": api_key}
         self.rate_limiter = rate_limiter
         self.last_html_result: Optional[str] = None  # HTML результат последнего запроса
+        self.last_quality_score: Optional[float] = None  # Quality score последнего запроса
 
         # Настройки polling (из параметров или дефолт)
         self.poll_interval = poll_interval if poll_interval is not None else self.DEFAULT_POLL_INTERVAL
         self.poll_max_attempts = poll_max_attempts if poll_max_attempts is not None else self.DEFAULT_POLL_MAX_ATTEMPTS
         self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        self.extras = extras or None
+        self.quality_threshold = quality_threshold if quality_threshold is not None else DEFAULT_QUALITY_THRESHOLD
 
         self.session = create_retry_session()
         logger.info(
             f"Datalab OCR инициализирован (poll_interval={self.poll_interval}s, "
-            f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries})"
+            f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries}, "
+            f"extras={self.extras}, quality_threshold={self.quality_threshold})"
         )
 
     def supports_pdf_input(self) -> bool:
-        """Datalab не поддерживает прямой PDF ввод"""
-        return False
+        """Datalab поддерживает PDF ввод"""
+        return True
 
     def recognize(
         self,
@@ -58,30 +67,42 @@ class DatalabOCRBackend:
         json_mode: bool = None,
         pdf_file_path: Optional[str] = None,
     ) -> str:
-        """Распознать изображение через Datalab API"""
-        if image is None:
-            return "[Ошибка: Datalab требует изображение, PDF не поддерживается]"
+        """Распознать изображение или PDF через Datalab API"""
         import os
         import tempfile
         import time
+
+        # Определяем источник: PDF или изображение
+        if pdf_file_path and os.path.exists(pdf_file_path):
+            tmp_path = pdf_file_path
+            mime_type = "application/pdf"
+            need_cleanup = False
+            logger.info(f"Datalab: используем PDF ввод: {pdf_file_path}")
+        elif image is not None:
+            mime_type = "image/png"
+            need_cleanup = True
+        else:
+            return "[Ошибка: Datalab требует изображение или PDF]"
 
         if self.rate_limiter:
             if not self.rate_limiter.acquire():
                 return "[Ошибка: таймаут ожидания rate limiter]"
 
         try:
-            if image.width > self.MAX_WIDTH:
-                ratio = self.MAX_WIDTH / image.width
-                new_width = self.MAX_WIDTH
-                new_height = int(image.height * ratio)
-                logger.info(
-                    f"Сжатие изображения {image.width}x{image.height} -> {new_width}x{new_height}"
-                )
-                image = image.resize((new_width, new_height), Image.LANCZOS)
+            # Подготовка изображения (только для image, не для PDF)
+            if need_cleanup:
+                if image.width > self.MAX_WIDTH:
+                    ratio = self.MAX_WIDTH / image.width
+                    new_width = self.MAX_WIDTH
+                    new_height = int(image.height * ratio)
+                    logger.info(
+                        f"Сжатие изображения {image.width}x{image.height} -> {new_width}x{new_height}"
+                    )
+                    image = image.resize((new_width, new_height), Image.LANCZOS)
 
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                image.save(tmp, format="PNG")
-                tmp_path = tmp.name
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    image.save(tmp, format="PNG")
+                    tmp_path = tmp.name
 
             try:
                 # Внешний retry loop для повторной отправки при таймауте polling
@@ -96,7 +117,7 @@ class DatalabOCRBackend:
                         with open(tmp_path, "rb") as f:
                             import json
 
-                            files = {"file": (os.path.basename(tmp_path), f, "image/png")}
+                            files = {"file": (os.path.basename(tmp_path), f, mime_type)}
                             data = {
                                 "mode": "accurate",
                                 "paginate": "true",
@@ -107,6 +128,10 @@ class DatalabOCRBackend:
                                     {"keep_pageheader_in_output": True}
                                 ),
                             }
+                            if self.extras:
+                                data["extras"] = self.extras
+                            if full_retry > 0:
+                                data["skip_cache"] = "true"
 
                             response = self.session.post(
                                 self.API_URL,
@@ -156,7 +181,7 @@ class DatalabOCRBackend:
                         return "[Ошибка: нет request_check_url]"
 
                     logger.info(f"Datalab: начало поллинга результата по URL: {check_url}")
-                    poll_timeout = False
+                    low_quality_retry = False
                     for attempt in range(self.poll_max_attempts):
                         time.sleep(self.poll_interval)
 
@@ -188,11 +213,24 @@ class DatalabOCRBackend:
                         if status == "complete":
                             quality = poll_result.get("parse_quality_score")
                             runtime = poll_result.get("runtime")
+                            self.last_quality_score = quality
                             logger.info(
                                 f"Datalab: задача успешно завершена"
                                 f"{f', quality={quality}' if quality is not None else ''}"
                                 f"{f', runtime={runtime}ms' if runtime is not None else ''}"
                             )
+
+                            # Quality-based retry: если score ниже порога и есть retry
+                            if (quality is not None
+                                    and quality < self.quality_threshold
+                                    and full_retry < self.max_retries - 1):
+                                logger.warning(
+                                    f"Datalab: низкое качество {quality} < {self.quality_threshold}, "
+                                    f"retry {full_retry + 1}/{self.max_retries}"
+                                )
+                                low_quality_retry = True
+                                break  # → следующий full_retry с skip_cache
+
                             html_result = poll_result.get("html", "")
                             logger.debug(
                                 f"Datalab: ключи ответа: {list(poll_result.keys())}"
@@ -208,12 +246,19 @@ class DatalabOCRBackend:
                                 f"Datalab: неизвестный статус '{status}'. Полный ответ: {poll_result}"
                             )
 
+                    if low_quality_retry:
+                        # Ждём перед повторной отправкой
+                        if full_retry < self.max_retries - 1:
+                            wait_time = (full_retry + 1) * 5
+                            logger.info(f"Datalab: ожидание {wait_time}с перед retry из-за низкого качества")
+                            time.sleep(wait_time)
+                        continue
+
                     # Таймаут поллинга - попробуем отправить новый запрос
                     logger.warning(
                         f"Datalab: таймаут поллинга после {self.poll_max_attempts} попыток, "
                         f"retry {full_retry + 1}/{self.max_retries}"
                     )
-                    poll_timeout = True
 
                     if full_retry < self.max_retries - 1:
                         # Ждём перед повторной отправкой
@@ -231,7 +276,7 @@ class DatalabOCRBackend:
                 return ""
 
             finally:
-                if os.path.exists(tmp_path):
+                if need_cleanup and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
         except Exception as e:

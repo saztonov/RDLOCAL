@@ -46,6 +46,10 @@ datalab_poll_interval: 3
 datalab_poll_max_attempts: 90
 # Количество повторов при ошибке Datalab API
 datalab_max_retries: 3
+# Дополнительные фичи Datalab (comma-separated: table_row_bboxes, chart_understanding, etc.)
+datalab_extras: "table_row_bboxes"
+# Порог качества для retry (0-5, ниже порога = повторный запрос с skip_cache)
+datalab_quality_threshold: 2.0
 
 # ===== CHANDRA (LM Studio) =====
 # Параллельных запросов к Chandra PER TASK

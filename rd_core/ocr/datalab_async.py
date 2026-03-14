@@ -13,6 +13,9 @@ from rd_core.ocr.http_utils import create_async_client
 
 logger = logging.getLogger(__name__)
 
+# Дефолтный порог качества
+DEFAULT_QUALITY_THRESHOLD = 2.0
+
 
 class AsyncDatalabOCRBackend:
     """Асинхронный OCR через Datalab Convert API"""
@@ -32,6 +35,8 @@ class AsyncDatalabOCRBackend:
         poll_interval: Optional[int] = None,
         poll_max_attempts: Optional[int] = None,
         max_retries: Optional[int] = None,
+        extras: Optional[str] = None,
+        quality_threshold: Optional[float] = None,
     ):
         if not api_key:
             raise ValueError("DATALAB_API_KEY не указан")
@@ -39,17 +44,21 @@ class AsyncDatalabOCRBackend:
         self.headers = {"X-Api-Key": api_key}
         self.rate_limiter = rate_limiter
         self.last_html_result: Optional[str] = None
+        self.last_quality_score: Optional[float] = None
 
         self.poll_interval = poll_interval if poll_interval is not None else self.DEFAULT_POLL_INTERVAL
         self.poll_max_attempts = poll_max_attempts if poll_max_attempts is not None else self.DEFAULT_POLL_MAX_ATTEMPTS
         self.max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        self.extras = extras or None
+        self.quality_threshold = quality_threshold if quality_threshold is not None else DEFAULT_QUALITY_THRESHOLD
 
         # httpx async client с connection pooling и retry
         self._client: Optional[httpx.AsyncClient] = None
 
         logger.info(
             f"AsyncDatalabOCRBackend инициализирован (poll_interval={self.poll_interval}s, "
-            f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries})"
+            f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries}, "
+            f"extras={self.extras}, quality_threshold={self.quality_threshold})"
         )
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -65,8 +74,8 @@ class AsyncDatalabOCRBackend:
             self._client = None
 
     def supports_pdf_input(self) -> bool:
-        """Datalab не поддерживает прямой PDF ввод"""
-        return False
+        """Datalab поддерживает PDF ввод"""
+        return True
 
     async def recognize_async(
         self,
@@ -75,9 +84,19 @@ class AsyncDatalabOCRBackend:
         json_mode: bool = None,
         pdf_file_path: Optional[str] = None,
     ) -> str:
-        """Асинхронно распознать изображение через Datalab API"""
-        if image is None:
-            return "[Ошибка: Datalab требует изображение, PDF не поддерживается]"
+        """Асинхронно распознать изображение или PDF через Datalab API"""
+
+        # Определяем источник: PDF или изображение
+        if pdf_file_path and os.path.exists(pdf_file_path):
+            tmp_path = pdf_file_path
+            mime_type = "application/pdf"
+            need_cleanup = False
+            logger.info(f"Datalab: используем PDF ввод: {pdf_file_path}")
+        elif image is not None:
+            mime_type = "image/png"
+            need_cleanup = True
+        else:
+            return "[Ошибка: Datalab требует изображение или PDF]"
 
         # Async rate limiter
         if self.rate_limiter:
@@ -86,25 +105,26 @@ class AsyncDatalabOCRBackend:
                 return "[Ошибка: таймаут ожидания rate limiter]"
 
         try:
-            # Ресайз если нужно
-            if image.width > self.MAX_WIDTH:
-                ratio = self.MAX_WIDTH / image.width
-                new_width = self.MAX_WIDTH
-                new_height = int(image.height * ratio)
-                logger.info(
-                    f"Сжатие изображения {image.width}x{image.height} -> {new_width}x{new_height}"
-                )
-                image = image.resize((new_width, new_height), Image.LANCZOS)
+            # Подготовка изображения (только для image, не для PDF)
+            if need_cleanup:
+                if image.width > self.MAX_WIDTH:
+                    ratio = self.MAX_WIDTH / image.width
+                    new_width = self.MAX_WIDTH
+                    new_height = int(image.height * ratio)
+                    logger.info(
+                        f"Сжатие изображения {image.width}x{image.height} -> {new_width}x{new_height}"
+                    )
+                    image = image.resize((new_width, new_height), Image.LANCZOS)
 
-            # Сохранить во временный файл
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                image.save(tmp, format="PNG")
-                tmp_path = tmp.name
+                # Сохранить во временный файл
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    image.save(tmp, format="PNG")
+                    tmp_path = tmp.name
 
             try:
-                return await self._process_with_retries(tmp_path)
+                return await self._process_with_retries(tmp_path, mime_type)
             finally:
-                if os.path.exists(tmp_path):
+                if need_cleanup and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
 
         except Exception as e:
@@ -130,7 +150,7 @@ class AsyncDatalabOCRBackend:
         elif hasattr(self.rate_limiter, "release"):
             self.rate_limiter.release()
 
-    async def _process_with_retries(self, tmp_path: str) -> str:
+    async def _process_with_retries(self, tmp_path: str, mime_type: str = "image/png") -> str:
         """Обработка с полными retry циклами"""
         client = await self._get_client()
 
@@ -141,7 +161,8 @@ class AsyncDatalabOCRBackend:
                 )
 
             # Отправка запроса с retry для 429
-            response = await self._send_request_with_429_retry(client, tmp_path)
+            skip_cache = full_retry > 0
+            response = await self._send_request_with_429_retry(client, tmp_path, mime_type, skip_cache)
 
             if response is None:
                 return "[Ошибка Datalab API: превышен лимит запросов (429)]"
@@ -177,6 +198,18 @@ class AsyncDatalabOCRBackend:
             poll_result = await self._poll_result(client, check_url)
 
             if poll_result is not None:
+                # Проверка качества — retry если score ниже порога
+                if (self.last_quality_score is not None
+                        and self.last_quality_score < self.quality_threshold
+                        and full_retry < self.max_retries - 1):
+                    logger.warning(
+                        f"Datalab: низкое качество {self.last_quality_score} < {self.quality_threshold}, "
+                        f"retry {full_retry + 1}/{self.max_retries}"
+                    )
+                    wait_time = (full_retry + 1) * 5
+                    logger.info(f"Datalab: ожидание {wait_time}с перед retry из-за низкого качества")
+                    await asyncio.sleep(wait_time)
+                    continue
                 return poll_result
 
             # Таймаут поллинга
@@ -198,7 +231,8 @@ class AsyncDatalabOCRBackend:
         return ""
 
     async def _send_request_with_429_retry(
-        self, client: httpx.AsyncClient, tmp_path: str
+        self, client: httpx.AsyncClient, tmp_path: str,
+        mime_type: str = "image/png", skip_cache: bool = False,
     ) -> Optional[httpx.Response]:
         """Отправить запрос с обработкой 429 ошибок"""
         response = None
@@ -207,7 +241,7 @@ class AsyncDatalabOCRBackend:
             with open(tmp_path, "rb") as f:
                 file_content = f.read()
 
-            files = {"file": (os.path.basename(tmp_path), file_content, "image/png")}
+            files = {"file": (os.path.basename(tmp_path), file_content, mime_type)}
             data = {
                 "mode": "accurate",
                 "paginate": "true",
@@ -216,6 +250,10 @@ class AsyncDatalabOCRBackend:
                 "disable_image_captions": "true",
                 "additional_config": json.dumps({"keep_pageheader_in_output": True}),
             }
+            if self.extras:
+                data["extras"] = self.extras
+            if skip_cache:
+                data["skip_cache"] = "true"
 
             response = await client.post(
                 self.API_URL,
@@ -281,6 +319,7 @@ class AsyncDatalabOCRBackend:
             if status == "complete":
                 quality = poll_result.get("parse_quality_score")
                 runtime = poll_result.get("runtime")
+                self.last_quality_score = quality
                 logger.info(
                     f"Datalab: задача успешно завершена"
                     f"{f', quality={quality}' if quality is not None else ''}"
