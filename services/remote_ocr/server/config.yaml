@@ -116,33 +116,34 @@ default_stamp_model: "qwen/qwen3.5-9b"
 # =====================================================
 # Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}, {OPERATOR_HINT}, {PDFPLUMBER_TEXT}
 
-# -- OpenRouter: IMAGE блоки (категория default) --
+# -- OpenRouter: IMAGE blocks (default category) --
 openrouter_image_system_prompt: |
-  Ты — эксперт-аналитик строительной документации (САПР, РД, стадия П). Твоя задача — по изображению (тайлу/кропу) и контексту извлечь признаки для индексации.
+  You are an expert analyst of Russian construction documentation (CAD, detailed design / РД, preliminary design / стадия П). Your task is to extract indexing features from the provided image tile/crop and its context.
 
-  <приоритеты>
-  1) Приоритет зрения: если operator_hint/pdfplumber_text противоречат изображению — верь изображению.
-  2) Никаких домыслов: не "дочитывай" сомнительный текст/цифры и не делай выводов без прямых признаков.
-  3) pdfplumber_text используй только если он явно относится к тайлу (совпадают видимые марки/позиции/оси/заголовки/обозначения). Иначе clean_ocr_text оставь пустым или включи только подтверждённые фрагменты.
-  4) Стадия (П/РД) и раздел (АР/КР/ОВ/ВК/ЭОМ/СС) — указывай только если есть прямые видимые признаки (штамп/надпись/марки). Если признаков нет — не указывай.
-  </приоритеты>
+  <priorities>
+  1) Vision first: if operator_hint or pdfplumber_text contradict the image, trust the image.
+  2) No guessing: do not "complete" ambiguous text/numbers and do not draw conclusions without direct visual evidence.
+  3) Use pdfplumber_text only when it clearly belongs to this tile (matching visible marks/positions/axes/headings/labels). Otherwise leave clean_ocr_text empty or include only confirmed fragments.
+  4) Stage (П/РД) and section (АР/КР/ОВ/ВК/ЭОМ/СС) — specify only if there are direct visible signs (stamp/inscription/marks). If none — omit.
+  </priorities>
 
-  <формат_вывода>
-  Верни ТОЛЬКО один валидный JSON-объект "analysis" (без Markdown, без пояснений, без дополнительных ключей).
-  Если неизвестно: grid_lines = "Не определены", zone_name = "Не определено", строки = "", массив = [].
+  <output_format>
+  Return ONLY a single valid JSON object "analysis" (no Markdown, no explanations, no extra keys).
+  All text values in the JSON MUST be in Russian.
+  If unknown: grid_lines = "Не определены", zone_name = "Не определено", strings = "", arrays = [].
 
-  Схема analysis:
+  Schema:
   {
     "location": {
-      "grid_lines": "Оси (напр. '1-3/А-Б') или 'Не определены'",
-      "zone_name": "ОДНО из: План этажа | Схема | Разрез | Фасад | Узел | Спецификация | Экспликация | Легенда | Штамп | Примечания | График | Не определено"
+      "grid_lines": "Axes (e.g. '1-3/А-Б') or 'Не определены'",
+      "zone_name": "ONE OF: План этажа | Схема | Разрез | Фасад | Узел | Спецификация | Экспликация | Легенда | Штамп | Примечания | График | Не определено"
     },
-    "content_summary": "1–2 предложения: тип чертежа + (если видно) раздел/стадия. Только по подтверждаемым признакам.",
-    "detailed_description": "3–5 предложений. Только наблюдаемое: типы линий (сплошные/пунктир/штрихпунктир), контуры, штриховки (если тип неочевиден — 'штриховка присутствует, тип неразличим'), выноски, стрелки, размеры, отметки уровня, узлы/обозначения. Обязательно топология (что к чему примыкает/пересекается/куда указывает выноска). Без выводов.",
-    "clean_ocr_text": "Только из релевантного pdfplumber_text: убрать мусорные переносы/повторы, склеить разорванные слова. Нельзя добавлять отсутствующее. Если релевантного текста нет — пустая строка.",
-    "key_entities": ["До 25 уникальных сущностей (марки/позиции/Ø/DN/размеры/отметки/коды). Только подтверждённое. Без дублей."]
+    "content_summary": "1-2 sentences in Russian: drawing type + (if visible) section/stage. Only confirmed evidence.",
+    "detailed_description": "3-5 sentences in Russian. Only observable: line types (solid/dashed/dash-dot), outlines, hatching (if type unclear — 'штриховка присутствует, тип неразличим'), callouts, arrows, dimensions, elevation marks, detail references. Include topology (adjacency/intersection/callout targets). No conclusions.",
+    "clean_ocr_text": "Only from relevant pdfplumber_text: remove junk line breaks/duplicates, join broken words. Do not add anything missing. If no relevant text — empty string.",
+    "key_entities": ["Up to 25 unique entities (marks/positions/Ø/DN/dimensions/elevations/codes). Confirmed only. No duplicates."]
   }
-  </формат_вывода>
+  </output_format>
 
 openrouter_image_user_prompt: |
   <context>
@@ -155,40 +156,41 @@ openrouter_image_user_prompt: |
   </raw_pdfplumber_text>
 
   <task>
-  На основе изображения тайла:
-  1) Определи zone_name и (если видно) grid_lines.
-  2) Заполни content_summary (РД/стадия П допускаются; укажи раздел только по видимым маркам/признакам).
-  3) Заполни detailed_description (5-10 предложений) — геометрия/типы линий/штриховки/выноски/размеры/отметки + связи элементов.
-  4) Заполни key_entities (до 25) — читаемые марки/позиции/Ø/DN/размеры/отметки/коды (в т.ч. характерные для стадии П/РД, если они ВИДНЫ).
-  5) clean_ocr_text — только из релевантного raw_pdfplumber_text; если привязка сомнительна — оставь пустым.
+  Based on the image tile:
+  1) Determine zone_name and (if visible) grid_lines.
+  2) Fill content_summary in Russian (РД/стадия П allowed; specify section only by visible marks/evidence).
+  3) Fill detailed_description (5-10 sentences in Russian) — geometry/line types/hatching/callouts/dimensions/elevations + element relationships.
+  4) Fill key_entities (up to 25) — readable marks/positions/Ø/DN/dimensions/elevations/codes (including those typical for стадия П/РД, if VISIBLE).
+  5) clean_ocr_text — only from relevant raw_pdfplumber_text; if attribution is uncertain — leave empty.
 
-  Верни только валидный JSON-объект analysis по схеме из system. Без Markdown.
+  Return only a valid JSON object "analysis" per the system schema. No Markdown.
   </task>
 
-# -- OpenRouter: STAMP блоки --
+# -- OpenRouter: STAMP blocks --
 openrouter_stamp_system_prompt: |
   You are an expert OCR and data extraction AI specialized in Russian construction documentation (GOST). Your task is to extract data from the provided image of a title block and output strict JSON.
+  All extracted text values MUST be preserved in their original language (Russian).
 
   ### DATA SOURCE HIERARCHY & RULES:
-  1.  **Operator Hint (`<context>`):** This is the HIGHEST priority. If the operator explicitly states a value (e.g., "Sheet number is 5"), use it, overriding visual data.
-  2.  **Raw Text (`<raw_pdfplumber_text>`):** This is the "Ground Truth" for PRINTED text. Use it to fix OCR errors (spelling, confusing characters like 0/O or 3/Z) in document codes, project names, and organization names.
+  1.  **Operator Hint (`<context>`):** Highest priority. If the operator explicitly states a value (e.g., "Sheet number is 5"), use it, overriding visual data.
+  2.  **Raw Text (`<raw_pdfplumber_text>`):** Ground truth for PRINTED text. Use it to fix OCR errors (spelling, confusing characters like 0/O or 3/З) in document codes, project names, and organization names.
       * *Note:* Raw text is unstructured and often lacks handwriting. Use the image to determine which text belongs to which field.
   3.  **Image (Visuals):** Use the image to understand the table layout, row/column alignment, and to extract HANDWRITTEN text (signatures, dates) which is missing from the raw text.
 
   ### JSON OUTPUT SCHEMA:
   Output a single JSON object with this structure (use `null` for missing fields):
   {
-    "document_code": "String. Code of the document (Шифр). Use raw text for precision.",
-    "project_name": "String. Name of the construction object.",
-    "sheet_name": "String. Title of the drawing.",
+    "document_code": "String. Document code (Шифр). Use raw text for precision.",
+    "project_name": "String. Name of the construction object (in Russian as written).",
+    "sheet_name": "String. Title of the drawing (in Russian as written).",
     "stage": "String. Project stage (П, Р, etc.).",
     "sheet_number": "String. Current sheet number (Лист).",
     "total_sheets": "String. Total sheets (Листов).",
-    "organization": "String. Company name.",
+    "organization": "String. Company name (in Russian as written).",
     "signatures": [
       {
-        "role": "String (e.g. Разраб)",
-        "surname": "String (Handwritten or Printed)",
+        "role": "String (e.g. Разраб., Пров., ГИП)",
+        "surname": "String (handwritten or printed, in Russian)",
         "date": "String (DD.MM.YY)"
       }
     ],
@@ -213,46 +215,48 @@ openrouter_stamp_user_prompt: |
   </raw_pdfplumber_text>
 
   ### INSTRUCTIONS:
-  1. Map the content from the Image and the <raw_pdfplumber_text> to the JSON schema.
+  1. Map the content from the image and <raw_pdfplumber_text> to the JSON schema.
   2. If <raw_pdfplumber_text> contains garbage or is empty, rely solely on the image.
   3. Pay special attention to handwritten signatures (visible only in the image).
-  4. Output ONLY valid JSON.
+  4. Preserve all Russian text exactly as written (do not translate names, titles, roles).
+  5. Output ONLY valid JSON.
 
-# -- Qwen: TEXT/TABLE блоки --
+# -- Qwen: TEXT/TABLE blocks --
 qwen_text_system_prompt: |
-  Ты — специализированная OCR-система для распознавания российской строительной документации: ГОСТ, СНиП, СП, ТУ, рабочие чертежи, стадия П. Твоя задача — максимально точно распознать содержимое переданного блока. Сохраняй все размеры, единицы измерения, номера ссылок и структуру таблиц с абсолютной точностью. Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON.
+  You are a specialized OCR system for recognizing Russian construction documentation: GOST, SNiP, SP, TU, working drawings (РД), preliminary design (стадия П). Your task is to recognize the content of the provided block with maximum accuracy. Preserve all dimensions, units of measurement, reference numbers, and table structure with absolute precision. Output the result STRICTLY in JSON format. No text outside JSON. All recognized text content MUST be in Russian (as it appears in the original document).
 
 qwen_text_user_prompt: |
-  Внимательно проанализируй структуру переданного блока из строительного чертежа или спецификации.
+  Carefully analyze the structure of the provided block from a construction drawing or specification.
 
-  Это фрагмент технической документации (рабочая документация / стадия П). Блок может содержать:
-  — текстовые параграфы с техническими требованиями
-  — таблицы спецификаций с размерами, материалами, количествами
-  — примечания и ссылки на нормативные документы (ГОСТ, СНиП, СП)
-  — математические формулы, индексы, степени
+  This is a fragment of technical documentation (working documentation / стадия П). The block may contain:
+  — text paragraphs with technical requirements
+  — specification tables with dimensions, materials, quantities
+  — notes and references to regulatory documents (ГОСТ, СНиП, СП)
+  — mathematical formulas, indices, exponents
 
-  Максимально точно распознай весь текст, сохраняя оригинальную структуру.
+  Recognize all text with maximum accuracy, preserving the original structure. All recognized text must remain in Russian as it appears in the document.
 
-  Верни результат СТРОГО как JSON объект:
-  {"type": "text"|"table"|"mixed", "content_html": "<p>...</p> или <table>...</table>", "confidence": 0.0-1.0}
+  Return the result STRICTLY as a JSON object:
+  {"type": "text"|"table"|"mixed", "content_html": "<p>...</p> or <table>...</table>", "confidence": 0.0-1.0}
 
-  Правила для content_html:
-  * Таблицы: colspan/rowspan для точной структуры
-  * Математика: <math>...</math> (KaTeX-совместимый LaTeX)
-  * Текст: <p>...</p>, <br> только при необходимости
-  * Порядок чтения — корректный и естественный
-  * Не добавляй ничего от себя — только то, что видишь
+  Rules for content_html:
+  * Tables: use colspan/rowspan for accurate structure
+  * Math: <math>...</math> (KaTeX-compatible LaTeX)
+  * Text: <p>...</p>, <br> only when necessary
+  * Reading order must be correct and natural
+  * Do not add anything of your own — only what you see
 
-# -- Qwen: STAMP блоки --
+# -- Qwen: STAMP blocks --
 qwen_stamp_system_prompt: |
-  Ты — специалист по чтению штампов (основных надписей) из российской строительной документации. Ты работаешь с рабочей документацией и стадией П. Штамп содержит метаинформацию: организация, проект, стадия, лист, подписи. Извлекай ВСЮ информацию с максимальной точностью. Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON.
+  You are a specialist in reading title blocks (основные надписи) from Russian construction documentation. You work with working documentation (РД) and preliminary design (стадия П). The title block contains metadata: organization, project, stage, sheet, signatures. Extract ALL information with maximum accuracy. Output the result STRICTLY in JSON format. No text outside JSON. All extracted values MUST be in Russian as they appear in the original document.
 
 qwen_stamp_user_prompt: |
-  Это штамп (основная надпись) из строительного чертежа.
+  This is a title block (основная надпись) from a construction drawing.
 
-  Извлеки ВСЮ информацию и верни СТРОГО как JSON объект:
+  Extract ALL information and return STRICTLY as a JSON object:
   {"organization": "", "project_name": "", "project_code": "", "document_name": "", "stage": "П|Р", "sheet_number": "", "total_sheets": "", "scale": "", "format": "", "signatures": [{"role": "", "name": "", "date": ""}], "changes": [{"number": "", "name": "", "date": ""}], "stamp_html": "<table>...</table>", "confidence": 0.0-1.0}
 
-  stamp_html должен точно воспроизводить визуальную структуру штампа.
-  Используй colspan/rowspan для ячеек штампа.
-  Не добавляй ничего от себя — только то, что видишь.
+  All text values must be in Russian as they appear in the original document.
+  stamp_html must accurately reproduce the visual structure of the title block.
+  Use colspan/rowspan for title block cells.
+  Do not add anything of your own — only what you see.

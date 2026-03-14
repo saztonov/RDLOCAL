@@ -18,51 +18,54 @@ QWEN_LOAD_CONFIG = {
     "eval_batch_size": 512,
 }
 
-# ── Промпты: TEXT / TABLE ───────────────────────────────────────────
+# ── Промпты: TEXT / TABLE (fallback) ────────────────────────────────
 QWEN_TEXT_SYSTEM = (
-    "Ты — специализированная OCR-система для распознавания российской "
-    "строительной документации: ГОСТ, СНиП, СП, ТУ, рабочие чертежи, стадия П. "
-    "Твоя задача — максимально точно распознать содержимое переданного блока. "
-    "Сохраняй все размеры, единицы измерения, номера ссылок и структуру таблиц "
-    "с абсолютной точностью. "
-    "Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON."
+    "You are a specialized OCR system for recognizing Russian construction "
+    "documentation: GOST, SNiP, SP, TU, working drawings (РД), preliminary "
+    "design (стадия П). Your task is to recognize the content of the provided "
+    "block with maximum accuracy. Preserve all dimensions, units of measurement, "
+    "reference numbers, and table structure with absolute precision. "
+    "Output the result STRICTLY in JSON format. No text outside JSON. "
+    "All recognized text content MUST be in Russian (as it appears in the original document)."
 )
 
 QWEN_TEXT_PROMPT = (
-    "Внимательно проанализируй структуру переданного блока "
-    "из строительного чертежа или спецификации.\n\n"
-    "Это фрагмент технической документации (рабочая документация / стадия П). "
-    "Блок может содержать:\n"
-    "— текстовые параграфы с техническими требованиями\n"
-    "— таблицы спецификаций с размерами, материалами, количествами\n"
-    "— примечания и ссылки на нормативные документы (ГОСТ, СНиП, СП)\n"
-    "— математические формулы, индексы, степени\n\n"
-    "Максимально точно распознай весь текст, сохраняя оригинальную структуру.\n\n"
-    'Верни результат СТРОГО как JSON объект:\n'
+    "Carefully analyze the structure of the provided block "
+    "from a construction drawing or specification.\n\n"
+    "This is a fragment of technical documentation (working documentation / стадия П). "
+    "The block may contain:\n"
+    "— text paragraphs with technical requirements\n"
+    "— specification tables with dimensions, materials, quantities\n"
+    "— notes and references to regulatory documents (ГОСТ, СНиП, СП)\n"
+    "— mathematical formulas, indices, exponents\n\n"
+    "Recognize all text with maximum accuracy, preserving the original structure. "
+    "All recognized text must remain in Russian as it appears in the document.\n\n"
+    'Return the result STRICTLY as a JSON object:\n'
     '{"type": "text"|"table"|"mixed", '
-    '"content_html": "<p>...</p> или <table>...</table>", '
+    '"content_html": "<p>...</p> or <table>...</table>", '
     '"confidence": 0.0-1.0}\n\n'
-    "Правила для content_html:\n"
-    f"* Теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
-    "* Таблицы: colspan/rowspan для точной структуры\n"
-    "* Математика: <math>...</math> (KaTeX-совместимый LaTeX)\n"
-    "* Текст: <p>...</p>, <br> только при необходимости\n"
-    "* Порядок чтения — корректный и естественный\n"
-    "* Не добавляй ничего от себя — только то, что видишь"
+    "Rules for content_html:\n"
+    f"* Tags: [{ALLOWED_TAGS}], attributes: [{ALLOWED_ATTRIBUTES}]\n"
+    "* Tables: use colspan/rowspan for accurate structure\n"
+    "* Math: <math>...</math> (KaTeX-compatible LaTeX)\n"
+    "* Text: <p>...</p>, <br> only when necessary\n"
+    "* Reading order must be correct and natural\n"
+    "* Do not add anything of your own — only what you see"
 )
 
-# ── Промпты: STAMP ─────────────────────────────────────────────────
+# ── Промпты: STAMP (fallback) ──────────────────────────────────────
 QWEN_STAMP_SYSTEM = (
-    "Ты — специалист по чтению штампов (основных надписей) из российской "
-    "строительной документации. Ты работаешь с рабочей документацией и стадией П. "
-    "Штамп содержит метаинформацию: организация, проект, стадия, лист, подписи. "
-    "Извлекай ВСЮ информацию с максимальной точностью. "
-    "Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON."
+    "You are a specialist in reading title blocks (основные надписи) from Russian "
+    "construction documentation. You work with working documentation (РД) and "
+    "preliminary design (стадия П). The title block contains metadata: organization, "
+    "project, stage, sheet, signatures. Extract ALL information with maximum accuracy. "
+    "Output the result STRICTLY in JSON format. No text outside JSON. "
+    "All extracted values MUST be in Russian as they appear in the original document."
 )
 
 QWEN_STAMP_PROMPT = (
-    "Это штамп (основная надпись) из строительного чертежа.\n\n"
-    "Извлеки ВСЮ информацию и верни СТРОГО как JSON объект:\n"
+    "This is a title block (основная надпись) from a construction drawing.\n\n"
+    "Extract ALL information and return STRICTLY as a JSON object:\n"
     '{"organization": "", "project_name": "", "project_code": "", '
     '"document_name": "", "stage": "П|Р", '
     '"sheet_number": "", "total_sheets": "", '
@@ -71,10 +74,11 @@ QWEN_STAMP_PROMPT = (
     '"changes": [{"number": "", "name": "", "date": ""}], '
     '"stamp_html": "<table>...</table>", '
     '"confidence": 0.0-1.0}\n\n'
-    f"Для stamp_html используй теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
-    "stamp_html должен точно воспроизводить визуальную структуру штампа.\n"
-    "Используй colspan/rowspan для ячеек штампа.\n"
-    "Не добавляй ничего от себя — только то, что видишь."
+    "All text values must be in Russian as they appear in the original document.\n"
+    f"For stamp_html use tags: [{ALLOWED_TAGS}], attributes: [{ALLOWED_ATTRIBUTES}]\n"
+    "stamp_html must accurately reproduce the visual structure of the title block.\n"
+    "Use colspan/rowspan for title block cells.\n"
+    "Do not add anything of your own — only what you see."
 )
 
 # Retry конфигурация (общая с Chandra)
