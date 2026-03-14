@@ -166,7 +166,14 @@ def verify_and_retry_missing_blocks(
     empty_count = total_found - error_count
     logger.warning(
         f"Найдено {total_found} нераспознанных текстовых блоков "
-        f"(пустых: {empty_count}, ошибок API: {error_count}), engine: {engine_name}"
+        f"(пустых: {empty_count}, ошибок API: {error_count}), engine: {engine_name}",
+        extra={
+            "event": "verification_missing_blocks",
+            "job_id": job_id,
+            "total_blocks": total_found,
+            "block_count": error_count,
+            "backend": engine_name,
+        },
     )
 
     # Лимиты верификации из конфигурации
@@ -328,7 +335,17 @@ def verify_and_retry_missing_blocks(
         status_parts.append(f"прервано: {stopped_reason}")
     status_parts.append(f"за {elapsed_total:.1f} мин")
 
-    logger.info(f"Верификация завершена: {', '.join(status_parts)}")
+    logger.info(
+        f"Верификация завершена: {', '.join(status_parts)}",
+        extra={
+            "event": "verification_completed",
+            "job_id": job_id,
+            "recognized_count": successful_retries,
+            "total_blocks": len(missing_blocks),
+            "duration_ms": int((time.monotonic() - start_time) * 1000),
+            "backend": engine_name,
+        },
+    )
     return successful_retries > 0
 
 

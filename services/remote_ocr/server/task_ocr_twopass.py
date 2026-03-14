@@ -76,14 +76,25 @@ def run_two_pass_ocr(
             should_stop=lambda: check_paused(job.id),
         )
 
+        total_strips = len(manifest.strips) if manifest else 0
+        total_images = len(manifest.image_blocks) if manifest else 0
+
+        logger.info(
+            f"PASS1 завершён: {total_strips} strips, {total_images} images",
+            extra={
+                "event": "pass1_completed",
+                "job_id": job.id,
+                "strip_count": total_strips,
+                "image_count": total_images,
+                "total_blocks": len(blocks),
+                "engine": engine,
+            },
+        )
+
         log_memory_delta("После PASS1", start_mem)
 
         if check_paused(job.id):
             return
-
-        # PASS 2: OCR с загрузкой с диска
-        total_strips = len(manifest.strips) if manifest else 0
-        total_images = len(manifest.image_blocks) if manifest else 0
 
         def on_pass2_progress(current, total, block_info: str = None):
             progress = 0.4 + 0.5 * (current / total)
@@ -117,6 +128,18 @@ def run_two_pass_ocr(
             max_concurrent = getattr(settings, f"{engine}_max_concurrent", 2)
         else:
             max_concurrent = None
+
+        logger.info(
+            f"PASS2: запуск async OCR (max_concurrent={max_concurrent or settings.ocr_threads_per_job})",
+            extra={
+                "event": "pass2_start",
+                "job_id": job.id,
+                "strip_count": total_strips,
+                "image_count": total_images,
+                "max_concurrent": max_concurrent or settings.ocr_threads_per_job,
+                "engine": engine,
+            },
+        )
 
         # Запуск async pass2 через asyncio.run
         asyncio.run(

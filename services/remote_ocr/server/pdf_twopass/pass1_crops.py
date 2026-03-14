@@ -120,6 +120,16 @@ def pass1_prepare_crops(
                                     height=crop_part.height,
                                 )
                             )
+                            logger.debug(
+                                f"Image crop: {block.id} ({crop_part.width}x{crop_part.height})",
+                                extra={
+                                    "event": "image_crop_saved",
+                                    "block_id": block.id,
+                                    "page_index": block.page_index,
+                                    "crop_width": crop_part.width,
+                                    "crop_height": crop_part.height,
+                                },
+                            )
 
                         crop_part.close()
 
@@ -273,16 +283,28 @@ def _group_and_merge_strips(
                     except:
                         pass
 
+        block_ids_list = [b[0] for b in current_strip_blocks]
         strips.append(
             StripManifestEntry(
                 strip_id=strip_id,
                 strip_path=strip_path,
-                block_ids=[b[0] for b in current_strip_blocks],
+                block_ids=block_ids_list,
                 block_parts=[
                     {"block_id": b[0], "part_idx": b[2], "total_parts": b[3]}
                     for b in current_strip_blocks
                 ],
             )
+        )
+
+        logger.debug(
+            f"Strip {strip_id}: {len(block_ids_list)} блоков, высота={current_strip_height}px",
+            extra={
+                "event": "strip_created",
+                "strip_id": strip_id,
+                "block_count": len(block_ids_list),
+                "block_ids": block_ids_list,
+                "crop_height": current_strip_height,
+            },
         )
 
         current_strip_blocks = []

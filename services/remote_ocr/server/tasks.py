@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,7 @@ logger = get_logger(__name__)
 def run_ocr_task(self, job_id: str) -> dict:
     """Celery задача для обработки OCR"""
     start_mem = log_memory(f"[START] Задача {job_id}")
+    start_time = time.time()
 
     work_dir = None
     engine = "openrouter"
@@ -146,6 +148,17 @@ def run_ocr_task(self, job_id: str) -> dict:
         image_backend = backends.image
         stamp_backend = backends.stamp
 
+        logger.info(
+            f"Бэкенды готовы: engine={engine}, блоков={total_blocks}",
+            extra={
+                "event": "task_backends_ready",
+                "job_id": job.id,
+                "engine": engine,
+                "backend_type": type(strip_backend).__name__,
+                "total_blocks": total_blocks,
+            },
+        )
+
         if backends.needs_lmstudio:
             if engine == "chandra":
                 acquire_chandra(job_id)
@@ -228,13 +241,32 @@ def run_ocr_task(self, job_id: str) -> dict:
             status_msg = f"❌ Ошибка: 0/{total_blocks} блоков распознано"
 
         update_job_status(job.id, "done", progress=1.0, status_message=status_msg)
-        logger.info(f"Задача {job.id} завершена: {recognized}/{total_blocks} блоков распознано")
+        logger.info(
+            f"Задача {job.id} завершена: {recognized}/{total_blocks} блоков распознано",
+            extra={
+                "event": "task_completed",
+                "job_id": job.id,
+                "engine": engine,
+                "recognized_count": recognized,
+                "total_blocks": total_blocks,
+                "duration_ms": int((time.time() - start_time) * 1000),
+            },
+        )
 
         return {"status": "done", "job_id": job_id}
 
     except Exception as e:
         error_msg = f"{e}\n{traceback.format_exc()}"
-        logger.error(f"Ошибка обработки задачи {job_id}: {error_msg}")
+        logger.error(
+            f"Ошибка обработки задачи {job_id}: {error_msg}",
+            extra={
+                "event": "task_error",
+                "job_id": job_id,
+                "engine": engine,
+                "exception_type": type(e).__name__,
+                "duration_ms": int((time.time() - start_time) * 1000),
+            },
+        )
         update_job_status(job_id, "error", error_message=str(e), status_message="❌ Ошибка обработки")
         return {"status": "error", "message": str(e)}
 

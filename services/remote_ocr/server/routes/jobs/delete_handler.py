@@ -31,6 +31,17 @@ def delete_job_handler(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    _logger.info(
+        f"Удаление задачи: {job_id}",
+        extra={
+            "event": "job_lifecycle",
+            "action": "delete",
+            "job_id": job_id,
+            "node_id": job.node_id,
+            "status": job.status,
+        },
+    )
+
     # Если job привязан к node, файлы принадлежат node_files - НЕ удаляем из R2
     if job.node_id:
         _logger.info(

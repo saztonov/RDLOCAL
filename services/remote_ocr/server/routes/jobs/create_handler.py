@@ -55,7 +55,21 @@ async def create_job_handler(
 
     blocks_json = (await blocks_file.read()).decode("utf-8")
     _logger.info(
-        f"POST /jobs: document_id={document_id[:16]}..., node_id={node_id}"
+        f"POST /jobs: создание OCR задачи",
+        extra={
+            "event": "job_create_request",
+            "action": "create",
+            "client_id": client_id,
+            "document_id": document_id[:16],
+            "document_name": document_name,
+            "task_name": task_name,
+            "engine": engine,
+            "text_model": text_model or None,
+            "table_model": table_model or None,
+            "image_model": image_model or None,
+            "stamp_model": stamp_model or None,
+            "node_id": node_id,
+        },
     )
 
     try:
@@ -110,6 +124,17 @@ async def create_job_handler(
 
     can_accept, queue_size, max_size = check_queue_capacity()
     if not can_accept:
+        _logger.warning(
+            f"Очередь полна, задача отклонена: {queue_size}/{max_size}",
+            extra={
+                "event": "queue_rejected",
+                "action": "create",
+                "job_id": job_id,
+                "client_id": client_id,
+                "queue_size": queue_size,
+                "max_queue_size": max_size,
+            },
+        )
         raise HTTPException(
             status_code=503,
             detail=f"Queue is full ({queue_size}/{max_size}). Try again later.",
@@ -207,6 +232,19 @@ async def create_job_handler(
         time_limit=hard_timeout,
     )
     save_celery_task_id(job.id, celery_result.id)
+
+    _logger.info(
+        f"Задача создана и поставлена в очередь: {job.id}",
+        extra={
+            "event": "job_created",
+            "action": "create",
+            "job_id": job.id,
+            "client_id": client_id,
+            "engine": engine,
+            "total_blocks": block_count,
+            "node_id": node_id,
+        },
+    )
 
     return {
         "id": job.id,

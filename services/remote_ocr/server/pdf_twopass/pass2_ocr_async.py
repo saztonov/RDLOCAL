@@ -94,7 +94,14 @@ async def pass2_ocr_from_manifest_async(
         # Восстанавливаем результаты из checkpoint
         restored = checkpoint.apply_to_blocks(blocks)
         if restored > 0:
-            logger.info(f"PASS2 ASYNC: восстановлено {restored} блоков из checkpoint")
+            logger.info(
+                f"PASS2 ASYNC: восстановлено {restored} блоков из checkpoint",
+                extra={
+                    "event": "checkpoint_restored",
+                    "checkpoint_count": restored,
+                    "phase": checkpoint.phase,
+                },
+            )
 
         # Обновляем processed count
         processed = len(checkpoint.processed_strips) + len(checkpoint.processed_images)
@@ -173,7 +180,21 @@ async def pass2_ocr_from_manifest_async(
                 block_ids = [bp["block_id"] for bp in strip.block_parts]
                 logger.info(
                     f"PASS2 ASYNC: начало обработки strip {strip.strip_id} "
-                    f"({len(strip.block_parts)} блоков): {block_ids}"
+                    f"({len(strip.block_parts)} блоков): {block_ids}",
+                    extra={
+                        "event": "strip_ocr_start",
+                        "strip_id": strip.strip_id,
+                        "block_count": len(strip.block_parts),
+                        "block_ids": block_ids,
+                    },
+                )
+                logger.debug(
+                    f"Strip {strip.strip_id}: prompt подготовлен",
+                    extra={
+                        "event": "strip_prompt_prepared",
+                        "strip_id": strip.strip_id,
+                        "prompt_length": len(str(prompt_data)),
+                    },
                 )
 
                 response_text = None
@@ -236,12 +257,26 @@ async def pass2_ocr_from_manifest_async(
                 response_len = len(response_text) if response_text else 0
                 if response_len == 0:
                     logger.warning(
-                        f"PASS2 ASYNC: strip {strip.strip_id} — пустой ответ от OCR бэкенда"
+                        f"PASS2 ASYNC: strip {strip.strip_id} — пустой ответ от OCR бэкенда",
+                        extra={
+                            "event": "strip_ocr_empty",
+                            "strip_id": strip.strip_id,
+                            "block_count": len(strip.block_parts),
+                            "backend_type": type(strip_backend).__name__,
+                        },
                     )
                 else:
                     logger.info(
                         f"PASS2 ASYNC: завершена обработка strip {strip.strip_id}, "
-                        f"ответ {response_len} символов"
+                        f"ответ {response_len} символов",
+                        extra={
+                            "event": "strip_ocr_completed",
+                            "strip_id": strip.strip_id,
+                            "response_length": response_len,
+                            "block_count": len(strip.block_parts),
+                            "strip_attempt": strip_attempt,
+                            "backend_type": type(strip_backend).__name__,
+                        },
                     )
 
                 index_results = parse_batch_response_by_index(
@@ -325,7 +360,17 @@ async def pass2_ocr_from_manifest_async(
                     category_code=category_code,
                 )
 
-                logger.info(f"PASS2 ASYNC: начало обработки IMAGE блока {entry.block_id}")
+                logger.info(
+                    f"PASS2 ASYNC: начало обработки IMAGE блока {entry.block_id}",
+                    extra={
+                        "event": "image_ocr_start",
+                        "block_id": entry.block_id,
+                        "page_index": entry.page_index,
+                        "backend_type": type(backend).__name__,
+                        "category_code": category_code,
+                        "use_pdf_crop": bool(use_pdf),
+                    },
+                )
 
                 # Получаем разрешение от rate limiter
                 if not await rate_limiter.acquire_async():
@@ -363,7 +408,18 @@ async def pass2_ocr_from_manifest_async(
                 finally:
                     await rate_limiter.release_async()
 
-                logger.info(f"PASS2 ASYNC: завершена обработка IMAGE блока {entry.block_id}")
+                logger.info(
+                    f"PASS2 ASYNC: завершена обработка IMAGE блока {entry.block_id}",
+                    extra={
+                        "event": "image_ocr_completed",
+                        "block_id": entry.block_id,
+                        "page_index": entry.page_index,
+                        "response_length": len(text) if text else 0,
+                        "backend_type": type(backend).__name__,
+                        "category_code": category_code,
+                        "use_pdf_crop": bool(use_pdf),
+                    },
+                )
 
                 text = inject_pdfplumber_to_ocr_text(text, pdfplumber_text)
                 block.pdfplumber_text = pdfplumber_text

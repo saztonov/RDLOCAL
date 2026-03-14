@@ -132,10 +132,26 @@ def create_job_backends(job) -> JobBackends:
     else:
         stamp_backend = create_ocr_engine("dummy")
 
-    return JobBackends(
+    result = JobBackends(
         strip=strip_backend,
         image=image_backend,
         stamp=stamp_backend,
         engine=engine,
         needs_lmstudio=needs_lmstudio,
     )
+
+    logger.info(
+        f"Бэкенды для задачи созданы: engine={engine}",
+        extra={
+            "event": "job_backends_created",
+            "job_id": job.id,
+            "engine": engine,
+            "backend_type": type(strip_backend).__name__,
+            "text_model": text_model or "(default)",
+            "table_model": table_model or "(default)",
+            "image_model": image_model or "(default)",
+            "stamp_model": stamp_model or "(default)",
+        },
+    )
+
+    return result

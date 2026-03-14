@@ -88,7 +88,8 @@ def reorder_job_handler(
     _logger.info(
         f"Reorder: {job_id[:8]} ({job.priority}) "
         f"{'↑' if direction == 'up' else '↓'} "
-        f"{adjacent.id[:8]} ({adjacent.priority})"
+        f"{adjacent.id[:8]} ({adjacent.priority})",
+        extra={"event": "job_lifecycle", "action": "reorder", "job_id": job_id},
     )
 
     # Обмен приоритетов (swap_job_priorities разводит одинаковые priority)

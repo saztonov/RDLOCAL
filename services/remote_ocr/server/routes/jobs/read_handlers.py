@@ -29,6 +29,10 @@ def list_jobs_handler(
 ) -> dict:
     """Получить список задач"""
     check_api_key(x_api_key)
+    _logger.info(
+        "Запрос списка задач",
+        extra={"event": "jobs_list_request", "action": "list", "document_id": document_id},
+    )
 
     jobs = list_jobs(document_id)
     return {
@@ -59,6 +63,10 @@ def get_jobs_changes_handler(
 ) -> dict:
     """Получить задачи, изменённые после указанного времени."""
     check_api_key(x_api_key)
+    _logger.debug(
+        f"Polling changes since={since}",
+        extra={"event": "jobs_poll", "action": "poll"},
+    )
 
     jobs = list_jobs_changed_since(since)
     return {
@@ -168,6 +176,10 @@ def download_result_handler(
 ) -> dict:
     """Получить ссылку на результат"""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Запрос скачивания результата: {job_id}",
+        extra={"event": "job_download_result", "action": "download", "job_id": job_id},
+    )
 
     job = get_job(job_id)
     if job is None:

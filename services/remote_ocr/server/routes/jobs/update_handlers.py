@@ -68,6 +68,10 @@ def update_job_handler(
 ) -> dict:
     """Обновить название задачи"""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Переименование задачи: {job_id}",
+        extra={"event": "job_lifecycle", "action": "rename", "job_id": job_id, "task_name": task_name},
+    )
 
     job = get_job(job_id)
     if job is None:
@@ -86,6 +90,10 @@ async def restart_job_handler(
 ) -> dict:
     """Перезапустить задачу. Опционально обновить блоки."""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Перезапуск задачи: {job_id}",
+        extra={"event": "job_lifecycle", "action": "restart", "job_id": job_id},
+    )
 
     job = get_job(job_id)
     if job is None:
@@ -181,6 +189,13 @@ def start_job_handler(
 ) -> dict:
     """Запустить черновик на распознавание"""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Запуск черновика: {job_id}",
+        extra={
+            "event": "job_lifecycle", "action": "start", "job_id": job_id,
+            "engine": engine, "text_model": text_model or None, "image_model": image_model or None,
+        },
+    )
 
     job = get_job(job_id)
     if job is None:
@@ -221,6 +236,10 @@ def pause_job_handler(
 ) -> dict:
     """Поставить задачу на паузу"""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Пауза задачи: {job_id}",
+        extra={"event": "job_lifecycle", "action": "pause", "job_id": job_id},
+    )
 
     job = get_job(job_id)
     if job is None:
@@ -243,6 +262,10 @@ def resume_job_handler(
 ) -> dict:
     """Возобновить задачу с паузы"""
     check_api_key(x_api_key)
+    _logger.info(
+        f"Возобновление задачи: {job_id}",
+        extra={"event": "job_lifecycle", "action": "resume", "job_id": job_id},
+    )
 
     job = get_job(job_id)
     if job is None:
@@ -285,6 +308,10 @@ def cancel_job_handler(
     from services.remote_ocr.server.storage import invalidate_pause_cache, update_job_status
 
     check_api_key(x_api_key)
+    _logger.info(
+        f"Отмена задачи: {job_id}",
+        extra={"event": "job_lifecycle", "action": "cancel", "job_id": job_id},
+    )
 
     job = get_job(job_id)
     if job is None:
