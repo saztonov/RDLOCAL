@@ -136,10 +136,6 @@ class BlockEventsMixin:
             if not is_read_only:
                 self._redo()
             return
-        elif pressed_key == HotkeysDialog.get_hotkey("group_blocks"):
-            if not is_read_only:
-                self._group_selected_blocks()
-            return
         elif pressed_key == HotkeysDialog.get_hotkey("text_block"):
             if hasattr(self, "text_action"):
                 self.text_action.setChecked(True)

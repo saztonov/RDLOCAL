@@ -13,14 +13,13 @@ from PySide6.QtWidgets import (
 
 from rd_core.models import BlockType
 from .context_menu_mixin import ContextMenuMixin
-from .grouping_mixin import GroupingMixin
 from .hint_mixin import HintMixin
 from ..view_state_manager import ViewStateManager
 
 logger = logging.getLogger(__name__)
 
 
-class BlocksTreeManager(ContextMenuMixin, GroupingMixin, HintMixin):
+class BlocksTreeManager(ContextMenuMixin, HintMixin):
     """Управление деревом блоков"""
 
     _categories_cache = None
@@ -107,12 +106,8 @@ class BlocksTreeManager(ContextMenuMixin, GroupingMixin, HintMixin):
                     else ""
                 )
                 block_item.setText(2, cat_name)
-                # Колонка Группа
-                block_item.setText(3, block.group_name or "")
                 # Tooltip
                 tooltip_parts = []
-                if block.group_name:
-                    tooltip_parts.append(f"📦 Группа: {block.group_name}")
                 if block.linked_block_id:
                     tooltip_parts.append("🔗 Связан с другим блоком")
                 if block.hint:

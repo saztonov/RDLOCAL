@@ -132,19 +132,6 @@ def collect_inheritable_stamp_data(pages: List) -> Optional[Dict]:
     return inherited if inherited else None
 
 
-def collect_block_groups(pages: List) -> Dict[str, List]:
-    """Собрать блоки по группам."""
-    groups: Dict[str, List] = {}
-    for page in pages:
-        for block in page.blocks:
-            group_id = getattr(block, "group_id", None)
-            if group_id:
-                if group_id not in groups:
-                    groups[group_id] = []
-                groups[group_id].append(block)
-    return groups
-
-
 # Паттерн для мусорных img тегов от datalab (хеш_img.ext)
 DATALAB_IMG_PATTERN = re.compile(
     r'<img[^>]*src=["\']?[a-f0-9]{20,}_img(?:\.[a-z]{3,4})?["\']?[^>]*/?>',

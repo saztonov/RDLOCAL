@@ -9,12 +9,11 @@ from rd_core.models import BlockType
 
 from app.gui.page_viewer_menus.context_menu.block_operations import BlockOperationsMixin
 from app.gui.page_viewer_menus.context_menu.category_mixin import CategoryMixin
-from app.gui.page_viewer_menus.context_menu.group_operations import GroupOperationsMixin
 
 logger = logging.getLogger(__name__)
 
 
-class ContextMenuMixin(CategoryMixin, BlockOperationsMixin, GroupOperationsMixin):
+class ContextMenuMixin(CategoryMixin, BlockOperationsMixin):
     """Миксин для контекстного меню PageViewer"""
 
     def contextMenuEvent(self, event):
@@ -45,17 +44,14 @@ class ContextMenuMixin(CategoryMixin, BlockOperationsMixin, GroupOperationsMixin
         # 2. Изменить тип
         self._add_change_type_action(menu, selected_blocks)
 
-        # 3. Сгруппировать
-        self._add_group_actions(menu, selected_blocks)
-
-        # 4. Удалить
+        # 3. Удалить
         self._add_delete_action(menu, selected_blocks)
 
-        # 5. Категории изображений
+        # 4. Категории изображений
         menu.addSeparator()
         self._add_category_menu(menu, selected_blocks)
 
-        # 6. Корректировочные блоки
+        # 5. Корректировочные блоки
         menu.addSeparator()
         self._add_correction_action(menu, selected_blocks)
 
@@ -130,23 +126,6 @@ class ContextMenuMixin(CategoryMixin, BlockOperationsMixin, GroupOperationsMixin
             action_image.triggered.connect(
                 lambda checked, blocks=selected_blocks: self._apply_type_to_blocks(
                     blocks, BlockType.IMAGE
-                )
-            )
-
-    def _add_group_actions(self, menu: QMenu, selected_blocks: list):
-        """Добавить пункты меню для группировки"""
-        if len(selected_blocks) > 1:
-            group_action = menu.addAction("📦 Сгруппировать")
-            group_action.triggered.connect(lambda: self._group_blocks(selected_blocks))
-
-        main_window = self.parent().window()
-        if hasattr(main_window, "selected_group_id") and main_window.selected_group_id:
-            add_to_group_action = menu.addAction(
-                f"➕ Добавить в группу {main_window.selected_group_id[:8]}..."
-            )
-            add_to_group_action.triggered.connect(
-                lambda: self._add_blocks_to_group(
-                    selected_blocks, main_window.selected_group_id
                 )
             )
 

@@ -45,21 +45,6 @@ class ContextMenuMixin:
                 )
             )
 
-        # Группировка блоков (если выбрано больше одного блока)
-        if len(selected_blocks) > 1:
-            menu.addSeparator()
-            group_action = menu.addAction("📦 Сгруппировать")
-            group_action.triggered.connect(lambda: self.group_blocks(selected_blocks))
-
-        # Добавить в выбранную группу (если есть выбранная группа)
-        if hasattr(self.parent, "selected_group_id") and self.parent.selected_group_id:
-            add_to_group_action = menu.addAction(f"➕ Добавить в группу")
-            add_to_group_action.triggered.connect(
-                lambda: self.add_blocks_to_group(
-                    selected_blocks, self.parent.selected_group_id
-                )
-            )
-
         # Добавить связанный блок (только для одного блока)
         if len(selected_blocks) == 1:
             block = self._get_block(selected_blocks[0])

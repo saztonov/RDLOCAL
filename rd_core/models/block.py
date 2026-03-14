@@ -32,8 +32,6 @@ class Block:
         hint: подсказка пользователя для IMAGE блока (описание содержимого)
         pdfplumber_text: сырой текст извлечённый pdfplumber для блока
         linked_block_id: ID связанного блока (для IMAGE+TEXT)
-        group_id: ID группы блоков (None = общая группа)
-        group_name: название группы (отображаемое пользователю)
         category_id: ID категории изображения (для IMAGE блоков)
         category_code: код категории изображения (для IMAGE блоков)
         created_at: дата и время создания блока (ISO формат)
@@ -53,8 +51,6 @@ class Block:
     hint: Optional[str] = None  # Подсказка пользователя для IMAGE блока
     pdfplumber_text: Optional[str] = None  # Сырой текст pdfplumber
     linked_block_id: Optional[str] = None  # ID связанного блока
-    group_id: Optional[str] = None  # ID группы блоков
-    group_name: Optional[str] = None  # Название группы
     category_id: Optional[str] = None  # ID категории изображения
     category_code: Optional[str] = None  # Код категории изображения (для сериализации)
     created_at: Optional[str] = None  # Дата создания (ISO формат)
@@ -220,10 +216,6 @@ class Block:
             result["pdfplumber_text"] = self.pdfplumber_text
         if self.linked_block_id:
             result["linked_block_id"] = self.linked_block_id
-        if self.group_id:
-            result["group_id"] = self.group_id
-        if self.group_name:
-            result["group_name"] = self.group_name
         if self.category_id:
             result["category_id"] = self.category_id
         if self.category_code:
@@ -272,7 +264,6 @@ class Block:
         was_migrated = False
         block_id = data["id"]
         linked_block_id = data.get("linked_block_id")
-        group_id = data.get("group_id")
 
         if migrate_ids:
             block_id, m1 = migrate_block_id(block_id)
@@ -281,10 +272,6 @@ class Block:
             if linked_block_id:
                 linked_block_id, m2 = migrate_block_id(linked_block_id)
                 was_migrated = was_migrated or m2
-
-            if group_id:
-                group_id, m3 = migrate_block_id(group_id)
-                was_migrated = was_migrated or m3
 
         block = cls(
             id=block_id,
@@ -301,8 +288,6 @@ class Block:
             hint=data.get("hint"),
             pdfplumber_text=data.get("pdfplumber_text"),
             linked_block_id=linked_block_id,
-            group_id=group_id,
-            group_name=data.get("group_name"),
             category_id=data.get("category_id"),
             category_code=data.get("category_code"),
             created_at=data.get("created_at") or get_moscow_time_str(),

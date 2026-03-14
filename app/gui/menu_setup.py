@@ -238,38 +238,6 @@ class MenuSetupMixin:
         self.shape_type_group.addAction(self.polygon_action)
         toolbar.addAction(self.polygon_action)
 
-        toolbar.addSeparator()
-
-        # Кнопка группировки блоков
-        self.group_blocks_btn = QPushButton("📦 Сгруппировать")
-        self.group_blocks_btn.setToolTip("Сгруппировать выбранные блоки (Ctrl+G)")
-        self.group_blocks_btn.setStyleSheet(
-            """
-            QPushButton {
-                background: rgba(80, 80, 80, 0.3);
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 13px;
-                color: #ccc;
-            }
-            QPushButton:hover {
-                background: rgba(100, 100, 100, 0.4);
-                border-color: #777;
-                color: #fff;
-            }
-            QPushButton:pressed {
-                background: rgba(120, 120, 120, 0.5);
-            }
-            QPushButton:disabled {
-                color: #555;
-                border-color: #444;
-            }
-        """
-        )
-        self.group_blocks_btn.clicked.connect(self._group_selected_blocks)
-        toolbar.addWidget(self.group_blocks_btn)
-
         # Коннекты для отслеживания изменений
         self.shape_type_group.triggered.connect(self._on_shape_type_changed)
 

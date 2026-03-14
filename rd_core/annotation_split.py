@@ -1,9 +1,8 @@
 """Утилита разделения аннотаций по диапазонам страниц."""
 import copy
 import logging
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 from rd_core.models import Document, Page
 
@@ -16,7 +15,6 @@ class SplitAnnotationResult:
 
     document: Document  # Document с перенумерованными страницами
     broken_links: List[str] = field(default_factory=list)  # ID блоков со сломанными linked_block_id
-    broken_groups: List[str] = field(default_factory=list)  # group_id, разбитые между частями
 
 
 def split_annotation(
@@ -31,7 +29,7 @@ def split_annotation(
     1. Копирует Page объекты, попадающие в диапазон
     2. Перенумеровывает page_number и block.page_index (0-based от начала части)
     3. coords_px и coords_norm остаются без изменений (относительны к странице)
-    4. Обрабатывает cross-part ссылки (linked_block_id, group_id)
+    4. Обрабатывает cross-part ссылки (linked_block_id)
 
     Args:
         source_doc: Исходный Document
@@ -43,8 +41,6 @@ def split_annotation(
     """
     # Индекс: block_id → номер части (для обработки cross-part ссылок)
     block_to_part: Dict[str, int] = {}
-    # Индекс: group_id → множество частей (для обнаружения разбитых групп)
-    group_parts: Dict[str, Set[int]] = defaultdict(set)
 
     # Первый проход: построить индексы
     for part_idx, (start, end) in enumerate(page_ranges):
@@ -52,13 +48,6 @@ def split_annotation(
             if start <= page.page_number <= end:
                 for block in page.blocks:
                     block_to_part[block.id] = part_idx
-                    if block.group_id:
-                        group_parts[block.group_id].add(part_idx)
-
-    # Определить группы, разбитые между частями
-    split_groups: Set[str] = {
-        gid for gid, parts in group_parts.items() if len(parts) > 1
-    }
 
     # Второй проход: создать части
     results: List[SplitAnnotationResult] = []
@@ -66,7 +55,6 @@ def split_annotation(
     for part_idx, (start, end) in enumerate(page_ranges):
         part_pages: List[Page] = []
         broken_links: List[str] = []
-        broken_groups_for_part: List[str] = []
 
         # Собрать страницы для этой части
         new_page_number = 0
@@ -87,11 +75,6 @@ def split_annotation(
                             broken_links.append(block.id)
                             block.linked_block_id = None
 
-                    # Записать предупреждение о разбитых группах
-                    if block.group_id and block.group_id in split_groups:
-                        if block.group_id not in broken_groups_for_part:
-                            broken_groups_for_part.append(block.group_id)
-
                 part_pages.append(new_page)
                 new_page_number += 1
 
@@ -104,7 +87,6 @@ def split_annotation(
             SplitAnnotationResult(
                 document=part_doc,
                 broken_links=broken_links,
-                broken_groups=broken_groups_for_part,
             )
         )
 

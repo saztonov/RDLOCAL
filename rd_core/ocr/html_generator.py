@@ -8,7 +8,6 @@ from typing import Any, Dict, List
 from .generator_common import (
     HTML_FOOTER,
     INHERITABLE_STAMP_FIELDS,
-    collect_block_groups,
     collect_inheritable_stamp_data,
     contains_html,
     extract_image_ocr_data,
@@ -199,9 +198,6 @@ def generate_html_from_pages(
         # Используем общий HTML шаблон
         html_parts = [get_html_header(title)]
 
-        # Собираем блоки по группам
-        groups = collect_block_groups(pages)
-
         # Собираем общие данные штампа для страниц без штампа
         inherited_stamp_data = collect_inheritable_stamp_data(pages)
         inherited_stamp_html = (
@@ -246,15 +242,6 @@ def generate_html_from_pages(
                 # Маркер BLOCK: XXXX-XXXX-XXX
                 armor_code = get_block_armor_id(block.id)
                 html_parts.append(f"<p>BLOCK: {armor_code}</p>")
-
-                # Grouped blocks
-                group_id = getattr(block, "group_id", None)
-                if group_id and group_id in groups:
-                    group_name = getattr(block, "group_name", None) or group_id
-                    group_block_ids = [get_block_armor_id(b.id) for b in groups[group_id]]
-                    html_parts.append(
-                        f'<p><b>Grouped blocks:</b> {group_name} [{", ".join(group_block_ids)}]</p>'
-                    )
 
                 # Linked block
                 linked_id = getattr(block, "linked_block_id", None)

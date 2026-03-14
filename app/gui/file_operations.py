@@ -326,10 +326,6 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         self._render_current_page()
         self._update_ui()
 
-        # Обновляем дерево групп
-        if hasattr(self, "_update_groups_tree"):
-            self._update_groups_tree()
-
         # Загружаем OCR result file для preview
         if hasattr(self, "_load_ocr_result_file"):
             self._load_ocr_result_file()
@@ -462,9 +458,6 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             self._render_current_page()
             if hasattr(self, "blocks_tree_manager") and self.blocks_tree_manager:
                 self.blocks_tree_manager.update_blocks_tree()
-            if hasattr(self, "_update_groups_tree"):
-                self._update_groups_tree()
-
             logger.info(f"Аннотация обновлена из Supabase: {self._current_node_id}")
             show_toast(self, "Аннотация обновлена", success=True)
 

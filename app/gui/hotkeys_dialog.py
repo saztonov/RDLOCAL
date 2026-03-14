@@ -29,7 +29,6 @@ class HotkeysDialog(QDialog):
         "paste_blocks": "Ctrl+V",
         "undo": "Ctrl+Z",
         "redo": "Ctrl+Y",
-        "group_blocks": "Ctrl+G",
     }
 
     HOTKEY_NAMES = {
@@ -42,7 +41,6 @@ class HotkeysDialog(QDialog):
         "paste_blocks": "Вставить блоки",
         "undo": "Отменить действие",
         "redo": "Повторить действие",
-        "group_blocks": "Сгруппировать блоки",
     }
 
     def __init__(self, parent=None):
@@ -88,7 +86,6 @@ class HotkeysDialog(QDialog):
         operations_layout = QFormLayout(operations_group)
         self._add_hotkey_edit(operations_layout, "copy_blocks")
         self._add_hotkey_edit(operations_layout, "paste_blocks")
-        self._add_hotkey_edit(operations_layout, "group_blocks")
         layout.addWidget(operations_group)
 
         # Группа: Undo/Redo

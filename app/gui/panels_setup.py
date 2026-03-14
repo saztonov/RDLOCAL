@@ -133,16 +133,12 @@ class PanelsSetupMixin:
 
         blocks_layout.addLayout(move_buttons_layout)
 
-        # Под-вкладки: Страница | Группы
-        self.blocks_tabs = QTabWidget()
-
-        # Вкладка: Страница → Блок
+        # Дерево блоков
         self.blocks_tree = QTreeWidget()
-        self.blocks_tree.setHeaderLabels(["Название", "Тип", "Категория", "Группа"])
+        self.blocks_tree.setHeaderLabels(["Название", "Тип", "Категория"])
         self.blocks_tree.setColumnWidth(0, 100)
         self.blocks_tree.setColumnWidth(1, 50)
         self.blocks_tree.setColumnWidth(2, 70)
-        self.blocks_tree.setColumnWidth(3, 80)
         self.blocks_tree.setSortingEnabled(False)
         self.blocks_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.blocks_tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -151,29 +147,10 @@ class PanelsSetupMixin:
         )
         self.blocks_tree.itemClicked.connect(self._on_tree_block_clicked)
         self.blocks_tree.installEventFilter(self)
-        self.blocks_tabs.addTab(self.blocks_tree, "Страница")
-
-        # Вкладка: Группы
-        self.groups_tree = QTreeWidget()
-        self.groups_tree.setHeaderLabels(["Группа", "Блоков", "Категория"])
-        self.groups_tree.setColumnWidth(0, 140)
-        self.groups_tree.setColumnWidth(1, 50)
-        self.groups_tree.setColumnWidth(2, 70)
-        self.groups_tree.setSortingEnabled(False)
-        self.groups_tree.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.groups_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.groups_tree.customContextMenuRequested.connect(
-            self._on_groups_tree_context_menu
-        )
-        self.groups_tree.itemClicked.connect(self._on_groups_tree_clicked)
-        self.blocks_tabs.addTab(self.groups_tree, "Группы")
-
-        # Переменная для выбранной группы
-        self.selected_group_id = None
 
         # QSplitter: дерево блоков + inline OCR preview
         blocks_splitter = QSplitter(Qt.Vertical)
-        blocks_splitter.addWidget(self.blocks_tabs)
+        blocks_splitter.addWidget(self.blocks_tree)
 
         self.ocr_preview_inline = OcrPreviewWidget()
         blocks_splitter.addWidget(self.ocr_preview_inline)

@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..generator_common import (
-    collect_block_groups,
     collect_inheritable_stamp_data,
     find_page_stamp,
     get_block_armor_id,
@@ -45,9 +44,6 @@ def generate_md_from_pages(
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         title = doc_name or "OCR Result"
-
-        # Собираем блоки по группам
-        groups = collect_block_groups(pages)
 
         # Собираем данные штампа
         inherited_stamp_data = collect_inheritable_stamp_data(pages)
@@ -141,13 +137,6 @@ def generate_md_from_pages(
                 if linked_id and not has_embedded_text:
                     meta_parts.append(f"→{get_block_armor_id(linked_id)}")
 
-                # Grouped blocks
-                group_id = getattr(block, "group_id", None)
-                if group_id and group_id in groups:
-                    group_name = getattr(block, "group_name", None) or "группа"
-                    group_block_ids = [get_block_armor_id(b.id) for b in groups[group_id]]
-                    meta_parts.append(f"📦{group_name}[{','.join(group_block_ids)}]")
-
                 md_parts.append(" ".join(header_parts))
                 if meta_parts:
                     md_parts.append(" ".join(meta_parts))
@@ -222,16 +211,6 @@ def generate_md_from_result(
     md_parts.append("")
     md_parts.append("---")
     md_parts.append("")
-
-    # Собираем группы блоков
-    groups: Dict[str, List[str]] = {}
-    for page in result.get("pages", []):
-        for blk in page.get("blocks", []):
-            group_id = blk.get("group_id")
-            if group_id:
-                if group_id not in groups:
-                    groups[group_id] = []
-                groups[group_id].append(blk.get("id", ""))
 
     # Собираем связи IMAGE→TEXT для объединения
     pages_list = result.get("pages", [])
@@ -315,13 +294,6 @@ def generate_md_from_result(
             has_embedded_text = block_id in image_to_text
             if blk.get("linked_block_id") and not has_embedded_text:
                 meta_parts.append(f"→{blk['linked_block_id']}")
-
-            # Grouped blocks
-            group_id = blk.get("group_id")
-            if group_id and group_id in groups:
-                group_name = blk.get("group_name") or "группа"
-                group_block_ids = groups[group_id]
-                meta_parts.append(f"📦{group_name}[{','.join(group_block_ids)}]")
 
             md_parts.append(" ".join(header_parts))
             if meta_parts:
