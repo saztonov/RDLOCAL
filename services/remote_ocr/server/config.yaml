@@ -60,8 +60,9 @@ chandra_max_concurrent: 2
 chandra_retry_delay: 2
 
 # ===== QWEN (LM Studio) =====
-# Параллельных запросов к Qwen PER TASK (аналогично Chandra)
-qwen_max_concurrent: 2
+# Параллельных запросов к Qwen PER TASK
+# LM Studio: Max Concurrent Predictions >= qwen_max_concurrent * num_workers
+qwen_max_concurrent: 4
 # Пауза между retry при верификации блоков, секунды
 qwen_retry_delay: 2
 

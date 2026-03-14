@@ -16,6 +16,7 @@ from rd_core.ocr.qwen import (
     QWEN_STAMP_SYSTEM,
     QWEN_TEXT_PROMPT,
     QWEN_TEXT_SYSTEM,
+    _extract_json_response,
 )
 from rd_core.ocr.utils import image_to_base64, strip_think_tags, strip_untagged_reasoning
 
@@ -256,9 +257,11 @@ class AsyncQwenBackend:
             payload = {
                 "model": model_id,
                 "messages": messages,
-                "max_tokens": 12384,
-                "temperature": 0,
-                "top_p": 0.1,
+                "max_tokens": 16384,
+                "temperature": 0.15,
+                "top_p": 0.8,
+                "top_k": 20,
+                "repetition_penalty": 1.05,
             }
 
             last_error = None
@@ -345,6 +348,8 @@ class AsyncQwenBackend:
             text = strip_think_tags(raw_text, backend_name=f"AsyncQwen/{self.mode}")
             # Слой 2: убрать не-тегированный reasoning
             text = strip_untagged_reasoning(text, backend_name=f"AsyncQwen/{self.mode}")
+            # Слой 3: извлечь JSON из ответа
+            text = _extract_json_response(text)
 
             if not text:
                 logger.warning(

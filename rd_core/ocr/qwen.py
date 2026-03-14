@@ -4,8 +4,10 @@
   mode="text"  — распознавание TEXT/TABLE блоков строительной документации
   mode="stamp" — распознавание штампов (основных надписей)
 """
+import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -24,11 +26,11 @@ from rd_core.ocr.utils import image_to_base64, strip_think_tags, strip_untagged_
 logger = logging.getLogger(__name__)
 
 # ── Модель и конфиг загрузки ────────────────────────────────────────
-QWEN_MODEL_KEY = os.getenv("QWEN_MODEL_KEY", "qwen/qwen3.5-35b-a3b/")
+QWEN_MODEL_KEY = os.getenv("QWEN_MODEL_KEY", "qwen/qwen3.5-9b")
 QWEN_LOAD_CONFIG = {
     "context_length": 65536,
     "flash_attention": True,
-    "eval_batch_size": 1024,
+    "eval_batch_size": 512,
 }
 
 # ── Промпты: TEXT / TABLE ───────────────────────────────────────────
@@ -37,8 +39,8 @@ QWEN_TEXT_SYSTEM = (
     "строительной документации: ГОСТ, СНиП, СП, ТУ, рабочие чертежи, стадия П. "
     "Твоя задача — максимально точно распознать содержимое переданного блока. "
     "Сохраняй все размеры, единицы измерения, номера ссылок и структуру таблиц "
-    "с абсолютной точностью. Выводи результат в чистом HTML. "
-    "НЕ используй режим размышлений. Выводи ТОЛЬКО финальный HTML, без рассуждений и анализа."
+    "с абсолютной точностью. "
+    "Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON."
 )
 
 QWEN_TEXT_PROMPT = (
@@ -51,14 +53,17 @@ QWEN_TEXT_PROMPT = (
     "— примечания и ссылки на нормативные документы (ГОСТ, СНиП, СП)\n"
     "— математические формулы, индексы, степени\n\n"
     "Максимально точно распознай весь текст, сохраняя оригинальную структуру.\n\n"
-    "Правила вывода HTML:\n"
+    'Верни результат СТРОГО как JSON объект:\n'
+    '{"type": "text"|"table"|"mixed", '
+    '"content_html": "<p>...</p> или <table>...</table>", '
+    '"confidence": 0.0-1.0}\n\n'
+    "Правила для content_html:\n"
     f"* Теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
     "* Таблицы: colspan/rowspan для точной структуры\n"
     "* Математика: <math>...</math> (KaTeX-совместимый LaTeX)\n"
     "* Текст: <p>...</p>, <br> только при необходимости\n"
     "* Порядок чтения — корректный и естественный\n"
     "* Не добавляй ничего от себя — только то, что видишь"
-    "\n/nothink"
 )
 
 # ── Промпты: STAMP ─────────────────────────────────────────────────
@@ -67,27 +72,49 @@ QWEN_STAMP_SYSTEM = (
     "строительной документации. Ты работаешь с рабочей документацией и стадией П. "
     "Штамп содержит метаинформацию: организация, проект, стадия, лист, подписи. "
     "Извлекай ВСЮ информацию с максимальной точностью. "
-    "НЕ используй режим размышлений. Выводи ТОЛЬКО финальный HTML, без рассуждений и анализа."
+    "Выводи результат СТРОГО в формате JSON. Никакого текста вне JSON."
 )
 
 QWEN_STAMP_PROMPT = (
     "Это штамп (основная надпись) из строительного чертежа.\n\n"
-    "Внимательно проанализируй структуру штампа и извлеки ВСЮ информацию:\n"
-    "1. Организация — название проектной организации\n"
-    "2. Наименование проекта — полное название объекта\n"
-    "3. Шифр проекта — код документации\n"
-    "4. Наименование документа — название листа/раздела\n"
-    "5. Стадия — П (проектная) или Р (рабочая)\n"
-    "6. Номер листа / Всего листов\n"
-    "7. Масштаб, Формат\n"
-    "8. Подписи — ФИО, должности, даты\n"
-    "9. Изменения — номер, подпись, дата\n\n"
-    "Выводи как HTML-таблицу, точно воспроизводящую структуру штампа.\n"
-    f"Теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
+    "Извлеки ВСЮ информацию и верни СТРОГО как JSON объект:\n"
+    '{"organization": "", "project_name": "", "project_code": "", '
+    '"document_name": "", "stage": "П|Р", '
+    '"sheet_number": "", "total_sheets": "", '
+    '"scale": "", "format": "", '
+    '"signatures": [{"role": "", "name": "", "date": ""}], '
+    '"changes": [{"number": "", "name": "", "date": ""}], '
+    '"stamp_html": "<table>...</table>", '
+    '"confidence": 0.0-1.0}\n\n'
+    f"Для stamp_html используй теги: [{ALLOWED_TAGS}], атрибуты: [{ALLOWED_ATTRIBUTES}]\n"
+    "stamp_html должен точно воспроизводить визуальную структуру штампа.\n"
     "Используй colspan/rowspan для ячеек штампа.\n"
     "Не добавляй ничего от себя — только то, что видишь."
-    "\n/nothink"
 )
+
+
+def _extract_json_response(text: str) -> str:
+    """Извлечь JSON из ответа модели. Если не удалось — вернуть как есть."""
+    # Попытка найти JSON в markdown code block
+    md_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if md_match:
+        candidate = md_match.group(1).strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    # Попытка найти JSON объект напрямую
+    brace_match = re.search(r'\{.*\}', text, re.DOTALL)
+    if brace_match:
+        candidate = brace_match.group(0)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    # Если JSON не найден — вернуть оригинал (backward compatibility)
+    return text
 
 
 class QwenBackend:
@@ -319,9 +346,11 @@ class QwenBackend:
             payload = {
                 "model": model_id,
                 "messages": messages,
-                "max_tokens": 12384,
-                "temperature": 0,
-                "top_p": 0.1,
+                "max_tokens": 16384,
+                "temperature": 0.15,
+                "top_p": 0.8,
+                "top_k": 20,
+                "repetition_penalty": 1.05,
             }
 
             last_error = None
@@ -407,6 +436,8 @@ class QwenBackend:
             text = strip_think_tags(raw_text, backend_name=f"Qwen/{self.mode}")
             # Слой 2: убрать не-тегированный reasoning (цепочки рассуждений без <think>)
             text = strip_untagged_reasoning(text, backend_name=f"Qwen/{self.mode}")
+            # Слой 3: извлечь JSON из ответа
+            text = _extract_json_response(text)
 
             if not text:
                 logger.warning(
