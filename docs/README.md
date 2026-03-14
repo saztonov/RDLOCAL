@@ -6,7 +6,7 @@
 
 | Документ | Описание |
 |----------|----------|
-| [ЗАПУСК.md](ЗАПУСК.md) | Команды запуска клиента и сервера |
+| [../README.md](../README.md#установка) | Установка и команды запуска клиента и сервера |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура, компоненты, потоки данных |
 | [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) | Примеры кода, API, расширение |
 | [DATABASE.md](DATABASE.md) | Схема БД Supabase |
@@ -16,7 +16,7 @@
 
 | Задача | Документ |
 |--------|----------|
-| Запустить приложение | [ЗАПУСК.md](ЗАПУСК.md) |
+| Запустить приложение | [../README.md](../README.md#запуск) |
 | Понять архитектуру | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Работать с Remote OCR API | [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md#remote-ocr-client) |
 | Схема БД | [DATABASE.md](DATABASE.md#таблицы) |

@@ -1,31 +1,30 @@
 # FastAPI сервер
-fastapi>=0.115.0
-uvicorn[standard]>=0.34.0
-python-multipart>=0.0.18
-python-dotenv>=1.0.0
-httpx>=0.28.0
+fastapi>=0.135.1,<1
+uvicorn[standard]>=0.41.0,<1
+python-multipart>=0.0.22,<1
+httpx>=0.28.1,<1
 
 # rd_core зависимости
-PyMuPDF>=1.25.0
-Pillow>=11.0.0
-requests>=2.32.0
+PyMuPDF>=1.27.2,<2
+Pillow>=12.1.1,<13
+requests>=2.32.5,<3
 
 # R2 Storage (async + sync)
 # Версии зафиксированы для совместимости aioboto3 + boto3
 boto3==1.40.61
 aiobotocore==2.25.1
-aioboto3>=14.0.0
-aiofiles>=24.0.0
+aioboto3~=15.5.0
+aiofiles>=25.1.0,<26
 
 # Supabase
-supabase>=2.10.0
+supabase>=2.28.2,<3
 
 # Celery + Redis
-celery>=5.4.0
-redis>=5.2.0
+celery>=5.6.2,<6
+redis>=7.3.0,<8
 
 # YAML конфиг
-PyYAML>=6.0
+PyYAML>=6.0.3,<7
 
 # Monitoring
-psutil>=6.0.0
+psutil>=7.2.2,<8

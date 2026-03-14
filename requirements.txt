@@ -1,25 +1,24 @@
 # GUI Framework
-PySide6>=6.6.0
-PySide6-WebEngine>=6.6.0
+PySide6>=6.10.2,<7
 
 # PDF Processing
-PyMuPDF>=1.26.7
+PyMuPDF>=1.27.2,<2
 
 # Image Processing
-Pillow>=12.0.0
+Pillow>=12.1.1,<13
 
 # HTTP Client для API запросов
-httpx>=0.28.1
-requests>=2.32.5
+httpx>=0.28.1,<1
+requests>=2.32.5,<3
 
 # Environment Variables
-python-dotenv>=1.2.1
+python-dotenv>=1.2.2,<2
 
 # S3/R2 Storage
-boto3>=1.42.14
+boto3>=1.42.68,<2
 
 # YAML конфиг
-PyYAML>=6.0
+PyYAML>=6.0.3,<7
 
 # Build
-pyinstaller>=6.17.0
+pyinstaller>=6.19.0,<7

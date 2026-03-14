@@ -8,7 +8,7 @@
 
 Desktop-клиент для аннотирования PDF с удалённым OCR и управлением проектами.
 
-📚 **[Документация](docs/)** | 🚀 **[Запуск](docs/ЗАПУСК.md)**
+📚 **[Документация](docs/README.md)** | 🚀 **[Remote OCR сервер](docs/REMOTE_OCR_SERVER.md)**
 
 ---
 
@@ -37,10 +37,22 @@ Desktop-клиент для аннотирования PDF с удалённым
 ### 1. Python 3.11+
 
 ```bash
+pip install .
+```
+
+Для desktop-разработки и сборки EXE можно установить полный набор из корневого манифеста:
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. .env (опционально)
+### 2. Remote OCR сервер (если нужен локальный backend)
+
+```bash
+pip install -r services/remote_ocr/requirements.txt
+```
+
+### 3. .env (опционально)
 
 ```bash
 # Remote OCR сервер
@@ -75,7 +87,7 @@ python app/main.py
 
 **Docker (рекомендуется):**
 ```bash
-docker compose -f docker-compose.remote-ocr.dev.yml up --build
+docker compose up --build
 ```
 
 Запускает 3 сервиса:
@@ -145,10 +157,10 @@ python build.py
 ## Документация
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — техническая документация и архитектура
+- [`docs/README.md`](docs/README.md) — индекс актуальной документации
 - [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) — руководство разработчика
 - [`docs/DATABASE.md`](docs/DATABASE.md) — схема базы данных (Supabase)
 - [`docs/REMOTE_OCR_SERVER.md`](docs/REMOTE_OCR_SERVER.md) — документация Remote OCR сервера
-- [`docs/ЗАПУСК.md`](docs/ЗАПУСК.md) — быстрые команды запуска
 
 ---
 
