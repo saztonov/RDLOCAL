@@ -140,14 +140,18 @@ async def pass2_ocr_from_manifest_async(
                 )
 
     # --- Обработка strips ---
-    # Strip-level retry для LM Studio бэкендов (ngrok tunnel instability)
+    # Retry для всех бэкендов: LM Studio (ngrok instability) и cloud (transient 429/5xx)
     _is_lmstudio = type(strip_backend).__name__ in (
         "ChandraBackend", "QwenBackend",
     )
-    _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 0
-    _STRIP_RETRY_DELAYS = [30, 60]
+    _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 1
+    _STRIP_RETRY_DELAYS = [30, 60] if _is_lmstudio else [5]
     _ERROR_PREFIX = "[Ошибка"
     _NON_RETRIABLE_PREFIX = "[НеПовторяемая"
+
+    # Retry для IMAGE блоков (одинаковая логика)
+    _IMAGE_MAX_RETRIES = 2 if _is_lmstudio else 1
+    _IMAGE_RETRY_DELAYS = [30, 60] if _is_lmstudio else [10]
 
     async def _process_strip_async(
         strip: StripManifestEntry, strip_idx: int
@@ -365,31 +369,58 @@ async def pass2_ocr_from_manifest_async(
                     },
                 )
 
-                # Получаем разрешение от rate limiter
-                if not await rate_limiter.acquire_async():
-                    logger.warning(f"Image {entry.block_id}: rate limiter timeout")
-                    return entry.block_id, "[Ошибка: rate limiter timeout]", entry.part_idx, entry.total_parts
-
-                try:
-                    if use_pdf:
-                        logger.info(f"PASS2 ASYNC: используется PDF-кроп для {entry.block_id}")
-                        text = await asyncio.to_thread(
-                            backend.recognize,
-                            None,
-                            prompt_data,
-                            None,
-                            entry.pdf_crop_path,
+                text = None
+                for img_attempt in range(_IMAGE_MAX_RETRIES + 1):
+                    if img_attempt > 0:
+                        delay = _IMAGE_RETRY_DELAYS[min(img_attempt - 1, len(_IMAGE_RETRY_DELAYS) - 1)]
+                        logger.warning(
+                            f"PASS2 ASYNC: image {entry.block_id} retry "
+                            f"{img_attempt}/{_IMAGE_MAX_RETRIES}, ожидание {delay}с"
                         )
-                    else:
-                        crop = await asyncio.to_thread(Image.open, entry.crop_path)
-                        try:
+                        await asyncio.sleep(delay)
+
+                    # Получаем разрешение от rate limiter
+                    if not await rate_limiter.acquire_async():
+                        logger.warning(f"Image {entry.block_id}: rate limiter timeout")
+                        if img_attempt < _IMAGE_MAX_RETRIES:
+                            continue
+                        return entry.block_id, "[Ошибка: rate limiter timeout]", entry.part_idx, entry.total_parts
+
+                    try:
+                        if use_pdf:
+                            logger.info(f"PASS2 ASYNC: используется PDF-кроп для {entry.block_id}")
                             text = await asyncio.to_thread(
-                                backend.recognize, crop, prompt_data
+                                backend.recognize,
+                                None,
+                                prompt_data,
+                                None,
+                                entry.pdf_crop_path,
                             )
-                        finally:
-                            crop.close()
-                finally:
-                    await rate_limiter.release_async()
+                        else:
+                            crop = await asyncio.to_thread(Image.open, entry.crop_path)
+                            try:
+                                text = await asyncio.to_thread(
+                                    backend.recognize, crop, prompt_data
+                                )
+                            finally:
+                                crop.close()
+                    except Exception as ocr_err:
+                        text = f"[Ошибка: {ocr_err}]"
+                    finally:
+                        await rate_limiter.release_async()
+
+                    # Проверяем результат
+                    if text and not text.startswith(_ERROR_PREFIX):
+                        break  # Успех
+                    if text and text.startswith(_NON_RETRIABLE_PREFIX):
+                        break  # Неповторяемая ошибка
+                    if img_attempt < _IMAGE_MAX_RETRIES:
+                        err_preview = (text or "пусто")[:80]
+                        logger.warning(
+                            f"PASS2 ASYNC: image {entry.block_id} ошибка OCR "
+                            f"({err_preview}), будет retry"
+                        )
+                        continue
 
                 logger.info(
                     f"PASS2 ASYNC: завершена обработка IMAGE блока {entry.block_id}",

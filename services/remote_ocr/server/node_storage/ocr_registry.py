@@ -3,18 +3,15 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, List
 
 import httpx
 
 from services.remote_ocr.server.logging_config import get_logger
-from services.remote_ocr.server.node_storage.file_manager import (
-    add_node_file,
-    get_node_pdf_r2_key,
-)
+from services.remote_ocr.server.node_storage.file_manager import add_node_file
+from services.remote_ocr.server.r2_keys import resolve_r2_prefix_for_node
 
 logger = get_logger(__name__)
 
@@ -87,12 +84,7 @@ def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
     work_path = Path(work_dir)
     now = datetime.utcnow().isoformat()
 
-    # Получаем r2_key исходного PDF и используем его родительскую папку
-    pdf_r2_key = get_node_pdf_r2_key(node_id)
-    if pdf_r2_key:
-        tree_prefix = str(PurePosixPath(pdf_r2_key).parent)
-    else:
-        tree_prefix = f"tree_docs/{node_id}"
+    tree_prefix = resolve_r2_prefix_for_node(node_id)
 
     registered = 0
 
@@ -249,11 +241,6 @@ def update_node_pdf_status(node_id: str):
     Args:
         node_id: ID узла документа
     """
-    # Добавляем корневую директорию проекта в путь если ещё не добавлено
-    project_root = Path(__file__).parent.parent.parent.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-
     try:
         # Graceful degradation: rd_core.pdf_status может зависеть от app модуля,
         # недоступного в Docker окружении сервера

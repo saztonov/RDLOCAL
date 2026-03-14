@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..async_r2_storage import AsyncR2StorageSync
-from ..routes.common import verify_api_key
+from ..routes.common import check_api_key
 
 router = APIRouter(
-    prefix="/api/storage", tags=["storage"], dependencies=[Depends(verify_api_key)]
+    prefix="/api/storage", tags=["storage"], dependencies=[Depends(check_api_key)]
 )
 
 

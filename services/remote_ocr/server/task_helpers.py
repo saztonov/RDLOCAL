@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .logging_config import get_logger
+from .r2_keys import annotation_key, resolve_r2_prefix_for_node
 from .storage import Job, get_job_file_by_type, get_node_pdf_r2_key, is_job_paused
 
 logger = get_logger(__name__)
@@ -49,12 +50,9 @@ def download_job_files(job: Job, work_dir: Path) -> tuple[Path, Path]:
         if blocks_file:
             blocks_r2_key = blocks_file.r2_key
         else:
-            # Fallback: {pdf_parent}/{doc_stem}_annotation.json
-            from pathlib import PurePosixPath
-
-            pdf_parent = str(PurePosixPath(pdf_r2_key).parent)
-            doc_stem = PurePosixPath(job.document_name).stem
-            blocks_r2_key = f"{pdf_parent}/{doc_stem}_annotation.json"
+            # Fallback: {prefix}/{doc_stem}_annotation.json
+            r2_prefix = resolve_r2_prefix_for_node(job.node_id)
+            blocks_r2_key = annotation_key(r2_prefix, job.document_name)
     else:
         # Обратная совместимость: файлы из ocr_jobs
         pdf_file = get_job_file_by_type(job.id, "pdf")

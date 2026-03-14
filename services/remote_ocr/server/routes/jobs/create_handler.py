@@ -21,12 +21,8 @@ from services.remote_ocr.server.storage import (
     save_job_settings,
     update_node_r2_key,
 )
-from services.remote_ocr.server.storage_jobs import save_celery_task_id
-from services.remote_ocr.server.tasks import run_ocr_task
-from services.remote_ocr.server.timeout_utils import (
-    calculate_dynamic_timeout,
-    count_blocks_from_data,
-)
+from services.remote_ocr.server.task_dispatch import dispatch_ocr_task
+from services.remote_ocr.server.timeout_utils import count_blocks_from_data
 
 _logger = get_logger(__name__)
 
@@ -221,17 +217,9 @@ async def create_job_handler(
             status_code=500, detail=f"Failed to upload files to R2: {e}"
         )
 
-    # Рассчитываем динамический таймаут на основе количества блоков
+    # Запускаем OCR задачу в Celery
     block_count = count_blocks_from_data(blocks_data)
-    soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
-
-    celery_result = run_ocr_task.apply_async(
-        args=[job.id],
-        priority=max(0, min(10, job.priority)),
-        soft_time_limit=soft_timeout,
-        time_limit=hard_timeout,
-    )
-    save_celery_task_id(job.id, celery_result.id)
+    dispatch_ocr_task(job.id, block_count, job.priority)
 
     _logger.info(
         f"Задача создана и поставлена в очередь: {job.id}",

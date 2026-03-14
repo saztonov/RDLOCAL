@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..routes.common import verify_api_key
+from ..routes.common import check_api_key
 from ..storage_client import get_client
 from ..node_storage import (
     add_node_file,
@@ -23,7 +23,7 @@ from ..node_storage import (
 )
 
 router = APIRouter(
-    prefix="/api/tree", tags=["tree"], dependencies=[Depends(verify_api_key)]
+    prefix="/api/tree", tags=["tree"], dependencies=[Depends(check_api_key)]
 )
 
 

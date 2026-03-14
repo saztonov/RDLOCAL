@@ -13,6 +13,11 @@ class PollingControllerMixin:
         """Обновить список задач"""
         if self._is_fetching:
             return
+
+        # При множественных ошибках сначала проверяем health
+        if not manual and not self._try_health_check_before_poll():
+            return
+
         self._is_fetching = True
         self._is_manual_refresh = manual
 
@@ -155,3 +160,29 @@ class PollingControllerMixin:
         )
         if self.refresh_timer.interval() != backoff_interval:
             self.refresh_timer.setInterval(backoff_interval)
+
+    def _try_health_check_before_poll(self) -> bool:
+        """При множественных ошибках проверяем health перед полным poll.
+
+        Returns:
+            True если сервер доступен и можно делать poll.
+        """
+        if self._consecutive_errors < 3:
+            return True
+
+        client = self._get_client()
+        if client is None:
+            return False
+
+        try:
+            resp = client._request_with_retry("get", "/health")
+            if resp.status_code == 200:
+                logger.info("Health check OK, сброс backoff")
+                self._consecutive_errors = 0
+                self._force_full_refresh = True
+                self.refresh_timer.setInterval(self.POLL_INTERVAL_PROCESSING)
+                return True
+        except Exception:
+            pass
+
+        return False

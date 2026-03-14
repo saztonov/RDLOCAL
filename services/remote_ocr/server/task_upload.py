@@ -6,7 +6,8 @@ import shutil
 from pathlib import Path
 
 from .logging_config import get_logger
-from .storage import Job, add_job_file, delete_job_files, get_node_pdf_r2_key
+from .r2_keys import resolve_r2_prefix
+from .storage import Job, add_job_file, delete_job_files
 from .task_helpers import get_r2_storage
 
 logger = get_logger(__name__)
@@ -68,16 +69,7 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
 
     # Определяем prefix для загрузки (если не передан)
     if r2_prefix is None:
-        if job.node_id:
-            pdf_r2_key = get_node_pdf_r2_key(job.node_id)
-            if pdf_r2_key:
-                from pathlib import PurePosixPath
-
-                r2_prefix = str(PurePosixPath(pdf_r2_key).parent)
-            else:
-                r2_prefix = f"tree_docs/{job.node_id}"
-        else:
-            r2_prefix = job.r2_prefix
+        r2_prefix = resolve_r2_prefix(job)
 
     doc_stem = Path(job.document_name).stem
 

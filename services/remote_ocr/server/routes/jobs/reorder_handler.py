@@ -6,19 +6,15 @@ from fastapi import Form, Header, HTTPException
 from services.remote_ocr.server.celery_app import celery_app
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import check_api_key
-from services.remote_ocr.server.storage import get_job
-from services.remote_ocr.server.storage_jobs import (
-    find_adjacent_queued_job,
-    save_celery_task_id,
-    swap_job_priorities,
-)
-from services.remote_ocr.server.tasks import run_ocr_task
-from services.remote_ocr.server.timeout_utils import (
-    calculate_dynamic_timeout,
-)
 from services.remote_ocr.server.routes.jobs.update_handlers import (
     _get_block_count_for_job,
 )
+from services.remote_ocr.server.storage import get_job
+from services.remote_ocr.server.storage_jobs import (
+    find_adjacent_queued_job,
+    swap_job_priorities,
+)
+from services.remote_ocr.server.task_dispatch import dispatch_ocr_task
 
 _logger = get_logger(__name__)
 
@@ -37,22 +33,11 @@ def _revoke_and_resubmit(job_id: str, old_celery_task_id: Optional[str],
         except Exception as e:
             _logger.warning(f"Failed to revoke task {old_celery_task_id}: {e}")
 
-    block_count = _get_block_count_for_job(job_id)
-    soft_timeout, hard_timeout = calculate_dynamic_timeout(block_count)
-
-    celery_priority = max(0, min(10, new_priority))
-    result = run_ocr_task.apply_async(
-        args=[job_id],
-        priority=celery_priority,
-        soft_time_limit=soft_timeout,
-        time_limit=hard_timeout,
-    )
-    save_celery_task_id(job_id, result.id)
+    task_id = dispatch_ocr_task(job_id, _get_block_count_for_job(job_id), new_priority)
     _logger.info(
-        f"Resubmitted job {job_id[:8]} with priority={new_priority} "
-        f"(celery={celery_priority}), new task={result.id}"
+        f"Resubmitted job {job_id[:8]} with priority={new_priority}, new task={task_id}"
     )
-    return result.id
+    return task_id
 
 
 def reorder_job_handler(

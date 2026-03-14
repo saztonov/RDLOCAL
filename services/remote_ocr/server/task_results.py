@@ -8,7 +8,8 @@ from typing import Callable
 
 from .logging_config import get_logger
 from .ocr_result_merger import merge_ocr_results
-from .storage import Job, get_node_full_path, get_node_pdf_r2_key
+from .r2_keys import resolve_r2_prefix
+from .storage import Job, get_node_full_path
 
 logger = get_logger(__name__)
 
@@ -128,17 +129,7 @@ def generate_results(
             Page(page_number=page_idx, width=width, height=height, blocks=page_blocks)
         )
 
-    # Вычисляем r2_prefix
-    if job.node_id:
-        pdf_r2_key = get_node_pdf_r2_key(job.node_id)
-        if pdf_r2_key:
-            from pathlib import PurePosixPath
-
-            r2_prefix = str(PurePosixPath(pdf_r2_key).parent)
-        else:
-            r2_prefix = f"tree_docs/{job.node_id}"
-    else:
-        r2_prefix = job.r2_prefix
+    r2_prefix = resolve_r2_prefix(job)
 
     # Извлекаем путь для ссылок
     if r2_prefix.startswith("tree_docs/"):
@@ -247,17 +238,7 @@ def _generate_correction_results(
     r2_storage = get_r2_storage()
     doc_stem = pdf_path.stem
 
-    # Вычисляем r2_prefix
-    if job.node_id:
-        pdf_r2_key = get_node_pdf_r2_key(job.node_id)
-        if pdf_r2_key:
-            from pathlib import PurePosixPath
-
-            r2_prefix = str(PurePosixPath(pdf_r2_key).parent)
-        else:
-            r2_prefix = f"tree_docs/{job.node_id}"
-    else:
-        r2_prefix = job.r2_prefix
+    r2_prefix = resolve_r2_prefix(job)
 
     logger.info(f"[{job.id}] Correction mode: merging results, r2_prefix={r2_prefix}")
 

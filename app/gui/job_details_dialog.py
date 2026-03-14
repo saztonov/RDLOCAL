@@ -114,15 +114,11 @@ class JobDetailsDialog(QDialog):
             text_count = block_stats.get("text", 0)
             table_count = block_stats.get("table", 0)
             image_count = block_stats.get("image", 0)
-            grouped_count = block_stats.get("grouped", text_count + table_count)
 
             blocks_layout.addRow("Всего блоков:", QLabel(str(total)))
             blocks_layout.addRow("Текстовых:", QLabel(str(text_count)))
             blocks_layout.addRow("Таблиц:", QLabel(str(table_count)))
             blocks_layout.addRow("Изображений:", QLabel(str(image_count)))
-            blocks_layout.addRow(
-                "Сгруппировано (текст+таблицы):", QLabel(str(grouped_count))
-            )
 
             blocks_group.setLayout(blocks_layout)
             layout.addWidget(blocks_group)

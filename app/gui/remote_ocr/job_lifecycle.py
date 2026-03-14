@@ -16,25 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class JobLifecycleMixin:
-    """Миксин для управления задачами: пауза, возобновление, отмена, удаление, перемещение"""
-
-    def _pause_job(self, job_id: str):
-        """Поставить задачу на паузу"""
-        client = self._get_client()
-        if client is None:
-            return
-
-        try:
-            if client.pause_job(job_id):
-                from app.gui.toast import show_toast
-
-                show_toast(self, f"Задача {job_id[:8]}... на паузе")
-                self._refresh_jobs(manual=True)
-            else:
-                QMessageBox.warning(self, "Ошибка", "Не удалось поставить на паузу")
-        except Exception as e:
-            logger.error(f"Ошибка паузы задачи: {e}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось поставить на паузу:\n{e}")
+    """Миксин для управления задачами: возобновление, отмена, удаление, перемещение"""
 
     def _resume_job(self, job_id: str):
         """Возобновить задачу с паузы"""

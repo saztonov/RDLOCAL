@@ -6,7 +6,8 @@ import os
 import sys
 from pathlib import Path
 
-# Добавляем корневую директорию в путь
+# Standalone cron-скрипт: rd_core не установлен как пакет,
+# поэтому добавляем корневую директорию проекта в sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from rd_core.pdf_status import calculate_pdf_status
