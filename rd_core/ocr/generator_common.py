@@ -340,6 +340,18 @@ def is_image_ocr_json(data: dict) -> bool:
     )
 
 
+def is_qwen_ocr_json(data: dict) -> bool:
+    """Проверить, является ли JSON ответом Qwen OCR (text/table с content_html)."""
+    if not isinstance(data, dict):
+        return False
+    return "content_html" in data or "stamp_html" in data
+
+
+def extract_qwen_html(data: dict) -> str:
+    """Извлечь HTML из JSON ответа Qwen OCR."""
+    return data.get("content_html") or data.get("stamp_html") or ""
+
+
 def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
     """
     Извлечь части штампа для форматирования.

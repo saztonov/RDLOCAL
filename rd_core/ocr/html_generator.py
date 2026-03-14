@@ -12,11 +12,13 @@ from .generator_common import (
     collect_inheritable_stamp_data,
     contains_html,
     extract_image_ocr_data,
+    extract_qwen_html,
     find_page_stamp,
     format_stamp_parts,
     get_block_armor_id,
     get_html_header,
     is_image_ocr_json,
+    is_qwen_ocr_json,
     sanitize_html,
     strip_code_fence,
 )
@@ -76,29 +78,36 @@ def _extract_html_from_ocr_text(ocr_text: str) -> str:
     if not text:
         return ""
 
-    # Надёжное определение HTML через поиск тегов
+    # 1. JSON-парсинг ДО проверки HTML тегов,
+    #    т.к. JSON может содержать HTML внутри строковых значений
+    if text.startswith("{") or text.startswith("["):
+        try:
+            parsed = json_module.loads(text)
+
+            if isinstance(parsed, dict):
+                # Qwen OCR JSON (content_html / stamp_html)
+                if is_qwen_ocr_json(parsed):
+                    html = extract_qwen_html(parsed)
+                    return sanitize_html(html) if html else ""
+
+                # JSON блока изображения
+                if is_image_ocr_json(parsed):
+                    formatted = _format_image_ocr_html(parsed)
+                    if formatted:
+                        return formatted
+
+                # Другой JSON со структурой html/children
+                html = _extract_html_from_parsed(parsed)
+                if html:
+                    return sanitize_html(html)
+        except json_module.JSONDecodeError:
+            pass
+
+    # 2. Чистый HTML (от Datalab и т.п.)
     if contains_html(text):
         return sanitize_html(text)
 
-    # Пробуем распарсить как JSON
-    try:
-        parsed = json_module.loads(text)
-
-        if isinstance(parsed, dict):
-            # Проверяем, это JSON блока изображения?
-            if is_image_ocr_json(parsed):
-                formatted = _format_image_ocr_html(parsed)
-                if formatted:
-                    return formatted
-
-            # Иначе пробуем извлечь HTML из структуры
-            html = _extract_html_from_parsed(parsed)
-            if html:
-                return sanitize_html(html)
-    except json_module.JSONDecodeError:
-        pass
-
-    # Fallback: возвращаем как есть (экранируем HTML)
+    # 3. Fallback: возвращаем как есть (экранируем HTML)
     return f"<pre>{_escape_html(text)}</pre>"
 
 
@@ -107,7 +116,11 @@ def _extract_html_from_parsed(data: Any) -> str:
     html_parts = []
 
     if isinstance(data, dict):
-        if "html" in data and isinstance(data["html"], str):
+        if "content_html" in data and isinstance(data["content_html"], str):
+            html_parts.append(data["content_html"])
+        elif "stamp_html" in data and isinstance(data["stamp_html"], str):
+            html_parts.append(data["stamp_html"])
+        elif "html" in data and isinstance(data["html"], str):
             html_parts.append(data["html"])
         elif "children" in data and isinstance(data["children"], list):
             for child in data["children"]:
