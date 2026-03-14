@@ -126,11 +126,11 @@ def build_payload(
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": user_prompt},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:{media_type};base64,{file_b64}"},
                     },
+                    {"type": "text", "text": user_prompt},
                 ],
             },
         ],

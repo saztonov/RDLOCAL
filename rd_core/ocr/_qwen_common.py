@@ -20,65 +20,70 @@ QWEN_LOAD_CONFIG = {
 
 # ── Промпты: TEXT / TABLE (fallback) ────────────────────────────────
 QWEN_TEXT_SYSTEM = (
-    "You are a specialized OCR system for recognizing Russian construction "
-    "documentation: GOST, SNiP, SP, TU, working drawings (РД), preliminary "
-    "design (стадия П). Your task is to recognize the content of the provided "
-    "block with maximum accuracy. Preserve all dimensions, units of measurement, "
-    "reference numbers, and table structure with absolute precision. "
-    "Output the result STRICTLY in JSON format. No text outside JSON. "
-    "All recognized text content MUST be in Russian (as it appears in the original document)."
+    "You are an OCR transcription model for Russian construction documents. "
+    "Your task is to transcribe one block exactly and reconstruct its local layout in HTML.\n\n"
+    "Rules:\n"
+    "- Preserve text exactly as shown: Russian, Latin, digits, units, punctuation, "
+    "and technical symbols (Ø, ±, №, %, x, ×, /, -).\n"
+    "- Do not guess missing characters, numbers, units, references, or table cells.\n"
+    "- Do not translate, normalize, expand abbreviations, or explain.\n"
+    "- Reading order: top-to-bottom, left-to-right inside the block.\n"
+    "- Return exactly one JSON object. No Markdown. No commentary. No <think> blocks."
 )
 
 QWEN_TEXT_PROMPT = (
-    "Carefully analyze the structure of the provided block "
-    "from a construction drawing or specification.\n\n"
-    "This is a fragment of technical documentation (working documentation / стадия П). "
-    "The block may contain:\n"
-    "— text paragraphs with technical requirements\n"
-    "— specification tables with dimensions, materials, quantities\n"
-    "— notes and references to regulatory documents (ГОСТ, СНиП, СП)\n"
-    "— mathematical formulas, indices, exponents\n\n"
-    "Recognize all text with maximum accuracy, preserving the original structure. "
-    "All recognized text must remain in Russian as it appears in the document.\n\n"
-    'Return the result STRICTLY as a JSON object:\n'
+    "Analyze only the attached block.\n\n"
+    "Steps:\n"
+    "1) Decide whether the block is text, table, or mixed.\n"
+    "2) Transcribe all visible content exactly.\n"
+    "3) Reconstruct the local layout in content_html. "
+    "Use SINGLE QUOTES inside HTML attributes (e.g., <td colspan='2'>).\n"
+    "4) For tables, preserve row order, column order, and merged cells.\n"
+    "5) For formulas, preserve symbols and indices exactly.\n"
+    "6) If some fragments are unreadable, keep only readable fragments.\n\n"
+    'Return exactly one JSON object:\n'
     '{"type": "text"|"table"|"mixed", '
     '"content_html": "<p>...</p> or <table>...</table>", '
     '"confidence": 0.0-1.0}\n\n'
-    "Rules for content_html:\n"
+    "HTML rules for content_html:\n"
     f"* Tags: [{ALLOWED_TAGS}], attributes: [{ALLOWED_ATTRIBUTES}]\n"
-    "* Tables: use colspan/rowspan for accurate structure\n"
+    "* Tables: use colspan/rowspan with SINGLE QUOTES\n"
     "* Math: <math>...</math> (KaTeX-compatible LaTeX)\n"
-    "* Text: <p>...</p>, <br> only when necessary\n"
-    "* Reading order must be correct and natural\n"
-    "* Do not add anything of your own — only what you see"
+    "* Text: <p>...</p>, <br> only for meaningful line breaks\n"
+    "* Keep blank cells blank; do not fill from neighboring cells"
 )
 
 # ── Промпты: STAMP (fallback) ──────────────────────────────────────
 QWEN_STAMP_SYSTEM = (
-    "You are a specialist in reading title blocks (основные надписи) from Russian "
-    "construction documentation. You work with working documentation (РД) and "
-    "preliminary design (стадия П). The title block contains metadata: organization, "
-    "project, stage, sheet, signatures. Extract ALL information with maximum accuracy. "
-    "Output the result STRICTLY in JSON format. No text outside JSON. "
-    "All extracted values MUST be in Russian as they appear in the original document."
+    "You are an OCR extractor for Russian construction title blocks (основные надписи). "
+    "Structured field accuracy has higher priority than stamp_html reconstruction.\n\n"
+    "Rules:\n"
+    "- Preserve original text exactly as written: Russian, Latin, digits, symbols.\n"
+    "- Do not guess missing sheet numbers, dates, surnames, scales, formats, or codes.\n"
+    "- Do not translate or normalize.\n"
+    "- Return exactly one JSON object. No Markdown. No commentary. No <think> blocks."
 )
 
 QWEN_STAMP_PROMPT = (
-    "This is a title block (основная надпись) from a construction drawing.\n\n"
-    "Extract ALL information and return STRICTLY as a JSON object:\n"
+    "This image contains one construction title block.\n\n"
+    "Tasks:\n"
+    "1) Extract all visible metadata into the structured fields.\n"
+    "2) Reconstruct the title-block layout in stamp_html. "
+    "Use SINGLE QUOTES inside HTML attributes.\n"
+    "3) Preserve handwritten names and dates only if visible.\n"
+    "4) Do not infer hidden, cropped, or ambiguous fields.\n\n"
+    "Return exactly one JSON object:\n"
     '{"organization": "", "project_name": "", "project_code": "", '
-    '"document_name": "", "stage": "П|Р", '
+    '"document_name": "", "stage": "", '
     '"sheet_number": "", "total_sheets": "", '
     '"scale": "", "format": "", '
     '"signatures": [{"role": "", "name": "", "date": ""}], '
     '"changes": [{"number": "", "name": "", "date": ""}], '
     '"stamp_html": "<table>...</table>", '
-    '"confidence": 0.0-1.0}\n\n'
-    "All text values must be in Russian as they appear in the original document.\n"
+    '"confidence": 0.0}\n\n'
     f"For stamp_html use tags: [{ALLOWED_TAGS}], attributes: [{ALLOWED_ATTRIBUTES}]\n"
-    "stamp_html must accurately reproduce the visual structure of the title block.\n"
-    "Use colspan/rowspan for title block cells.\n"
-    "Do not add anything of your own — only what you see."
+    "Use SINGLE QUOTES for HTML attributes to prevent breaking JSON.\n"
+    "Field accuracy is more important than perfect stamp_html reconstruction."
 )
 
 # Retry конфигурация (общая с Chandra)
