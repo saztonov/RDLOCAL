@@ -157,10 +157,10 @@ def contains_html(text: str) -> bool:
 
 
 def strip_code_fence(text: str) -> str:
-    """Убрать ```html ... ``` обёртку если есть."""
+    """Убрать ```lang ... ``` обёртку если есть (любой тип фенса)."""
     if not text:
         return text
-    m = re.match(r'^```(?:html)?\s*\n(.*?)```\s*$', text, re.DOTALL | re.IGNORECASE)
+    m = re.match(r'^```(?:\w+)?\s*\n(.*?)```\s*$', text, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
     return text

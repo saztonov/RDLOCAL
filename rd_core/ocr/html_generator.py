@@ -2,6 +2,7 @@
 import json as json_module
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -23,6 +24,77 @@ from .generator_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Markdown table → HTML ─────────────────────────────────────────
+_MD_TABLE_ROW = re.compile(r'^\|(.+)\|$')
+_MD_TABLE_SEP = re.compile(r'^\|[\s:]*-{2,}[\s:]*(?:\|[\s:]*-{2,}[\s:]*)*\|$')
+
+
+def _has_markdown_table(text: str) -> bool:
+    """Проверить наличие markdown таблицы (минимум 2 строки с | и разделитель ---)."""
+    lines = text.strip().split('\n')
+    pipe_lines = sum(1 for line in lines if _MD_TABLE_ROW.match(line.strip()))
+    sep_lines = sum(1 for line in lines if _MD_TABLE_SEP.match(line.strip()))
+    return pipe_lines >= 2 and sep_lines >= 1
+
+
+def _convert_md_table(lines: list) -> str:
+    """Конвертировать набор строк markdown таблицы в HTML <table>."""
+    rows = []
+    is_header = True
+    for line in lines:
+        if _MD_TABLE_SEP.match(line):
+            is_header = False
+            continue
+        cells = [c.strip() for c in line.strip('|').split('|')]
+        tag = 'th' if is_header else 'td'
+        row_html = ''.join(f'<{tag}>{_escape_html(c)}</{tag}>' for c in cells)
+        rows.append(f'<tr>{row_html}</tr>')
+        if is_header:
+            is_header = False
+
+    if not rows:
+        return ''
+
+    parts = ['<table>']
+    parts.append(f'<thead>{rows[0]}</thead>')
+    if len(rows) > 1:
+        parts.append('<tbody>' + ''.join(rows[1:]) + '</tbody>')
+    parts.append('</table>')
+    return ''.join(parts)
+
+
+def _markdown_tables_to_html(text: str) -> str:
+    """Конвертировать markdown таблицы в HTML, остальной текст — в <p>."""
+    lines = text.strip().split('\n')
+    html_parts = []
+    table_lines = []
+    in_table = False
+
+    for line in lines:
+        stripped = line.strip()
+        is_table_line = bool(
+            _MD_TABLE_ROW.match(stripped) or _MD_TABLE_SEP.match(stripped)
+        )
+
+        if is_table_line:
+            if not in_table:
+                in_table = True
+                table_lines = []
+            table_lines.append(stripped)
+        else:
+            if in_table:
+                html_parts.append(_convert_md_table(table_lines))
+                table_lines = []
+                in_table = False
+            if stripped:
+                html_parts.append(f"<p>{_escape_html(stripped)}</p>")
+
+    if in_table and table_lines:
+        html_parts.append(_convert_md_table(table_lines))
+
+    return '\n'.join(html_parts)
 
 
 def _format_image_ocr_html(data: dict) -> str:
@@ -106,7 +178,11 @@ def _extract_html_from_ocr_text(ocr_text: str) -> str:
     if contains_html(text):
         return sanitize_html(text)
 
-    # 3. Fallback: возвращаем как есть (экранируем HTML)
+    # 3. Markdown таблица → HTML (LLM иногда возвращает markdown вместо HTML)
+    if _has_markdown_table(text):
+        return _markdown_tables_to_html(text)
+
+    # 4. Fallback: возвращаем как есть (экранируем HTML)
     return f"<pre>{_escape_html(text)}</pre>"
 
 

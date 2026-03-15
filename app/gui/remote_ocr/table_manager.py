@@ -155,27 +155,34 @@ class TableManagerMixin:
             # 4. Авто-скачивание результата для текущего документа
             current_node_id = getattr(self.main_window, "_current_node_id", None)
             if current_node_id:
-                for job in jobs:
-                    if (
-                        job.status == "done"
-                        and getattr(job, "node_id", None) == current_node_id
-                    ):
-                        if job.id not in self._downloaded_jobs:
-                            if not self.isVisible():
-                                from app.gui.toast import show_toast
+                # Не скачиваем старый done-джоб если для того же node есть активный
+                has_active_for_node = any(
+                    j.status in ("queued", "processing")
+                    and getattr(j, "node_id", None) == current_node_id
+                    for j in jobs
+                )
+                if not has_active_for_node:
+                    for job in jobs:
+                        if (
+                            job.status == "done"
+                            and getattr(job, "node_id", None) == current_node_id
+                        ):
+                            if job.id not in self._downloaded_jobs:
+                                if not self.isVisible():
+                                    from app.gui.toast import show_toast
 
-                                doc_name = job.task_name or job.document_name or ""
-                                show_toast(
-                                    self.main_window,
-                                    f"OCR завершён: {doc_name}",
-                                    duration=5000,
-                                )
-                                logger.info(
-                                    f"Задача {job.id[:8]}... завершена "
-                                    f"(панель скрыта), показано уведомление"
-                                )
-                            self._auto_download_result(job.id)
-                        break
+                                    doc_name = job.task_name or job.document_name or ""
+                                    show_toast(
+                                        self.main_window,
+                                        f"OCR завершён: {doc_name}",
+                                        duration=5000,
+                                    )
+                                    logger.info(
+                                        f"Задача {job.id[:8]}... завершена "
+                                        f"(панель скрыта), показано уведомление"
+                                    )
+                                self._auto_download_result(job.id)
+                            break
 
             # 5. Построить множество incoming job IDs
             incoming_ids = {job.id for job in jobs}

@@ -122,7 +122,13 @@ class JobCreationMixin:
             logger.info(f"Cleaned old OCR results for node: {node_id} (mode={mode_str})")
 
             if hasattr(self, "_downloaded_jobs"):
-                self._downloaded_jobs.clear()
+                # Сбрасываем только джобы текущего node, не все
+                jobs_to_remove = set()
+                for jid in self._downloaded_jobs:
+                    cached = self._jobs_cache.get(jid)
+                    if cached and getattr(cached, "node_id", None) == node_id:
+                        jobs_to_remove.add(jid)
+                self._downloaded_jobs -= jobs_to_remove
 
         except Exception as e:
             logger.warning(f"Failed to clean old OCR results: {e}")

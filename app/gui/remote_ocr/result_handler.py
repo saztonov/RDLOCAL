@@ -104,6 +104,12 @@ class ResultHandlerMixin:
             if hasattr(self.main_window, "_load_ocr_result_file"):
                 self.main_window._load_ocr_result_file()
 
+            # Обновляем OCR preview для текущего выбранного блока
+            for preview_attr in ("ocr_preview", "ocr_preview_inline"):
+                preview = getattr(self.main_window, preview_attr, None)
+                if preview and getattr(preview, "_current_block_id", None):
+                    preview.show_block(preview._current_block_id)
+
             logger.info(f"OCR результаты применены: {updated_count} блоков обновлено")
         except Exception as e:
             logger.error(f"Ошибка применения OCR результатов: {e}")
