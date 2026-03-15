@@ -171,7 +171,7 @@ class DatalabOCRBackend:
 
                 logger.error(f"Datalab: превышено время ожидания после {self.max_retries} полных попыток")
                 logger.warning("Datalab: пропускаем блок из-за таймаута, продолжаем обработку")
-                return ""
+                return "[Ошибка Datalab: таймаут после повторных попыток]"
 
             finally:
                 if need_cleanup and os.path.exists(tmp_path):

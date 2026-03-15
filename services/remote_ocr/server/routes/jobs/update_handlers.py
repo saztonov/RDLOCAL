@@ -9,10 +9,10 @@ from services.remote_ocr.server.queue_checker import check_queue_capacity
 from services.remote_ocr.server.routes.common import (
     check_api_key,
     get_r2_sync_client,
+    require_job,
 )
 from services.remote_ocr.server.storage import (
     delete_job_files,
-    get_job,
     get_job_files,
     pause_job,
     reset_job_for_restart,
@@ -70,9 +70,7 @@ def update_job_handler(
         extra={"event": "job_lifecycle", "action": "rename", "job_id": job_id, "task_name": task_name},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if not update_job_task_name(job_id, task_name):
         raise HTTPException(status_code=500, detail="Failed to update job")
@@ -92,9 +90,7 @@ async def restart_job_handler(
         extra={"event": "job_lifecycle", "action": "restart", "job_id": job_id},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     result_files = get_job_files(job_id)
     result_types = ["result_md", "result_zip", "crop"]
@@ -176,9 +172,7 @@ def start_job_handler(
         },
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status != "draft":
         raise HTTPException(
@@ -210,9 +204,7 @@ def pause_job_handler(
         extra={"event": "job_lifecycle", "action": "pause", "job_id": job_id},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status not in ("queued", "processing"):
         raise HTTPException(
@@ -236,9 +228,7 @@ def resume_job_handler(
         extra={"event": "job_lifecycle", "action": "resume", "job_id": job_id},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status != "paused":
         raise HTTPException(
@@ -272,9 +262,7 @@ def cancel_job_handler(
         extra={"event": "job_lifecycle", "action": "cancel", "job_id": job_id},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status not in ("queued", "processing", "paused"):
         raise HTTPException(

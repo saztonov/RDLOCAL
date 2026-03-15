@@ -242,7 +242,8 @@ async def pass2_ocr_from_manifest_async(
                             merged_image.close()
                             if strip_attempt < _STRIP_MAX_RETRIES:
                                 continue
-                            return None
+                            error_results = {i: "[Ошибка: rate limiter timeout]" for i in range(len(strip.block_parts))}
+                            return strip, error_results, strip_idx
 
                         try:
                             response_text = await asyncio.to_thread(
@@ -303,7 +304,8 @@ async def pass2_ocr_from_manifest_async(
                     },
                     exc_info=True,
                 )
-                return None
+                error_results = {i: f"[Ошибка: {e}]" for i in range(len(strip.block_parts))}
+                return strip, error_results, strip_idx
 
     checkpoint.phase = "pass2_images"
 

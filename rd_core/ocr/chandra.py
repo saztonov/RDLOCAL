@@ -138,7 +138,7 @@ class ChandraBackend:
                         logger.info(f"Модель выгружена: {inst['id']}")
                     break
         except Exception as e:
-            logger.debug(f"Ошибка выгрузки модели: {e}")
+            logger.warning(f"Ошибка выгрузки модели: {e}")
 
     def supports_pdf_input(self) -> bool:
         return False

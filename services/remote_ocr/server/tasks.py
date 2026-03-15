@@ -234,6 +234,14 @@ def run_ocr_task(self, job_id: str) -> dict:
             and not b.ocr_text.startswith(ERROR_PREFIX)
             and not b.ocr_text.startswith(NON_RETRIABLE_PREFIX)
         )
+        error_count = sum(
+            1 for b in blocks
+            if b.ocr_text and b.ocr_text.startswith(ERROR_PREFIX)
+        )
+        non_retriable_count = sum(
+            1 for b in blocks
+            if b.ocr_text and b.ocr_text.startswith(NON_RETRIABLE_PREFIX)
+        )
         if recognized == total_blocks:
             status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
         elif recognized > 0:
@@ -249,6 +257,8 @@ def run_ocr_task(self, job_id: str) -> dict:
                 "job_id": job.id,
                 "engine": engine,
                 "recognized_count": recognized,
+                "error_count": error_count,
+                "non_retriable_count": non_retriable_count,
                 "total_blocks": total_blocks,
                 "duration_ms": int((time.time() - start_time) * 1000),
             },

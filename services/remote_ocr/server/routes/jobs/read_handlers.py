@@ -11,9 +11,9 @@ from services.remote_ocr.server.routes.common import (
     check_api_key,
     get_file_icon,
     get_r2_storage,
+    require_job,
 )
 from services.remote_ocr.server.storage import (
-    get_job,
     get_job_file_by_type,
     job_to_dict,
     list_jobs,
@@ -93,9 +93,7 @@ def get_job_handler(
     """Получить информацию о задаче"""
     check_api_key(x_api_key)
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     return job_to_dict(job)
 
@@ -107,9 +105,7 @@ def get_job_details_handler(
     """Получить детальную информацию о задаче"""
     check_api_key(x_api_key)
 
-    job = get_job(job_id, with_files=True, with_settings=True)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id, with_files=True, with_settings=True)
 
     result = job_to_dict(job)
 
@@ -176,9 +172,7 @@ def download_result_handler(
         extra={"event": "job_download_result", "action": "download", "job_id": job_id},
     )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status != "done":
         raise HTTPException(

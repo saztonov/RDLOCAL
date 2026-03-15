@@ -80,7 +80,7 @@ def get_pil_image_size_mb(img) -> float:
         # width * height * channels
         channels = len(img.getbands())
         return (img.width * img.height * channels) / (1024 * 1024)
-    except:
+    except Exception:
         return 0.0
 
 

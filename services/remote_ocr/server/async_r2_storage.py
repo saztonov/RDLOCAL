@@ -32,17 +32,25 @@ class AsyncR2Storage:
         bucket_name: Optional[str] = None,
         endpoint_url: Optional[str] = None,
     ):
-        self.account_id = account_id or os.getenv("R2_ACCOUNT_ID")
-        self.access_key_id = access_key_id or os.getenv("R2_ACCESS_KEY_ID")
-        self.secret_access_key = secret_access_key or os.getenv("R2_SECRET_ACCESS_KEY")
-        self.bucket_name = bucket_name or os.getenv("R2_BUCKET_NAME", "rd1")
-
-        if endpoint_url:
-            self.endpoint_url = endpoint_url
-        elif self.account_id:
-            self.endpoint_url = f"https://{self.account_id}.r2.cloudflarestorage.com"
+        if not any([account_id, access_key_id, secret_access_key, endpoint_url]):
+            from .r2_config import get_r2_config
+            cfg = get_r2_config()
+            self.endpoint_url = cfg.endpoint_url
+            self.access_key_id = cfg.access_key_id
+            self.secret_access_key = cfg.secret_access_key
+            self.bucket_name = bucket_name or cfg.bucket_name
         else:
-            self.endpoint_url = os.getenv("R2_ENDPOINT_URL")
+            self.account_id = account_id or os.getenv("R2_ACCOUNT_ID")
+            self.access_key_id = access_key_id or os.getenv("R2_ACCESS_KEY_ID")
+            self.secret_access_key = secret_access_key or os.getenv("R2_SECRET_ACCESS_KEY")
+            self.bucket_name = bucket_name or os.getenv("R2_BUCKET_NAME", "rd1")
+
+            if endpoint_url:
+                self.endpoint_url = endpoint_url
+            elif self.account_id:
+                self.endpoint_url = f"https://{self.account_id}.r2.cloudflarestorage.com"
+            else:
+                self.endpoint_url = os.getenv("R2_ENDPOINT_URL")
 
         if not all([self.access_key_id, self.secret_access_key, self.endpoint_url]):
             raise ValueError("R2 credentials not configured")

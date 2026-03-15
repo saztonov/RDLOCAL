@@ -5,11 +5,10 @@ from fastapi import Form, Header, HTTPException
 
 from services.remote_ocr.server.celery_app import celery_app
 from services.remote_ocr.server.logging_config import get_logger
-from services.remote_ocr.server.routes.common import check_api_key
+from services.remote_ocr.server.routes.common import check_api_key, require_job
 from services.remote_ocr.server.routes.jobs.update_handlers import (
     _get_block_count_for_job,
 )
-from services.remote_ocr.server.storage import get_job
 from services.remote_ocr.server.storage_jobs import (
     find_adjacent_queued_job,
     swap_job_priorities,
@@ -53,9 +52,7 @@ def reorder_job_handler(
             status_code=400, detail=f"Invalid direction: {direction}"
         )
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     if job.status != "queued":
         raise HTTPException(

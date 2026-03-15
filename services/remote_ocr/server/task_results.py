@@ -151,6 +151,7 @@ def generate_results(
         json.dump(doc.to_dict(), f, ensure_ascii=False, indent=2)
 
     # Генерация итогового HTML файла
+    partial_failures = []
     html_path = work_dir / "ocr_result.html"
     try:
         generate_html_from_pages(
@@ -159,6 +160,7 @@ def generate_results(
         logger.info(f"HTML файл сгенерирован: {html_path}")
     except Exception as e:
         logger.warning(f"Ошибка генерации HTML: {e}")
+        partial_failures.append(f"HTML: {e}")
 
     # Генерация компактного Markdown файла (оптимизирован для LLM)
     md_path = work_dir / "document.md"
@@ -170,8 +172,10 @@ def generate_results(
             logger.info(f"✅ MD файл сгенерирован: {md_path} ({md_path.stat().st_size} bytes)")
         else:
             logger.error(f"❌ MD файл не создан: {md_path}")
+            partial_failures.append("MD: файл не создан")
     except Exception as e:
         logger.error(f"❌ Ошибка генерации MD: {e}", exc_info=True)
+        partial_failures.append(f"MD: {e}")
 
     # Генерация result.json (annotation + ocr_html + crop_url для каждого блока)
     result_path = work_dir / "result.json"
@@ -185,12 +189,14 @@ def generate_results(
         )
     except Exception as e:
         logger.warning(f"Ошибка генерации result.json: {e}")
+        partial_failures.append(f"result.json: {e}")
 
     # Генерация _blocks.json (список IMAGE блоков с URL кропов)
     try:
         generate_blocks_json(blocks, work_dir, r2_prefix)
     except Exception as e:
         logger.warning(f"Ошибка генерации _blocks.json: {e}")
+        partial_failures.append(f"_blocks.json: {e}")
 
     # Верификация и повторное распознавание пропущенных блоков
     if ocr_backend and result_path.exists():
@@ -212,6 +218,13 @@ def generate_results(
             )
         except Exception as e:
             logger.warning(f"Ошибка верификации блоков: {e}", exc_info=True)
+            partial_failures.append(f"verification: {e}")
+
+    if partial_failures:
+        logger.warning(
+            f"Частичные ошибки постобработки: {partial_failures}",
+            extra={"job_id": job.id, "event": "partial_failures"},
+        )
 
     return r2_prefix
 

@@ -7,10 +7,10 @@ from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import (
     check_api_key,
     get_r2_sync_client,
+    require_job,
 )
 from services.remote_ocr.server.storage import (
     delete_job,
-    get_job,
 )
 
 _logger = get_logger(__name__)
@@ -27,9 +27,7 @@ def delete_job_handler(
     """
     check_api_key(x_api_key)
 
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = require_job(job_id)
 
     _logger.info(
         f"Удаление задачи: {job_id}",

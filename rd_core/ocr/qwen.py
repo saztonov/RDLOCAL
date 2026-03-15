@@ -147,7 +147,7 @@ class QwenBackend:
                         logger.info(f"Qwen модель выгружена: {inst['id']}")
                     break
         except Exception as e:
-            logger.debug(f"Ошибка выгрузки модели Qwen: {e}")
+            logger.warning(f"Ошибка выгрузки модели Qwen: {e}")
 
     def supports_pdf_input(self) -> bool:
         return False

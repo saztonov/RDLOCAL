@@ -79,6 +79,11 @@ def run_two_pass_ocr(
         total_strips = len(manifest.strips) if manifest else 0
         total_images = len(manifest.image_blocks) if manifest else 0
 
+        if total_strips == 0 and total_images == 0:
+            raise RuntimeError(
+                "PASS1: пустой manifest — нет блоков для обработки"
+            )
+
         logger.info(
             f"PASS1 завершён: {total_strips} strips, {total_images} images",
             extra={

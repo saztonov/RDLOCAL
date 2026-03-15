@@ -61,7 +61,8 @@ def _check_backend_available(backend, timeout: int = 10) -> bool:
         if session:
             resp = session.get(f"{base_url}/v1/models", timeout=timeout)
             return resp.status_code == 200
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Backend availability check failed: {e}")
         return False
     return True
 

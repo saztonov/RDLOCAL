@@ -189,7 +189,7 @@ def pass1_prepare_crops(
                 try:
                     if os.path.exists(crop_path):
                         os.remove(crop_path)
-                except:
+                except Exception:
                     pass
 
     manifest = TwoPassManifest(
@@ -280,7 +280,7 @@ def _group_and_merge_strips(
                 for c in crops:
                     try:
                         c.close()
-                    except:
+                    except Exception:
                         pass
 
         block_ids_list = [b[0] for b in current_strip_blocks]
@@ -321,7 +321,7 @@ def _group_and_merge_strips(
             try:
                 with Image.open(crop_path) as img:
                     crop_height = img.height
-            except:
+            except Exception:
                 crop_height = 500
 
             new_height = crop_height + (gap if current_strip_blocks else 0)
