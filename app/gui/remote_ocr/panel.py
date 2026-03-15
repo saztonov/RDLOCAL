@@ -183,6 +183,9 @@ class RemoteOCRPanel(QDockWidget):
         QMessageBox.critical(self, titles.get(error_type, "Ошибка"), message)
 
     def _on_download_started(self, job_id: str, total_files: int):
+        if self._download_dialog:
+            self._download_dialog.close()
+            self._download_dialog = None
         self._download_dialog = QProgressDialog(
             f"Скачивание файлов задачи {job_id[:8]}...", None, 0, total_files, self
         )

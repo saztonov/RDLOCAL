@@ -239,6 +239,11 @@ class FileDownloadMixin:
         if self._active_downloads and hasattr(self, "_pending_download_r2_key"):
             self._active_downloads.discard(self._pending_download_r2_key)
 
+        # Помечаем done-джобы для этого узла как скачанные (координация с auto-download)
+        node_id = getattr(self, "_pending_download_node_id", None)
+        if node_id and hasattr(self, "remote_ocr_panel") and self.remote_ocr_panel:
+            self.remote_ocr_panel.controller.mark_node_downloads_complete(node_id)
+
         # Проверяем ошибки
         if hasattr(self, "_download_errors") and self._download_errors:
             # Показываем ошибки только для основного PDF

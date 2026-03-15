@@ -75,6 +75,7 @@ class JobsController(QObject):
         self._jobs_cache: dict[str, JobInfo] = {}
         self._optimistic_jobs: dict[str, tuple[JobInfo, float]] = {}
         self._downloaded_jobs: set[str] = set()
+        self._downloading_jobs: set[str] = set()  # guard: загрузки в процессе
         self._is_fetching: bool = False
         self._is_manual_refresh: bool = False
         self._consecutive_errors: int = 0
@@ -547,10 +548,15 @@ class JobsController(QObject):
 
     def auto_download_result(self, job_id: str) -> None:
         """Запустить скачивание результата из R2 в папку текущего документа."""
+        if job_id in self._downloading_jobs:
+            logger.debug(f"Download already in progress: {job_id}")
+            return
+
         client = self._get_client()
         if client is None:
             return
 
+        self._downloading_jobs.add(job_id)
         try:
             job_details = client.get_job_details(job_id)
             r2_prefix = job_details.get("r2_prefix")
@@ -574,7 +580,14 @@ class JobsController(QObject):
             )
 
         except Exception as e:
+            self._downloading_jobs.discard(job_id)
             logger.error(f"Ошибка подготовки скачивания {job_id}: {e}")
+
+    def mark_node_downloads_complete(self, node_id: str) -> None:
+        """Пометить done-джобы для node как скачанные (вызывается из file_download)."""
+        for job_id, job in self._jobs_cache.items():
+            if job.status == "done" and getattr(job, "node_id", None) == node_id:
+                self._downloaded_jobs.add(job_id)
 
     def update_ocr_stats(self) -> None:
         """Пересчитать и обновить статистику OCR для текущего документа.
@@ -865,6 +878,7 @@ class JobsController(QObject):
                 job.status == "done"
                 and getattr(job, "node_id", None) == current_node_id
                 and job.id not in self._downloaded_jobs
+                and job.id not in self._downloading_jobs
             ):
                 latest_done = job
                 break
@@ -1064,6 +1078,7 @@ class JobsController(QObject):
     def _on_download_finished(self, job_id: str, extract_dir: str) -> None:
         """Слот: скачивание завершено — обновляем состояние и пробрасываем."""
         self._downloaded_jobs.add(job_id)
+        self._downloading_jobs.discard(job_id)
 
         # Обновляем аннотации и дерево
         self._reload_annotation_from_result(extract_dir)
@@ -1074,6 +1089,7 @@ class JobsController(QObject):
 
     def _on_download_error(self, job_id: str, error_msg: str) -> None:
         """Слот: ошибка скачивания — пробрасываем наружу."""
+        self._downloading_jobs.discard(job_id)
         self.download_error.emit(job_id, error_msg)
 
     # ══════════════════════════════════════════════════════════════════
