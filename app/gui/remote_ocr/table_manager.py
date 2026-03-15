@@ -162,27 +162,31 @@ class TableManagerMixin:
                     for j in jobs
                 )
                 if not has_active_for_node:
-                    for job in jobs:
+                    # Ищем самый новый done-джоб, который ещё не скачан
+                    latest_done = None
+                    for job in reversed(jobs):
                         if (
                             job.status == "done"
                             and getattr(job, "node_id", None) == current_node_id
+                            and job.id not in self._downloaded_jobs
                         ):
-                            if job.id not in self._downloaded_jobs:
-                                if not self.isVisible():
-                                    from app.gui.toast import show_toast
-
-                                    doc_name = job.task_name or job.document_name or ""
-                                    show_toast(
-                                        self.main_window,
-                                        f"OCR завершён: {doc_name}",
-                                        duration=5000,
-                                    )
-                                    logger.info(
-                                        f"Задача {job.id[:8]}... завершена "
-                                        f"(панель скрыта), показано уведомление"
-                                    )
-                                self._auto_download_result(job.id)
+                            latest_done = job
                             break
+                    if latest_done:
+                        if not self.isVisible():
+                            from app.gui.toast import show_toast
+
+                            doc_name = latest_done.task_name or latest_done.document_name or ""
+                            show_toast(
+                                self.main_window,
+                                f"OCR завершён: {doc_name}",
+                                duration=5000,
+                            )
+                            logger.info(
+                                f"Задача {latest_done.id[:8]}... завершена "
+                                f"(панель скрыта), показано уведомление"
+                            )
+                        self._auto_download_result(latest_done.id)
 
             # 5. Построить множество incoming job IDs
             incoming_ids = {job.id for job in jobs}
