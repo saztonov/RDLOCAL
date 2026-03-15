@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 
 from PIL import Image
 
+from rd_core.ocr_result import make_error
+
 logger = logging.getLogger(__name__)
 
 API_URL = "https://www.datalab.to/api/v1/convert"
@@ -80,17 +82,17 @@ def handle_http_error(status_code: int, response_text: str) -> str:
     """Обработка HTTP ошибок."""
     logger.error(f"Datalab API error: {status_code} - {response_text}")
     if status_code == 401:
-        return "[Ошибка Datalab API 401: Неверный или просроченный DATALAB_API_KEY]"
+        return make_error("Datalab API 401: Неверный или просроченный DATALAB_API_KEY")
     elif status_code == 403:
-        return "[Ошибка Datalab API 403: Доступ запрещён]"
-    return f"[Ошибка Datalab API: {status_code}]"
+        return make_error("Datalab API 403: Доступ запрещён")
+    return make_error(f"Datalab API: {status_code}")
 
 
 def handle_immediate_result(result: dict) -> Optional[str]:
     """Обработка немедленного результата (без polling). Возвращает None если нужен polling."""
     if not result.get("success"):
         error = result.get("error", "Unknown error")
-        return f"[Ошибка Datalab: {error}]"
+        return make_error(f"Datalab: {error}")
 
     check_url = result.get("request_check_url")
     if not check_url:
@@ -99,7 +101,7 @@ def handle_immediate_result(result: dict) -> Optional[str]:
             if isinstance(json_result, dict):
                 return json.dumps(json_result, ensure_ascii=False)
             return json_result
-        return "[Ошибка: нет request_check_url]"
+        return make_error("нет request_check_url")
     return None  # нужен polling
 
 

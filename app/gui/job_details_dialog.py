@@ -308,7 +308,7 @@ class JobDetailsDialog(QDialog):
                         time_left = f"{minutes}м {seconds}с"
 
                     return f"{eta_str} (~{time_left})"
-        except:
+        except (ValueError, TypeError, KeyError, AttributeError):
             pass
 
         return ""

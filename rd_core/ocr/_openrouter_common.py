@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 from PIL import Image
 
 from rd_core.ocr.utils import extract_message_text, image_to_base64, image_to_pdf_base64
+from rd_core.ocr_result import make_error
 
 logger = logging.getLogger(__name__)
 
@@ -160,28 +161,28 @@ def parse_response(status_code: int, response_json: Optional[dict], response_tex
                 err_msg = response_json.get("error", {}).get("message", "Доступ запрещён") if response_json else "Доступ запрещён"
             except Exception:
                 err_msg = "Проверьте API ключ и баланс на openrouter.ai"
-            return f"[Ошибка OpenRouter 403: {err_msg}]"
+            return make_error(f"OpenRouter 403: {err_msg}")
         elif status_code == 401:
-            return "[Ошибка OpenRouter 401: Неверный API ключ]"
+            return make_error("OpenRouter 401: Неверный API ключ")
         elif status_code == 429:
-            return "[Ошибка OpenRouter 429: Превышен лимит запросов]"
+            return make_error("OpenRouter 429: Превышен лимит запросов")
         elif status_code == 402:
-            return "[Ошибка OpenRouter 402: Недостаточно кредитов]"
-        return f"[Ошибка OpenRouter API: {status_code}]"
+            return make_error("OpenRouter 402: Недостаточно кредитов")
+        return make_error(f"OpenRouter API: {status_code}")
 
     result = response_json
     if not result:
-        return "[Ошибка OpenRouter: пустой ответ]"
+        return make_error("OpenRouter: пустой ответ")
 
     if "error" in result:
         err_obj = result["error"]
         err_msg = err_obj.get("message", str(err_obj)) if isinstance(err_obj, dict) else str(err_obj)
         logger.error(f"OpenRouter API error in body: {err_msg}")
-        return f"[Ошибка OpenRouter: {err_msg}]"
+        return make_error(f"OpenRouter: {err_msg}")
 
     if "choices" not in result or not result["choices"]:
         logger.error(f"OpenRouter: 'choices' missing. Keys: {list(result.keys())}")
-        return "[Ошибка OpenRouter: некорректный ответ API]"
+        return make_error("OpenRouter: некорректный ответ API")
 
     choice = result["choices"][0]
     message = choice.get("message") or {}
@@ -191,6 +192,6 @@ def parse_response(status_code: int, response_json: Optional[dict], response_tex
 
     if not text:
         logger.warning("OpenRouter returned an empty content payload. Choice keys: %s", list(choice.keys()))
-        return "[Ошибка OpenRouter: empty response content]"
+        return make_error("OpenRouter: empty response content")
 
     return text

@@ -1,12 +1,13 @@
-"""Панель для управления Remote OCR задачами"""
+"""Панель для управления Remote OCR задачами.
+
+Тонкая сборка виджетов — вся логика в JobsController.
+"""
 from __future__ import annotations
 
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
@@ -16,18 +17,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QTableWidget,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
-from app.gui.remote_ocr.download_mixin import DownloadMixin
-from app.gui.remote_ocr.job_creation import JobCreationMixin
-from app.gui.remote_ocr.job_lifecycle import JobLifecycleMixin
-from app.gui.remote_ocr.polling_controller import PollingControllerMixin
-from app.gui.remote_ocr.result_handler import ResultHandlerMixin
-from app.gui.remote_ocr.signals import WorkerSignals
-from app.gui.remote_ocr.table_manager import JOB_ID_ROLE, TableManagerMixin
+from app.gui.remote_ocr.jobs_controller import JobsController
+from app.gui.remote_ocr.jobs_model import JOB_ID_ROLE, JobsTableModel
 
 if TYPE_CHECKING:
     from app.gui.main_window import MainWindow
@@ -35,59 +31,43 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class RemoteOCRPanel(
-    JobCreationMixin,
-    JobLifecycleMixin,
-    DownloadMixin,
-    PollingControllerMixin,
-    TableManagerMixin,
-    ResultHandlerMixin,
-    QDockWidget,
-):
+class RemoteOCRPanel(QDockWidget):
     """Dock-панель для Remote OCR задач"""
-
-    POLL_INTERVAL_PROCESSING = 5000    # 5 сек - активные задачи
-    POLL_INTERVAL_IDLE = 60000         # 60 сек - нет активных задач
-    POLL_INTERVAL_ERROR = 120000       # 120 сек - при ошибках
 
     def __init__(self, main_window: "MainWindow", parent=None):
         super().__init__("Remote OCR Jobs", parent)
         self.setObjectName("RemoteOCRPanel")
         self.main_window = main_window
-        self._client = None
-        self._current_document_id = None
-        self._last_output_dir = None
-        self._last_engine = None
-        self._has_active_jobs = False
-        self._consecutive_errors = 0
-        self._is_fetching = False
-        self._is_manual_refresh = False
 
-        self._executor = ThreadPoolExecutor(max_workers=2)
-        self._signals = WorkerSignals()
-        self._connect_signals()
+        # Controller + Model
+        self.controller = JobsController(main_window, parent=self)
+        self._model = JobsTableModel(self)
+        self._proxy = QSortFilterProxyModel(self)
+        self._proxy.setSourceModel(self._model)
+        self._proxy.setSortRole(Qt.UserRole)
 
         self._download_dialog: Optional[QProgressDialog] = None
-        self._downloaded_jobs: set = set()
-        self._optimistic_jobs: dict = {}
-        self._last_server_time: Optional[str] = None
-        self._jobs_cache: dict = {}
-        self._force_full_refresh: bool = False
 
         self._setup_ui()
-        self._setup_timer()
+        self._connect_signals()
 
     def _connect_signals(self):
-        """Подключить сигналы"""
-        self._signals.jobs_loaded.connect(self._on_jobs_loaded)
-        self._signals.jobs_error.connect(self._on_jobs_error)
-        self._signals.job_uploading.connect(self._on_job_uploading)
-        self._signals.job_created.connect(self._on_job_created)
-        self._signals.job_create_error.connect(self._on_job_create_error)
-        self._signals.download_started.connect(self._on_download_started)
-        self._signals.download_progress.connect(self._on_download_progress)
-        self._signals.download_finished.connect(self._on_download_finished)
-        self._signals.download_error.connect(self._on_download_error)
+        """Подключить сигналы контроллера к UI"""
+        ctrl = self.controller
+
+        # Обновление таблицы
+        ctrl.jobs_updated.connect(self._on_jobs_updated)
+        ctrl.connection_status.connect(self._on_connection_status)
+
+        # Создание задач
+        ctrl.job_uploading.connect(lambda _: None)  # модель обновится через jobs_updated
+        ctrl.job_create_error.connect(self._on_job_create_error)
+
+        # Скачивание
+        ctrl.download_started.connect(self._on_download_started)
+        ctrl.download_progress.connect(self._on_download_progress)
+        ctrl.download_finished.connect(self._on_download_finished)
+        ctrl.download_error.connect(self._on_download_error)
 
     def _setup_ui(self):
         """Настроить UI панели"""
@@ -95,6 +75,7 @@ class RemoteOCRPanel(
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        # Header
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("Задачи:"))
 
@@ -106,132 +87,198 @@ class RemoteOCRPanel(
         self.move_up_btn.setMaximumWidth(30)
         self.move_up_btn.setToolTip("Переместить задачу выше в очереди")
         self.move_up_btn.setEnabled(False)
-        self.move_up_btn.clicked.connect(self._move_job_up)
+        self.move_up_btn.clicked.connect(lambda: self._reorder_selected("up"))
         header_layout.addWidget(self.move_up_btn)
 
         self.move_down_btn = QPushButton("▼")
         self.move_down_btn.setMaximumWidth(30)
         self.move_down_btn.setToolTip("Переместить задачу ниже в очереди")
         self.move_down_btn.setEnabled(False)
-        self.move_down_btn.clicked.connect(self._move_job_down)
+        self.move_down_btn.clicked.connect(lambda: self._reorder_selected("down"))
         header_layout.addWidget(self.move_down_btn)
 
         self.cancel_all_btn = QPushButton("⏹")
         self.cancel_all_btn.setMaximumWidth(30)
         self.cancel_all_btn.setToolTip("Отменить все активные задачи")
-        self.cancel_all_btn.clicked.connect(self._cancel_all_jobs)
+        self.cancel_all_btn.clicked.connect(self.controller.cancel_all_jobs)
         header_layout.addWidget(self.cancel_all_btn)
 
         self.clear_all_btn = QPushButton("🗑️")
         self.clear_all_btn.setMaximumWidth(30)
         self.clear_all_btn.setToolTip("Очистить все задачи")
-        self.clear_all_btn.clicked.connect(self._clear_all_jobs)
+        self.clear_all_btn.clicked.connect(self.controller.clear_all_jobs)
         header_layout.addWidget(self.clear_all_btn)
 
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setMaximumWidth(30)
         self.refresh_btn.setToolTip("Обновить список")
-        self.refresh_btn.clicked.connect(lambda: self._refresh_jobs(manual=True))
+        self.refresh_btn.clicked.connect(lambda: self.controller.refresh(manual=True))
         header_layout.addWidget(self.refresh_btn)
 
         layout.addLayout(header_layout)
 
+        # Stats widget
         from app.gui.remote_ocr.ocr_stats_widget import OCRStatsWidget
 
         self.stats_widget = OCRStatsWidget()
         layout.addWidget(self.stats_widget)
 
-        self.jobs_table = QTableWidget()
-        self.jobs_table.setColumnCount(7)
-        self.jobs_table.setHorizontalHeaderLabels(
-            ["№", "Наименование", "Время начала", "Статус", "Прогресс", "Детали", "Действия"]
-        )
+        # Table (QTableView + proxy model)
+        self.jobs_table = QTableView()
+        self.jobs_table.setModel(self._proxy)
+        self.jobs_table.setSortingEnabled(True)
+        self.jobs_table.sortByColumn(2, Qt.DescendingOrder)
+        self.jobs_table.setSelectionBehavior(QTableView.SelectRows)
+        self.jobs_table.setSelectionMode(QTableView.SingleSelection)
+        self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.jobs_table.customContextMenuRequested.connect(self._show_context_menu)
+        self.jobs_table.selectionModel().selectionChanged.connect(self._update_reorder_buttons)
 
         header = self.jobs_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(False)
-        # Default widths
+        header.setStretchLastSection(True)
         header.resizeSection(0, 35)   # №
         header.resizeSection(1, 150)  # Наименование
         header.resizeSection(2, 120)  # Время начала
         header.resizeSection(3, 100)  # Статус
         header.resizeSection(4, 70)   # Прогресс
-        header.resizeSection(5, 150)  # Детали
-        header.resizeSection(6, 70)   # Действия
 
-        self.jobs_table.setSortingEnabled(True)
-        self.jobs_table.sortByColumn(2, Qt.DescendingOrder)  # новые задачи сверху
-        self.jobs_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.jobs_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.jobs_table.customContextMenuRequested.connect(self._show_table_context_menu)
-        self.jobs_table.itemSelectionChanged.connect(self._update_reorder_buttons)
         layout.addWidget(self.jobs_table)
 
         self.setWidget(widget)
         self.setMinimumWidth(520)
-        self.setFeatures(
-            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+        self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+
+    # ── Slots ──────────────────────────────────────────────────────────
+
+    def _on_jobs_updated(self, jobs):
+        """Контроллер прислал обновлённый список задач"""
+        # Сохраняем selection
+        selected_job_id = self._get_selected_job_id()
+
+        self._model.update_jobs(jobs)
+
+        # Восстанавливаем selection
+        if selected_job_id:
+            row = self._model.find_row_by_job_id(selected_job_id)
+            if row >= 0:
+                proxy_idx = self._proxy.mapFromSource(self._model.index(row, 0))
+                self.jobs_table.selectRow(proxy_idx.row())
+
+    def _on_connection_status(self, status: str):
+        labels = {
+            "connected": "🟢 Подключено",
+            "disconnected": "🔴 Сервер недоступен",
+            "loading": "🔄 Загрузка...",
+        }
+        self.status_label.setText(labels.get(status, status))
+
+    def _on_job_create_error(self, error_type: str, message: str):
+        titles = {
+            "auth": "Ошибка авторизации",
+            "size": "Файл слишком большой",
+            "server": "Ошибка сервера",
+            "generic": "Ошибка",
+        }
+        QMessageBox.critical(self, titles.get(error_type, "Ошибка"), message)
+
+    def _on_download_started(self, job_id: str, total_files: int):
+        self._download_dialog = QProgressDialog(
+            f"Скачивание файлов задачи {job_id[:8]}...", None, 0, total_files, self
         )
+        self._download_dialog.setWindowTitle("Загрузка результатов")
+        self._download_dialog.setWindowModality(Qt.WindowModal)
+        self._download_dialog.setMinimumDuration(0)
+        self._download_dialog.setValue(0)
+        self._download_dialog.show()
 
-    def _setup_timer(self):
-        """Настроить таймер для автообновления"""
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self._refresh_jobs)
-        self.refresh_timer.start(self.POLL_INTERVAL_IDLE)
-        logger.info(
-            f"Таймер автообновления Remote OCR запущен: {self.POLL_INTERVAL_IDLE}ms"
-        )
-        self._refresh_jobs(manual=False)
+    def _on_download_progress(self, job_id: str, current: int, filename: str):
+        if self._download_dialog:
+            self._download_dialog.setValue(current)
+            self._download_dialog.setLabelText(f"Скачивание: {filename}")
 
-    def _get_client(self):
-        """Получить или создать клиент"""
-        if self._client is None:
-            try:
-                import os
+    def _on_download_finished(self, job_id: str, extract_dir: str):
+        if self._download_dialog:
+            self._download_dialog.close()
+            self._download_dialog = None
+        self.update_ocr_stats()
 
-                from app.ocr_client import RemoteOCRClient
+        from app.gui.toast import show_toast
 
-                base_url = os.getenv("REMOTE_OCR_BASE_URL", "http://localhost:8000")
-                api_key = os.getenv("REMOTE_OCR_API_KEY")
-                logger.info(
-                    f"Creating RemoteOCRClient: REMOTE_OCR_BASE_URL={base_url}, "
-                    f"API_KEY={'set' if api_key else 'NOT SET'}"
-                )
-                self._client = RemoteOCRClient()
-                logger.info(f"Client created: base_url={self._client.base_url}")
-            except Exception as e:
-                logger.error(f"Ошибка создания клиента: {e}", exc_info=True)
-                return None
-        return self._client
+        show_toast(self.main_window, "OCR завершён, аннотация обновлена")
 
-    def _get_selected_blocks(self):
-        """Получить все блоки для OCR"""
-        blocks = []
-        if self.main_window.annotation_document:
-            for page in self.main_window.annotation_document.pages:
-                if page.blocks:
-                    blocks.extend(page.blocks)
+    def _on_download_error(self, job_id: str, error_msg: str):
+        if self._download_dialog:
+            self._download_dialog.close()
+            self._download_dialog = None
+        QMessageBox.critical(self, "Ошибка загрузки", f"Не удалось скачать файлы:\n{error_msg}")
 
-        self._attach_prompts_to_blocks(blocks)
-        return blocks
+    # ── Context menu ───────────────────────────────────────────────────
 
-    def _get_blocks_needing_ocr(self):
-        """Получить только блоки, нуждающиеся в OCR."""
-        from rd_core.ocr_block_status import needs_ocr
+    def _show_context_menu(self, pos):
+        proxy_idx = self.jobs_table.indexAt(pos)
+        if not proxy_idx.isValid():
+            return
 
-        blocks = []
-        if self.main_window.annotation_document:
-            for page in self.main_window.annotation_document.pages:
-                for block in page.blocks or []:
-                    if needs_ocr(block):
-                        blocks.append(block)
-        self._attach_prompts_to_blocks(blocks)
-        return blocks
+        source_idx = self._proxy.mapToSource(proxy_idx)
+        job = self._model.get_job(source_idx.row())
+        if not job:
+            return
 
-    def _attach_prompts_to_blocks(self, blocks):
-        """Промпты берутся из категорий в Supabase на стороне сервера"""
-        pass
+        node_id = getattr(job, "node_id", None)
+
+        menu = QMenu(self)
+        find_action = menu.addAction("🔍 Найти в дереве проектов")
+        find_action.setEnabled(bool(node_id))
+
+        action = menu.exec_(self.jobs_table.mapToGlobal(pos))
+        if action == find_action and node_id:
+            self._navigate_to_project_tree(node_id)
+
+    def _navigate_to_project_tree(self, node_id: str):
+        if not hasattr(self.main_window, "project_tree_widget"):
+            return
+
+        tree_widget = self.main_window.project_tree_widget
+        if hasattr(self.main_window, "project_dock"):
+            dock = self.main_window.project_dock
+            if not dock.isVisible():
+                dock.show()
+
+        if not tree_widget.navigate_to_node(node_id):
+            QMessageBox.warning(
+                self, "Узел не найден",
+                "Не удалось найти узел в дереве проектов.\nВозможно, узел был удалён.",
+            )
+
+    # ── Reorder ────────────────────────────────────────────────────────
+
+    def _reorder_selected(self, direction: str):
+        job_id = self._get_selected_job_id()
+        if job_id:
+            self.controller.reorder_job(job_id, direction)
+
+    def _update_reorder_buttons(self):
+        job_id = self._get_selected_job_id()
+        if not job_id:
+            self.move_up_btn.setEnabled(False)
+            self.move_down_btn.setEnabled(False)
+            return
+
+        job = self.controller._jobs_cache.get(job_id)
+        can_reorder = job and job.status == "queued"
+        self.move_up_btn.setEnabled(can_reorder)
+        self.move_down_btn.setEnabled(can_reorder)
+
+    # ── Helpers ────────────────────────────────────────────────────────
+
+    def _get_selected_job_id(self) -> Optional[str]:
+        indexes = self.jobs_table.selectionModel().selectedRows()
+        if not indexes:
+            return None
+        proxy_idx = indexes[0]
+        source_idx = self._proxy.mapToSource(proxy_idx)
+        return self._model.get_job_id(source_idx.row())
 
     def update_ocr_stats(self):
         """Пересчитать и обновить статистику OCR для текущего документа."""
@@ -253,218 +300,17 @@ class RemoteOCRPanel(
         stats = compute_ocr_stats(all_blocks)
         self.stats_widget.update_stats(stats)
 
-    def _on_job_uploading(self, job_info):
-        """Слот: задача начала загружаться"""
-        logger.info(
-            f"Обработка job_uploading signal: temp_id={job_info.id}, status={job_info.status}"
-        )
-
-        self._optimistic_jobs[job_info.id] = (job_info, time.time())
-        logger.info(f"Временная задача добавлена в оптимистичный список: {job_info.id}")
-
-        self._add_job_to_table(job_info, at_top=True)
-        logger.info(
-            f"Временная задача добавлена в таблицу, строк={self.jobs_table.rowCount()}"
-        )
-
-    def _on_job_created(self, job_info):
-        """Слот: задача создана на сервере"""
-        logger.info(
-            f"Обработка job_created signal: job_id={job_info.id}, status={job_info.status}"
-        )
-        from app.gui.toast import show_toast
-
-        show_toast(self, f"Задача создана: {job_info.id[:8]}...", duration=2500)
-
-        temp_job_id = getattr(job_info, "_temp_job_id", None)
-
-        if temp_job_id and temp_job_id in self._optimistic_jobs:
-            self._optimistic_jobs.pop(temp_job_id, None)
-            logger.info(f"Удалена временная задача из оптимистичного списка: {temp_job_id}")
-
-        self._optimistic_jobs[job_info.id] = (job_info, time.time())
-        logger.info(f"Реальная задача добавлена в оптимистичный список: {job_info.id}")
-
-        if self.refresh_timer.interval() > 2000:
-            self.refresh_timer.setInterval(2000)
-            logger.info("Установлен быстрый интервал обновления: 2000ms")
-
-        if temp_job_id:
-            self._replace_job_in_table(temp_job_id, job_info)
-        else:
-            self._add_job_to_table(job_info, at_top=True)
-        logger.info(
-            f"Задача обновлена в таблице, строк={self.jobs_table.rowCount()}"
-        )
-
-    def _on_job_create_error(self, error_type: str, message: str):
-        """Слот: ошибка создания задачи"""
-        uploading_ids = [
-            job_id
-            for job_id, (job_info, _) in self._optimistic_jobs.items()
-            if job_info.status == "uploading"
-        ]
-        for job_id in uploading_ids:
-            self._optimistic_jobs.pop(job_id, None)
-            self._remove_job_from_table(job_id)
-
-        titles = {
-            "auth": "Ошибка авторизации",
-            "size": "Файл слишком большой",
-            "server": "Ошибка сервера",
-            "generic": "Ошибка",
-        }
-        QMessageBox.critical(self, titles.get(error_type, "Ошибка"), message)
-
-    def _on_download_started(self, job_id: str, total_files: int):
-        """Слот: начало скачивания"""
-        self._download_dialog = QProgressDialog(
-            f"Скачивание файлов задачи {job_id[:8]}...", None, 0, total_files, self
-        )
-        self._download_dialog.setWindowTitle("Загрузка результатов")
-        self._download_dialog.setWindowModality(Qt.WindowModal)
-        self._download_dialog.setMinimumDuration(0)
-        self._download_dialog.setValue(0)
-        self._download_dialog.show()
-
-    def _on_download_progress(self, job_id: str, current: int, filename: str):
-        """Слот: прогресс скачивания"""
-        dialog = self._download_dialog
-        if dialog:
-            dialog.setValue(current)
-            dialog.setLabelText(f"Скачивание: {filename}")
-
-    def _on_download_finished(self, job_id: str, extract_dir: str):
-        """Слот: скачивание завершено"""
-        dialog = self._download_dialog
-        if dialog:
-            dialog.close()
-            self._download_dialog = None
-
-        self._downloaded_jobs.add(job_id)
-
-        self._reload_annotation_from_result(extract_dir)
-        self._refresh_document_in_tree()
-        self.update_ocr_stats()
-
-        from app.gui.toast import show_toast
-
-        show_toast(self.main_window, "OCR завершён, аннотация обновлена")
-
-    def _on_download_error(self, job_id: str, error_msg: str):
-        """Слот: ошибка скачивания"""
-        dialog = self._download_dialog
-        if dialog:
-            dialog.close()
-            self._download_dialog = None
-
-        QMessageBox.critical(
-            self, "Ошибка загрузки", f"Не удалось скачать файлы:\n{error_msg}"
-        )
-
-    def _show_table_context_menu(self, pos):
-        """Контекстное меню таблицы задач"""
-        item = self.jobs_table.itemAt(pos)
-        if not item:
-            return
-
-        row = item.row()
-        first_col_item = self.jobs_table.item(row, 0)
-        if not first_col_item:
-            return
-
-        job_id = first_col_item.data(JOB_ID_ROLE)
-        if not job_id:
-            return
-
-        job_info = self._jobs_cache.get(job_id)
-        node_id = getattr(job_info, "node_id", None) if job_info else None
-
-        menu = QMenu(self)
-        find_action = menu.addAction("🔍 Найти в дереве проектов")
-        find_action.setEnabled(bool(node_id))
-
-        action = menu.exec_(self.jobs_table.mapToGlobal(pos))
-        if action == find_action and node_id:
-            self._navigate_to_project_tree(node_id)
-
-    def _navigate_to_project_tree(self, node_id: str):
-        """Навигация к узлу в дереве проектов"""
-        if not hasattr(self.main_window, "project_tree_widget"):
-            return
-
-        tree_widget = self.main_window.project_tree_widget
-
-        if hasattr(self.main_window, "project_dock"):
-            dock = self.main_window.project_dock
-            if not dock.isVisible():
-                dock.show()
-
-        if not tree_widget.navigate_to_node(node_id):
-            QMessageBox.warning(
-                self,
-                "Узел не найден",
-                "Не удалось найти узел в дереве проектов.\n"
-                "Возможно, узел был удалён.",
-            )
-
-    def _update_reorder_buttons(self):
-        """Обновить доступность кнопок ↑/↓ при смене выделения"""
-        selected = self.jobs_table.selectedItems()
-        if not selected:
-            self.move_up_btn.setEnabled(False)
-            self.move_down_btn.setEnabled(False)
-            return
-
-        row = selected[0].row()
-        item = self.jobs_table.item(row, 0)
-        if not item:
-            self.move_up_btn.setEnabled(False)
-            self.move_down_btn.setEnabled(False)
-            return
-
-        job_id = item.data(JOB_ID_ROLE)
-        job_info = self._jobs_cache.get(job_id)
-
-        if not job_info or job_info.status != "queued":
-            self.move_up_btn.setEnabled(False)
-            self.move_down_btn.setEnabled(False)
-            return
-
-        self.move_up_btn.setEnabled(self._has_adjacent_queued(row, "up"))
-        self.move_down_btn.setEnabled(self._has_adjacent_queued(row, "down"))
-
-    def _has_adjacent_queued(self, current_row: int, direction: str) -> bool:
-        """Проверить наличие соседней queued-задачи в таблице"""
-        step = -1 if direction == "up" else 1
-        row = current_row + step
-        while 0 <= row < self.jobs_table.rowCount():
-            item = self.jobs_table.item(row, 0)
-            if item:
-                adj_job_id = item.data(JOB_ID_ROLE)
-                adj_job = self._jobs_cache.get(adj_job_id)
-                if adj_job and adj_job.status == "queued":
-                    return True
-            row += step
-        return False
+    # ── Lifecycle ──────────────────────────────────────────────────────
 
     def showEvent(self, event):
-        """При показе панели обновляем список и статистику"""
         super().showEvent(event)
-        self._refresh_jobs(manual=True)
+        self.controller.set_panel_visible(True)
         self.update_ocr_stats()
-        # Восстанавливаем интервал на основе активных задач
-        interval = self.POLL_INTERVAL_PROCESSING if self._has_active_jobs else self.POLL_INTERVAL_IDLE
-        self.refresh_timer.setInterval(interval)
-        if not self.refresh_timer.isActive():
-            self.refresh_timer.start()
 
     def hideEvent(self, event):
-        """При скрытии переключаем на медленный интервал (не останавливаем)"""
         super().hideEvent(event)
-        self.refresh_timer.setInterval(self.POLL_INTERVAL_IDLE)
+        self.controller.set_panel_visible(False)
 
     def closeEvent(self, event):
-        """Освобождаем ресурсы"""
-        self._executor.shutdown(wait=False)
+        self.controller.shutdown()
         super().closeEvent(event)

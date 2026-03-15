@@ -17,6 +17,7 @@ from rd_core.ocr._datalab_common import (
     prepare_source,
 )
 from rd_core.ocr.http_utils import create_retry_session
+from rd_core.ocr_result import make_error
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,12 @@ class DatalabOCRBackend:
     ) -> str:
         source = prepare_source(image, pdf_file_path)
         if source is None:
-            return "[Ошибка: Datalab требует изображение или PDF]"
+            return make_error("Datalab требует изображение или PDF")
         tmp_path, mime_type, need_cleanup = source
 
         if self.rate_limiter:
             if not self.rate_limiter.acquire():
-                return "[Ошибка: таймаут ожидания rate limiter]"
+                return make_error("таймаут ожидания rate limiter")
 
         try:
             try:
@@ -97,7 +98,7 @@ class DatalabOCRBackend:
                         break
 
                     if response is None or response.status_code == 429:
-                        return "[Ошибка Datalab API: превышен лимит запросов (429)]"
+                        return make_error("Datalab API: превышен лимит запросов (429)")
 
                     if response.status_code != 200:
                         return handle_http_error(response.status_code, response.text)
@@ -149,7 +150,7 @@ class DatalabOCRBackend:
                         elif status == "failed":
                             error = poll_result.get("error", "Unknown error")
                             logger.error(f"Datalab: задача завершилась с ошибкой: {error}")
-                            return f"[Ошибка Datalab: {error}]"
+                            return make_error(f"Datalab: {error}")
                         elif status not in ["processing", "pending", "queued"]:
                             logger.warning(f"Datalab: неизвестный статус '{status}'. Полный ответ: {poll_result}")
 
@@ -171,7 +172,7 @@ class DatalabOCRBackend:
 
                 logger.error(f"Datalab: превышено время ожидания после {self.max_retries} полных попыток")
                 logger.warning("Datalab: пропускаем блок из-за таймаута, продолжаем обработку")
-                return "[Ошибка Datalab: таймаут после повторных попыток]"
+                return make_error("Datalab: таймаут после повторных попыток")
 
             finally:
                 if need_cleanup and os.path.exists(tmp_path):
@@ -179,7 +180,7 @@ class DatalabOCRBackend:
 
         except Exception as e:
             logger.error(f"Ошибка Datalab OCR: {e}", exc_info=True)
-            return f"[Ошибка Datalab OCR: {e}]"
+            return make_error(f"Datalab OCR: {e}")
         finally:
             if self.rate_limiter:
                 self.rate_limiter.release()

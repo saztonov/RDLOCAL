@@ -21,7 +21,7 @@ from ..memory_utils import force_gc, log_memory, log_memory_delta
 from ..rate_limiter import get_unified_async_limiter
 from ..settings import settings
 
-from ..ocr_constants import ERROR_PREFIX, NON_RETRIABLE_PREFIX
+from ..ocr_constants import is_error, is_non_retriable, make_error
 
 logger = get_logger(__name__)
 
@@ -35,11 +35,11 @@ def _should_retry_ocr(text: Optional[str], item_id: str, attempt: int, max_retri
     Returns:
         True если нужно продолжить retry, False если результат финальный.
     """
-    # Успех
-    if text and not text.startswith(ERROR_PREFIX):
+    # Успех — текст есть и не содержит маркер ошибки
+    if text and not is_error(text):
         return False
     # Неповторяемая ошибка — retry бессмысленно
-    if text and text.startswith(NON_RETRIABLE_PREFIX):
+    if is_non_retriable(text):
         logger.warning(f"PASS2 ASYNC: {item_id} неповторяемая ошибка, пропускаем retry")
         return False
     # Есть ещё попытки
@@ -242,7 +242,7 @@ async def pass2_ocr_from_manifest_async(
                             merged_image.close()
                             if strip_attempt < _STRIP_MAX_RETRIES:
                                 continue
-                            error_results = {i: "[Ошибка: rate limiter timeout]" for i in range(len(strip.block_parts))}
+                            error_results = {i: make_error("rate limiter timeout") for i in range(len(strip.block_parts))}
                             return strip, error_results, strip_idx
 
                         try:
@@ -304,7 +304,7 @@ async def pass2_ocr_from_manifest_async(
                     },
                     exc_info=True,
                 )
-                error_results = {i: f"[Ошибка: {e}]" for i in range(len(strip.block_parts))}
+                error_results = {i: make_error(str(e)) for i in range(len(strip.block_parts))}
                 return strip, error_results, strip_idx
 
     checkpoint.phase = "pass2_images"
@@ -393,7 +393,7 @@ async def pass2_ocr_from_manifest_async(
                         logger.warning(f"Image {entry.block_id}: rate limiter timeout")
                         if img_attempt < _IMAGE_MAX_RETRIES:
                             continue
-                        return entry.block_id, "[Ошибка: rate limiter timeout]", entry.part_idx, entry.total_parts
+                        return entry.block_id, make_error("rate limiter timeout"), entry.part_idx, entry.total_parts
 
                     try:
                         if use_pdf:
@@ -414,7 +414,7 @@ async def pass2_ocr_from_manifest_async(
                             finally:
                                 crop.close()
                     except Exception as ocr_err:
-                        text = f"[Ошибка: {ocr_err}]"
+                        text = make_error(str(ocr_err))
                     finally:
                         await rate_limiter.release_async()
 
@@ -452,66 +452,71 @@ async def pass2_ocr_from_manifest_async(
                     },
                     exc_info=True,
                 )
-                return entry.block_id, f"[Ошибка: {e}]", entry.part_idx, entry.total_parts
+                return entry.block_id, make_error(str(e)), entry.part_idx, entry.total_parts
 
-    # === ОБРАБОТКА STRIPS ===
+    # === ОБРАБОТКА STRIPS (bounded queue) ===
     logger.info(
         f"PASS2 ASYNC: обработка {len(manifest.strips)} strips "
-        f"({max_workers} параллельных, asyncio.gather)"
+        f"({max_workers} workers, bounded queue)"
     )
 
-    # Создаём все задачи для strips
-    strip_tasks = [
-        _process_strip_async(strip, idx)
-        for idx, strip in enumerate(manifest.strips)
-    ]
+    strip_queue: asyncio.Queue = asyncio.Queue()
+    for idx, strip in enumerate(manifest.strips):
+        strip_queue.put_nowait((strip, idx))
 
-    # Запускаем параллельно с asyncio.gather
-    strip_results = await asyncio.gather(*strip_tasks, return_exceptions=True)
+    async def _strip_worker():
+        while not strip_queue.empty():
+            if check_paused and check_paused():
+                return
+            try:
+                strip, idx = strip_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
 
-    # Обрабатываем результаты strips
-    for result in strip_results:
-        if isinstance(result, Exception):
-            logger.error(f"PASS2 ASYNC: strip exception: {result}")
-            await _update_progress("Strip (error)")
-            continue
+            try:
+                result = await _process_strip_async(strip, idx)
+            except Exception as exc:
+                logger.error(f"PASS2 ASYNC: strip exception: {exc}", exc_info=True)
+                await _update_progress("Strip (error)")
+                strip_queue.task_done()
+                continue
 
-        if result:
-            strip, index_results, strip_idx = result
+            if result:
+                strip_obj, index_results, strip_idx = result
 
-            # Собираем результаты для checkpoint
-            block_results = {}
+                block_results = {}
+                for i, bp in enumerate(strip_obj.block_parts):
+                    block_id = bp["block_id"]
+                    part_idx = bp["part_idx"]
+                    total_parts = bp["total_parts"]
+                    text = index_results.get(i, "")
 
-            for i, bp in enumerate(strip.block_parts):
-                block_id = bp["block_id"]
-                part_idx = bp["part_idx"]
-                total_parts = bp["total_parts"]
-                text = index_results.get(i, "")
+                    if block_id not in text_block_parts:
+                        text_block_parts[block_id] = {}
+                        text_block_total_parts[block_id] = total_parts
 
-                if block_id not in text_block_parts:
-                    text_block_parts[block_id] = {}
-                    text_block_total_parts[block_id] = total_parts
+                    text_block_parts[block_id][part_idx] = text
+                    block_results[block_id] = text
 
-                text_block_parts[block_id][part_idx] = text
-                block_results[block_id] = text
+                checkpoint.mark_strip_processed(strip_obj.strip_id, block_results)
+                await _save_checkpoint()
 
-            # Сохраняем в checkpoint
-            checkpoint.mark_strip_processed(strip.strip_id, block_results)
-            await _save_checkpoint()
-
-            num_blocks = len(strip.block_parts)
-            if num_blocks == 1:
-                suffix = ""
-            elif num_blocks < 5:
-                suffix = "а"
+                num_blocks = len(strip_obj.block_parts)
+                if num_blocks == 1:
+                    suffix = ""
+                elif num_blocks < 5:
+                    suffix = "а"
+                else:
+                    suffix = "ов"
+                await _update_progress(f"Strip ({num_blocks} блок{suffix})")
             else:
-                suffix = "ов"
-            block_info = f"Strip ({num_blocks} блок{suffix})"
-            await _update_progress(block_info)
-        else:
-            await _update_progress("Strip")
+                await _update_progress("Strip")
 
-        gc.collect()
+            gc.collect()
+            strip_queue.task_done()
+
+    strip_workers = [asyncio.create_task(_strip_worker()) for _ in range(max_workers)]
+    await asyncio.gather(*strip_workers)
 
     # Собираем части TEXT/TABLE блоков
     for block_id, parts_dict in text_block_parts.items():
@@ -532,52 +537,61 @@ async def pass2_ocr_from_manifest_async(
 
     log_memory_delta("PASS2 ASYNC после strips", start_mem)
 
-    # === ОБРАБОТКА IMAGE БЛОКОВ ===
+    # === ОБРАБОТКА IMAGE БЛОКОВ (bounded queue) ===
     logger.info(
-        f"PASS2 ASYNC: обработка {len(manifest.image_blocks)} image blocks"
+        f"PASS2 ASYNC: обработка {len(manifest.image_blocks)} image blocks "
+        f"({max_workers} workers, bounded queue)"
     )
 
-    # Создаём все задачи для images
-    image_tasks = [
-        _process_image_async(entry)
-        for entry in manifest.image_blocks
-    ]
+    image_queue: asyncio.Queue = asyncio.Queue()
+    for entry in manifest.image_blocks:
+        image_queue.put_nowait(entry)
 
-    # Запускаем параллельно с asyncio.gather
-    image_results = await asyncio.gather(*image_tasks, return_exceptions=True)
+    async def _image_worker():
+        while not image_queue.empty():
+            if check_paused and check_paused():
+                return
+            try:
+                entry = image_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
 
-    # Обрабатываем результаты images
-    for result in image_results:
-        if isinstance(result, Exception):
-            logger.error(f"PASS2 ASYNC: image exception: {result}")
-            await _update_progress("Image (error)")
-            continue
+            try:
+                result = await _process_image_async(entry)
+            except Exception as exc:
+                logger.error(f"PASS2 ASYNC: image exception: {exc}", exc_info=True)
+                await _update_progress("Image (error)")
+                image_queue.task_done()
+                continue
 
-        if result:
-            block_id, text, part_idx, total_parts = result
+            if result:
+                block_id, text, part_idx, total_parts = result
 
-            if block_id not in image_block_parts:
-                image_block_parts[block_id] = {}
-                image_block_total_parts[block_id] = total_parts
+                if block_id not in image_block_parts:
+                    image_block_parts[block_id] = {}
+                    image_block_total_parts[block_id] = total_parts
 
-            image_block_parts[block_id][part_idx] = text
+                image_block_parts[block_id][part_idx] = text
 
-            # Сохраняем в checkpoint
-            checkpoint.mark_image_processed(block_id, text, part_idx, total_parts)
-            await _save_checkpoint()
+                checkpoint.mark_image_processed(block_id, text, part_idx, total_parts)
+                await _save_checkpoint()
 
-            block = blocks_by_id.get(block_id)
-            if block:
-                page_num = block.page_index + 1
-                category = getattr(block, "category_code", None) or "image"
-                block_info = f"Image: {category} (стр. {page_num})"
+                block = blocks_by_id.get(block_id)
+                if block:
+                    page_num = block.page_index + 1
+                    category = getattr(block, "category_code", None) or "image"
+                    block_info = f"Image: {category} (стр. {page_num})"
+                else:
+                    block_info = "Image"
+                await _update_progress(block_info)
             else:
-                block_info = "Image"
-            await _update_progress(block_info)
-        else:
-            await _update_progress("Image")
+                await _update_progress("Image")
 
-        gc.collect()
+            gc.collect()
+            image_queue.task_done()
+
+    image_workers = [asyncio.create_task(_image_worker()) for _ in range(max_workers)]
+    await asyncio.gather(*image_workers)
 
     # Собираем части IMAGE блоков
     for block_id, parts_dict in image_block_parts.items():

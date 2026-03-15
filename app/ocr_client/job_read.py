@@ -62,10 +62,6 @@ class JobReadMixin:
         jobs = [_parse_job(j) for j in data.get("jobs", [])]
         return jobs, data.get("server_time", "")
 
-    def get_jobs_changes(self, since: str) -> tuple[List[JobInfo], str]:
-        """Deprecated: используйте list_jobs(since=...)."""
-        return self.list_jobs(since=since)
-
     def get_job(self, job_id: str) -> JobInfo:
         """Получить информацию о задаче."""
         resp = self._request_with_retry("get", f"/jobs/{job_id}")

@@ -8,7 +8,6 @@ from services.remote_ocr.server.routes.jobs.read_handlers import (
     download_result_handler,
     get_job_details_handler,
     get_job_handler,
-    get_jobs_changes_handler,
     list_jobs_handler,
 )
 from services.remote_ocr.server.routes.jobs.update_handlers import (
@@ -33,7 +32,6 @@ router.post("/{job_id}/reorder")(reorder_job_handler)
 
 # GET endpoints
 router.get("")(list_jobs_handler)
-router.get("/changes")(get_jobs_changes_handler)
 router.get("/{job_id}")(get_job_handler)
 router.get("/{job_id}/details")(get_job_details_handler)
 router.get("/{job_id}/result")(download_result_handler)

@@ -220,7 +220,7 @@ class MainWindow(
         from app.gui.annotation_cache import get_annotation_cache
 
         cache = get_annotation_cache()
-        cache.force_sync_all()
+        cache.force_sync_all(synchronous=True)
 
         self._flush_pending_save()
         self._save_settings()
@@ -297,7 +297,7 @@ class MainWindow(
         """Отправить выделенные блоки на Remote OCR"""
         if self.remote_ocr_panel:
             self.remote_ocr_panel.show()
-            self.remote_ocr_panel._create_job()
+            self.remote_ocr_panel.controller.create_job()
 
     # === Status Bar ===
     def _setup_status_bar(self):

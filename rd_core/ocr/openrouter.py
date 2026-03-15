@@ -17,6 +17,7 @@ from rd_core.ocr._openrouter_common import (
     supports_pdf_input as _supports_pdf,
 )
 from rd_core.ocr.http_utils import create_retry_session
+from rd_core.ocr_result import is_error, make_error
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class OpenRouterBackend:
 
             media = prepare_media(image, pdf_file_path, is_gemini3)
             if media is None:
-                return "[Ошибка: нет изображения или PDF]"
+                return make_error("нет изображения или PDF")
             file_b64, media_type = media
 
             payload = build_payload(
@@ -96,13 +97,13 @@ class OpenRouterBackend:
                 resp_json = None
 
             text = parse_response(response.status_code, resp_json, response.text)
-            if not text.startswith("[Ошибка"):
+            if not is_error(text):
                 logger.debug(f"OpenRouter OCR: распознано {len(text)} символов")
             return text
 
         except requests.exceptions.Timeout:
             logger.error("OpenRouter OCR: превышен таймаут")
-            return "[Ошибка: превышен таймаут запроса]"
+            return make_error("превышен таймаут запроса")
         except Exception as e:
             logger.error(f"Ошибка OpenRouter OCR: {e}", exc_info=True)
-            return f"[Ошибка OpenRouter OCR: {e}]"
+            return make_error(f"OpenRouter OCR: {e}")

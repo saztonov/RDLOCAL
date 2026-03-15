@@ -5,6 +5,7 @@ import re
 from typing import Dict, List, Optional
 
 from .logging_config import get_logger
+from .ocr_constants import make_error
 
 logger = get_logger(__name__)
 
@@ -255,7 +256,7 @@ def parse_batch_response_by_index(
 
     if response_text is None:
         for i in range(num_blocks):
-            results[i] = "[Ошибка: пустой ответ OCR]"
+            results[i] = make_error("пустой ответ OCR")
         return results
 
     if num_blocks == 1:

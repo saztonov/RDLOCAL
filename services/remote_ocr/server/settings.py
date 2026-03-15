@@ -4,6 +4,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -36,6 +37,18 @@ def _load_yaml_config() -> dict:
         raise
 
 
+# Lazy-загрузка: конфигурация загружается при первом обращении, а не при импорте
+_yaml_config: Optional[dict] = None
+
+
+def _get_yaml_config() -> dict:
+    """Получить YAML конфигурацию (lazy loading)."""
+    global _yaml_config
+    if _yaml_config is None:
+        _yaml_config = _load_yaml_config()
+    return _yaml_config
+
+
 def _get(config: dict, key: str, env_key: str, cast_fn=None):
     """Получить настройку: ENV > YAML. Без hardcoded defaults."""
     env_val = os.getenv(env_key)
@@ -58,13 +71,9 @@ def _get(config: dict, key: str, env_key: str, cast_fn=None):
     return value
 
 
-# Загружаем конфигурацию один раз при импорте модуля
-_yaml_config = _load_yaml_config()
-
-
 def _cfg(yaml_key: str, env_key: str, cast_fn=None):
     """Shortcut: field(default_factory=...) для config.yaml + env override."""
-    return field(default_factory=lambda yk=yaml_key, ek=env_key, cf=cast_fn: _get(_yaml_config, yk, ek, cf))
+    return field(default_factory=lambda yk=yaml_key, ek=env_key, cf=cast_fn: _get(_get_yaml_config(), yk, ek, cf))
 
 
 def _env(env_key: str, default: str = ""):
@@ -163,4 +172,26 @@ class Settings:
     qwen_stamp_user_prompt: str = _cfg("qwen_stamp_user_prompt", "QWEN_STAMP_USER_PROMPT")
 
 
-settings = Settings()
+# Lazy singleton: Settings создаётся при первом обращении
+_settings: Optional[Settings] = None
+
+
+def get_settings() -> Settings:
+    """Получить singleton Settings (lazy initialization)."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+
+class _SettingsProxy:
+    """Прозрачный proxy для обратной совместимости с `from .settings import settings`."""
+
+    def __getattr__(self, name: str):
+        return getattr(get_settings(), name)
+
+    def __repr__(self) -> str:
+        return repr(get_settings())
+
+
+settings = _SettingsProxy()

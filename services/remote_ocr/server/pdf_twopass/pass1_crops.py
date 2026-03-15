@@ -13,6 +13,7 @@ from PIL import Image
 
 from ..logging_config import get_logger
 from ..manifest_models import CropManifestEntry, StripManifestEntry, TwoPassManifest
+from ..ocr_constants import make_non_retriable
 from ..memory_utils import force_gc, log_memory, log_memory_delta
 from ..pdf_streaming_core import (
     StreamingPDFProcessor,
@@ -80,7 +81,7 @@ def pass1_prepare_crops(
                 try:
                     crop = processor.crop_block_image(block, padding)
                     if not crop:
-                        block.ocr_text = "[НеПовторяемая ошибка: не удалось вырезать блок — невалидные координаты]"
+                        block.ocr_text = make_non_retriable("не удалось вырезать блок — невалидные координаты")
                         logger.warning(
                             f"PASS1: блок {block.id} пропущен (crop=None), "
                             f"координаты невалидны"
@@ -152,7 +153,7 @@ def pass1_prepare_crops(
                                         break
 
                 except Exception as e:
-                    block.ocr_text = f"[НеПовторяемая ошибка: ошибка crop — {e}]"
+                    block.ocr_text = make_non_retriable(f"ошибка crop — {e}")
                     logger.error(
                         f"PASS1: crop error for block {block.id}",
                         extra={

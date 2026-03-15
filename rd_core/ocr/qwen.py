@@ -24,6 +24,7 @@ from rd_core.ocr._qwen_common import (
 )
 from rd_core.ocr.http_utils import create_retry_session
 from rd_core.ocr.utils import image_to_base64
+from rd_core.ocr_result import is_error, make_error
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ class QwenBackend:
         pdf_file_path: Optional[str] = None,
     ) -> str:
         if image is None:
-            return "[Ошибка: Qwen требует изображение]"
+            return make_error("Qwen требует изображение")
 
         try:
             model_id = self._discover_model()
@@ -192,13 +193,13 @@ class QwenBackend:
                     logger.warning(f"Qwen connection error (attempt {attempt}): {e}")
                     if attempt < self._MAX_APP_RETRIES:
                         continue
-                    return f"[Ошибка Qwen: {last_error} после {self._MAX_APP_RETRIES} попыток]"
+                    return make_error(f"Qwen: {last_error} после {self._MAX_APP_RETRIES} попыток")
                 except requests.exceptions.Timeout:
                     last_error = "Timeout"
                     logger.warning(f"Qwen timeout (attempt {attempt})")
                     if attempt < self._MAX_APP_RETRIES:
                         continue
-                    return "[Ошибка: превышен таймаут запроса к Qwen]"
+                    return make_error("превышен таймаут запроса к Qwen")
 
                 if response.status_code == 200:
                     break
@@ -212,17 +213,17 @@ class QwenBackend:
                     if attempt < self._MAX_APP_RETRIES:
                         logger.warning(f"Qwen transient error {response.status_code} (attempt {attempt}), will retry")
                         continue
-                    return f"[Ошибка Qwen API: {response.status_code} после {self._MAX_APP_RETRIES} попыток]"
+                    return make_error(f"Qwen API: {response.status_code} после {self._MAX_APP_RETRIES} попыток")
 
                 error_detail = response.text[:500] if response.text else "No details"
                 logger.error(f"Qwen API error: {response.status_code} - {error_detail}")
-                return f"[Ошибка Qwen API: {response.status_code}]"
+                return make_error(f"Qwen API: {response.status_code}")
 
             text = parse_response(response.json(), self.mode, "Qwen")
-            if not text.startswith("[Ошибка"):
+            if not is_error(text):
                 logger.debug(f"Qwen OCR ({self.mode}): распознано {len(text)} символов")
             return text
 
         except Exception as e:
             logger.error(f"Ошибка Qwen OCR: {e}", exc_info=True)
-            return f"[Ошибка Qwen OCR: {e}]"
+            return make_error(f"Qwen OCR: {e}")

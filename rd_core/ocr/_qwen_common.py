@@ -5,6 +5,8 @@ import os
 import re
 from typing import Optional, Tuple
 
+from rd_core.ocr_result import make_error, make_non_retriable
+
 from rd_core.ocr._chandra_common import ALLOWED_ATTRIBUTES, ALLOWED_TAGS
 from rd_core.ocr.utils import strip_think_tags, strip_untagged_reasoning
 
@@ -169,7 +171,7 @@ def parse_response(response_json: dict, mode: str, backend_name: str = "Qwen") -
     if "choices" not in response_json or not response_json["choices"]:
         err_msg = response_json.get("error", response_json)
         logger.error(f"Qwen: 'choices' missing: {err_msg}")
-        return f"[Ошибка Qwen: некорректный ответ ({err_msg})]"
+        return make_error(f"Qwen: некорректный ответ ({err_msg})")
 
     message = response_json["choices"][0]["message"]
 
@@ -185,7 +187,7 @@ def parse_response(response_json: dict, mode: str, backend_name: str = "Qwen") -
 
     if not raw_text:
         logger.warning(f"{backend_name} OCR: получен пустой ответ от модели")
-        return "[Ошибка Qwen: пустой ответ модели]"
+        return make_error("Qwen: пустой ответ модели")
 
     text = strip_think_tags(raw_text, backend_name=f"{backend_name}/{mode}")
     text = strip_untagged_reasoning(text, backend_name=f"{backend_name}/{mode}")
@@ -196,7 +198,7 @@ def parse_response(response_json: dict, mode: str, backend_name: str = "Qwen") -
             f"{backend_name} OCR ({mode}): ответ только reasoning "
             f"({len(raw_text)} симв.), HTML не сгенерирован"
         )
-        return "[Ошибка Qwen: ответ содержит только reasoning]"
+        return make_error("Qwen: ответ содержит только reasoning")
     return text
 
 
@@ -204,5 +206,5 @@ def check_non_retriable_error(status_code: int, response_text: str) -> Optional[
     """Проверить детерминированную ошибку."""
     if status_code == 400 and "context size" in response_text.lower():
         logger.error(f"Qwen API error: {status_code} - {response_text[:500]}")
-        return "[НеПовторяемая ошибка: контекст превышен — блок слишком большой для модели]"
+        return make_non_retriable("контекст превышен — блок слишком большой для модели")
     return None

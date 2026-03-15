@@ -17,5 +17,5 @@ def format_datetime_utc3(dt_str: str) -> str:
         dt_local = dt_utc.astimezone(utc3)
 
         return dt_local.strftime("%H:%M %d.%m.%Y")
-    except:
+    except Exception:
         return dt_str

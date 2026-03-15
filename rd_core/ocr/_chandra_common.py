@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Optional, Tuple
 
+from rd_core.ocr_result import make_error, make_non_retriable
+
 logger = logging.getLogger(__name__)
 
 # Промпт из официального репо Chandra (ocr_test.py)
@@ -108,12 +110,12 @@ def parse_response(response_json: dict) -> str:
     if "choices" not in response_json or not response_json["choices"]:
         err_msg = response_json.get("error", response_json)
         logger.error(f"Chandra: 'choices' missing: {err_msg}")
-        return f"[Ошибка Chandra: некорректный ответ ({err_msg})]"
+        return make_error(f"Chandra: некорректный ответ ({err_msg})")
 
     text = response_json["choices"][0]["message"]["content"].strip()
     if not text:
         logger.warning("Chandra OCR: получен пустой ответ от модели")
-        return "[Ошибка Chandra: пустой ответ модели]"
+        return make_error("Chandra: пустой ответ модели")
     return text
 
 
@@ -121,5 +123,5 @@ def check_non_retriable_error(status_code: int, response_text: str) -> Optional[
     """Проверить детерминированную ошибку. Возвращает сообщение или None."""
     if status_code == 400 and "context size" in response_text.lower():
         logger.error(f"Chandra API error: {status_code} - {response_text[:500]}")
-        return "[НеПовторяемая ошибка: контекст превышен — блок слишком большой для модели]"
+        return make_non_retriable("контекст превышен — блок слишком большой для модели")
     return None

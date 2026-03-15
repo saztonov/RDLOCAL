@@ -11,8 +11,7 @@ from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
-from .ocr_constants import ERROR_PREFIX as _ERROR_PREFIX
-from .ocr_constants import NON_RETRIABLE_PREFIX as _NON_RETRIABLE_PREFIX
+from .ocr_constants import is_error, is_non_retriable
 
 # Пауза между retry для бэкендов с ограничением concurrency (Chandra/LM Studio)
 def _get_chandra_retry_delay() -> int:
@@ -144,16 +143,16 @@ def verify_and_retry_missing_blocks(
                 continue
 
             # Неповторяемые ошибки (context exceeded, невалидные координаты) — не ретраим
-            if ocr_text.startswith(_NON_RETRIABLE_PREFIX):
+            if is_non_retriable(ocr_text):
                 continue
 
             # Блок нуждается в retry если: нет HTML ИЛИ ocr_text содержит ошибку API
-            has_error = not ocr_html or ocr_text.startswith(_ERROR_PREFIX)
+            has_error = not ocr_html or is_error(ocr_text)
             if has_error:
                 missing_blocks.append({
                     "block": blk,
                     "page_index": blk.get("page_index", 1) - 1,  # Конвертируем в 0-based
-                    "reason": "api_error" if ocr_text.startswith(_ERROR_PREFIX) else "empty",
+                    "reason": "api_error" if is_error(ocr_text) else "empty",
                 })
 
     if not missing_blocks:
@@ -295,7 +294,7 @@ def verify_and_retry_missing_blocks(
                 ocr_text = ocr_backend.recognize(crop)
                 crop.close()
 
-                if ocr_text and not ocr_text.startswith(_ERROR_PREFIX):
+                if ocr_text and not is_error(ocr_text):
                     # Обновляем блок в result.json
                     from rd_core.ocr.generator_common import sanitize_html
                     blk_data["ocr_html"] = sanitize_html(ocr_text)

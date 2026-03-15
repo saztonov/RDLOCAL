@@ -14,13 +14,15 @@ logger = logging.getLogger(__name__)
 
 # Максимальное число retry для одного node_id перед отказом
 _MAX_RETRY_COUNT = 10
-# После этого числа retry увеличиваем sync_delay
+# После этого числа retry включаем per-node backoff
 _BACKOFF_THRESHOLD = 5
-_BACKOFF_SYNC_DELAY = 30.0
 
 
 class AnnotationCache(QObject):
     """Кеш аннотаций с отложенной синхронизацией в Supabase"""
+
+    _DEFAULT_SYNC_DELAY = 3.0
+    _BACKOFF_SYNC_DELAY = 30.0
 
     # Сигналы
     synced = Signal(str)  # Когда аннотация синхронизирована с Supabase
@@ -33,6 +35,7 @@ class AnnotationCache(QObject):
         self._dirty: Dict[str, float] = {}  # node_id -> last_modified_time
         self._metadata: Dict[str, dict] = {}  # node_id -> {pdf_path}
         self._retry_count: Dict[str, int] = {}  # node_id -> retry count
+        self._per_node_delay: Dict[str, float] = {}  # node_id -> sync delay (per-node backoff)
         self._lock = threading.Lock()  # Защита _dirty и _retry_count
 
         self._sync_timer = QTimer(self)
@@ -41,7 +44,6 @@ class AnnotationCache(QObject):
         self._sync_timer.start(1000)  # Проверка каждую секунду
 
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ann_sync")
-        self._sync_delay = 3.0  # Синхронизация через 3 секунды после последнего изменения
 
     def set(self, node_id: str, document: Document, pdf_path: str = ""):
         """Сохранить аннотацию в кеш"""
@@ -59,6 +61,10 @@ class AnnotationCache(QObject):
         with self._lock:
             self._dirty[node_id] = time.time()
 
+    def _get_sync_delay(self, node_id: str) -> float:
+        """Получить sync delay для конкретного node (per-node backoff)."""
+        return self._per_node_delay.get(node_id, self._DEFAULT_SYNC_DELAY)
+
     def _check_sync(self):
         """Проверить, какие аннотации нужно синхронизировать с Supabase"""
         current_time = time.time()
@@ -66,7 +72,8 @@ class AnnotationCache(QObject):
 
         with self._lock:
             for node_id, modified_time in list(self._dirty.items()):
-                if current_time - modified_time >= self._sync_delay:
+                delay = self._get_sync_delay(node_id)
+                if current_time - modified_time >= delay:
                     to_sync.append(node_id)
 
         for node_id in to_sync:
@@ -98,9 +105,7 @@ class AnnotationCache(QObject):
                 logger.info(f"Annotation synced to Supabase: {node_id}")
                 with self._lock:
                     self._retry_count.pop(node_id, None)
-                # Восстанавливаем sync_delay если был backoff
-                if self._sync_delay > 3.0:
-                    self._sync_delay = 3.0
+                    self._per_node_delay.pop(node_id, None)
                 self.synced.emit(node_id)
                 self._update_has_annotation_flag(node_id)
             else:
@@ -126,7 +131,7 @@ class AnnotationCache(QObject):
                 return
 
             if count >= _BACKOFF_THRESHOLD:
-                self._sync_delay = _BACKOFF_SYNC_DELAY
+                self._per_node_delay[node_id] = self._BACKOFF_SYNC_DELAY
 
             # Ставим обратно в dirty для retry
             self._dirty[node_id] = time.time()
@@ -160,12 +165,63 @@ class AnnotationCache(QObject):
                 return
         self._sync_to_db(node_id)
 
-    def force_sync_all(self):
-        """Синхронизировать все несохраненные изменения"""
+    def force_sync_all(self, synchronous: bool = False):
+        """Синхронизировать все несохраненные изменения.
+
+        Args:
+            synchronous: если True — вызывать save_to_db напрямую (для closeEvent).
+                         если False — через executor (обычный путь).
+        """
         with self._lock:
             nodes = list(self._dirty.keys())
+
+        if not synchronous:
+            for node_id in nodes:
+                self._sync_to_db(node_id)
+            return
+
+        # Синхронный flush — гарантия при закрытии приложения
+        from app.annotation_db import AnnotationDBIO
+
         for node_id in nodes:
-            self._sync_to_db(node_id)
+            if node_id not in self._cache:
+                continue
+            with self._lock:
+                self._dirty.pop(node_id, None)
+            document = self._cache[node_id]
+            try:
+                doc_copy = copy.deepcopy(document)
+                success = AnnotationDBIO.save_to_db(doc_copy, node_id)
+                if success:
+                    logger.info(f"Annotation synced (sync flush): {node_id}")
+                else:
+                    logger.warning(f"Annotation sync failed (sync flush): {node_id}")
+            except Exception as e:
+                logger.error(f"Annotation sync error (sync flush) {node_id}: {e}")
+
+    def flush_for_ocr(self, node_id: str):
+        """Синхронный flush для конкретного node перед отправкой на OCR."""
+        if node_id not in self._cache:
+            return
+        with self._lock:
+            if node_id not in self._dirty:
+                return
+            self._dirty.pop(node_id)
+
+        from app.annotation_db import AnnotationDBIO
+
+        doc_copy = copy.deepcopy(self._cache[node_id])
+        try:
+            success = AnnotationDBIO.save_to_db(doc_copy, node_id)
+            if success:
+                logger.info(f"Annotation flushed for OCR: {node_id}")
+                with self._lock:
+                    self._retry_count.pop(node_id, None)
+                    self._per_node_delay.pop(node_id, None)
+            else:
+                logger.warning(f"Annotation flush for OCR failed: {node_id}")
+        except Exception as e:
+            logger.error(f"Annotation flush for OCR error {node_id}: {e}")
 
     def clear(self, node_id: str):
         """Очистить кеш для узла"""
@@ -173,6 +229,7 @@ class AnnotationCache(QObject):
         with self._lock:
             self._dirty.pop(node_id, None)
             self._retry_count.pop(node_id, None)
+            self._per_node_delay.pop(node_id, None)
         self._metadata.pop(node_id, None)
 
 

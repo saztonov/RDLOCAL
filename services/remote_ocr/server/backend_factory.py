@@ -30,6 +30,19 @@ class JobBackends:
     engine: str
     needs_lmstudio: bool
 
+    def unload_all(self) -> None:
+        """Выгрузить все LM Studio модели (дедупликация по identity)."""
+        seen: set[int] = set()
+        for backend in (self.strip, self.image, self.stamp):
+            if backend is not None and hasattr(backend, "unload_model"):
+                backend_id = id(backend)
+                if backend_id not in seen:
+                    seen.add(backend_id)
+                    try:
+                        backend.unload_model()
+                    except Exception as e:
+                        logger.warning(f"Ошибка выгрузки модели {type(backend).__name__}: {e}")
+
 
 def create_job_backends(job) -> JobBackends:
     """
@@ -114,6 +127,7 @@ def create_job_backends(job) -> JobBackends:
             base_url=settings.qwen_base_url,
             mode="stamp",
         )
+        needs_lmstudio = True
     elif settings.openrouter_api_key:
         stmp_model = (
             stamp_model

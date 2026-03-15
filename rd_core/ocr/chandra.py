@@ -20,6 +20,7 @@ from rd_core.ocr._chandra_common import (
 )
 from rd_core.ocr.http_utils import create_retry_session
 from rd_core.ocr.utils import image_to_base64
+from rd_core.ocr_result import is_error, make_error
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ class ChandraBackend:
         pdf_file_path: Optional[str] = None,
     ) -> str:
         if image is None:
-            return "[Ошибка: Chandra требует изображение]"
+            return make_error("Chandra требует изображение")
 
         try:
             model_id = self._discover_model()
@@ -179,13 +180,13 @@ class ChandraBackend:
                     logger.warning(f"Chandra connection error (attempt {attempt}): {e}")
                     if attempt < self._MAX_APP_RETRIES:
                         continue
-                    return f"[Ошибка Chandra: {last_error} после {self._MAX_APP_RETRIES} попыток]"
+                    return make_error(f"Chandra: {last_error} после {self._MAX_APP_RETRIES} попыток")
                 except requests.exceptions.Timeout:
                     last_error = "Timeout"
                     logger.warning(f"Chandra timeout (attempt {attempt})")
                     if attempt < self._MAX_APP_RETRIES:
                         continue
-                    return "[Ошибка: превышен таймаут запроса к Chandra]"
+                    return make_error("превышен таймаут запроса к Chandra")
 
                 if response.status_code == 200:
                     break
@@ -199,17 +200,17 @@ class ChandraBackend:
                     if attempt < self._MAX_APP_RETRIES:
                         logger.warning(f"Chandra transient error {response.status_code} (attempt {attempt}), will retry")
                         continue
-                    return f"[Ошибка Chandra API: {response.status_code} после {self._MAX_APP_RETRIES} попыток]"
+                    return make_error(f"Chandra API: {response.status_code} после {self._MAX_APP_RETRIES} попыток")
 
                 error_detail = response.text[:500] if response.text else "No details"
                 logger.error(f"Chandra API error: {response.status_code} - {error_detail}")
-                return f"[Ошибка Chandra API: {response.status_code}]"
+                return make_error(f"Chandra API: {response.status_code}")
 
             text = parse_response(response.json())
-            if not text.startswith("[Ошибка"):
+            if not is_error(text):
                 logger.debug(f"Chandra OCR: распознано {len(text)} символов")
             return text
 
         except Exception as e:
             logger.error(f"Ошибка Chandra OCR: {e}", exc_info=True)
-            return f"[Ошибка Chandra OCR: {e}]"
+            return make_error(f"Chandra OCR: {e}")

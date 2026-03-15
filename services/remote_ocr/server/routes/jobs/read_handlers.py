@@ -68,24 +68,6 @@ def list_jobs_handler(
     }
 
 
-def get_jobs_changes_handler(
-    since: str = Query(..., description="ISO timestamp для фильтрации изменений"),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
-) -> dict:
-    """Получить задачи, изменённые после указанного времени."""
-    check_api_key(x_api_key)
-    _logger.debug(
-        f"Polling changes since={since}",
-        extra={"event": "jobs_poll", "action": "poll"},
-    )
-
-    jobs = list_jobs_changed_since(since)
-    return {
-        "jobs": [_job_to_list_item(j) for j in jobs],
-        "server_time": datetime.utcnow().isoformat(),
-    }
-
-
 def get_job_handler(
     job_id: str,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
