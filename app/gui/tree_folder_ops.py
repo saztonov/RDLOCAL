@@ -200,3 +200,64 @@ class TreeFolderOperationsMixin:
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось заменить документ:\n{e}"
             )
+
+    def _auto_markup_entire_file(self, node: TreeNode):
+        """Создать текстовый блок на всю страницу для каждой страницы документа"""
+        from PySide6.QtCore import QTimer
+
+        from rd_core.models import Block, BlockSource, BlockType
+
+        # Документ должен быть открыт
+        if not self._current_node_id or self._current_node_id != node.id:
+            QMessageBox.warning(
+                self, "Ошибка", "Сначала откройте документ (кликните по нему в дереве)"
+            )
+            return
+
+        if not self.pdf_document or not self.annotation_document:
+            QMessageBox.warning(self, "Ошибка", "PDF документ не загружен")
+            return
+
+        # Проверка блокировки
+        if self._check_document_locked(node):
+            return
+
+        # Предупреждение если уже есть блоки
+        existing_blocks = sum(len(p.blocks) for p in self.annotation_document.pages)
+        if existing_blocks > 0:
+            reply = QMessageBox.question(
+                self,
+                "Авторазметка файла",
+                f"В документе уже есть {existing_blocks} блок(ов).\n"
+                "Добавить полностраничные блоки на все страницы?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        self._save_undo_state()
+
+        page_count = self.pdf_document.page_count
+        for page_idx in range(page_count):
+            page = self._get_or_create_page(page_idx)
+            if not page:
+                continue
+
+            block = Block.create(
+                page_index=page_idx,
+                coords_px=(0, 0, page.width, page.height),
+                page_width=page.width,
+                page_height=page.height,
+                block_type=BlockType.TEXT,
+                source=BlockSource.USER,
+            )
+            page.blocks.append(block)
+
+        # Обновить UI для текущей страницы
+        current_page = self.annotation_document.pages[self.current_page]
+        self.page_viewer.set_blocks(current_page.blocks)
+        QTimer.singleShot(0, self.blocks_tree_manager.update_blocks_tree)
+        self._auto_save_annotation()
+
+        logger.info(f"Auto-markup: created {page_count} full-page blocks for '{node.name}'")

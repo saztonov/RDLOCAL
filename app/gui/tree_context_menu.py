@@ -95,6 +95,11 @@ class TreeContextMenuMixin:
                         action = menu.addAction("🔍 Верификация блоков")
                         action.setData(("verify_blocks", node))
 
+                    # Авторазметка файла
+                    if r2_key and r2_key.lower().endswith(".pdf"):
+                        action = menu.addAction("📝 Авторазметка файла")
+                        action.setData(("auto_markup_file", node))
+
                 if node.is_document and node.attributes.get("r2_key"):
                     action = menu.addAction("☁️ Показать на R2")
                     action.setData(("show_on_r2", node))
@@ -190,3 +195,6 @@ class TreeContextMenuMixin:
         elif action == "split_document":
             node = data[1]
             self._split_document(node)
+        elif action == "auto_markup_file":
+            node = data[1]
+            self._auto_markup_entire_file(node)
