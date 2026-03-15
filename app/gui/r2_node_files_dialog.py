@@ -6,21 +6,19 @@ import posixpath
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
 
 from rd_core.r2_storage import R2Storage
@@ -104,17 +102,18 @@ class R2NodeFilesDialog(QDialog):
         layout.addWidget(info)
         self._prefix = prefix
 
-        # Таблица
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Имя файла", "Размер", "Дата создания", "R2 ключ"])
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 300)
-        self.table.setColumnWidth(1, 100)
-        self.table.setColumnWidth(2, 170)
-        layout.addWidget(self.table)
+        # Дерево файлов
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Имя файла", "Размер", "Дата создания", "R2 ключ"])
+        self.tree.setSelectionBehavior(QTreeWidget.SelectRows)
+        self.tree.setEditTriggers(QTreeWidget.NoEditTriggers)
+        self.tree.header().setStretchLastSection(True)
+        self.tree.setColumnWidth(0, 300)
+        self.tree.setColumnWidth(1, 100)
+        self.tree.setColumnWidth(2, 170)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
+        layout.addWidget(self.tree)
 
         # Прогресс-бар (скрыт по умолчанию)
         self.progress_bar = QProgressBar()
@@ -148,11 +147,11 @@ class R2NodeFilesDialog(QDialog):
 
     def _load_files(self):
         self.refresh_btn.setEnabled(False)
-        self.refresh_btn.setText("⏳ Загрузка...")
+        self.refresh_btn.setText("Загрузка...")
         try:
             r2 = R2Storage()
             self._objects = r2.list_objects_with_metadata(self._prefix, use_cache=False)
-            self._populate_table()
+            self._populate_tree()
         except Exception as e:
             logger.error(f"R2 list error: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось получить список файлов:\n{e}")
@@ -160,73 +159,95 @@ class R2NodeFilesDialog(QDialog):
             self.refresh_btn.setEnabled(True)
             self.refresh_btn.setText("Обновить")
 
-    def _populate_table(self):
-        self.table.setRowCount(len(self._objects))
-        for row, obj in enumerate(self._objects):
+    def _populate_tree(self):
+        self.tree.clear()
+
+        crops: list[tuple[str, dict]] = []
+        regular: list[tuple[str, dict]] = []
+
+        for obj in self._objects:
             key: str = obj["Key"]
+            rel = key[len(self._prefix):].lstrip("/") if key.startswith(self._prefix) else posixpath.basename(key)
+            if rel.startswith("crops/"):
+                crops.append((rel, obj))
+            else:
+                regular.append((rel, obj))
 
-            # Чекбокс
-            cb = QCheckBox()
-            cb_widget = QWidget()
-            cb_layout = QHBoxLayout(cb_widget)
-            cb_layout.addWidget(cb)
-            cb_layout.setAlignment(Qt.AlignCenter)
-            cb_layout.setContentsMargins(0, 0, 0, 0)
+        # Обычные файлы
+        for rel_name, obj in regular:
+            item = self._make_item(rel_name, obj)
+            self.tree.addTopLevelItem(item)
 
-            # Имя = относительный путь от префикса
-            rel_name = key[len(self._prefix):].lstrip("/") if key.startswith(self._prefix) else posixpath.basename(key)
-            name_item = QTableWidgetItem(rel_name)
-            name_item.setToolTip(key)
-            name_item.setData(Qt.UserRole, key)
-
-            # Размер
-            size_item = QTableWidgetItem(self._format_size(obj.get("Size", 0)))
-            size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-            # Дата
-            last_modified = obj.get("LastModified")
-            date_str = self._format_datetime(last_modified) if last_modified else ""
-            date_item = QTableWidgetItem(date_str)
-
-            # R2 ключ
-            key_item = QTableWidgetItem(key)
-            key_item.setToolTip(key)
-
-            self.table.setCellWidget(row, 0, cb_widget)
-            self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, size_item)
-            self.table.setItem(row, 2, date_item)
-            self.table.setItem(row, 3, key_item)
+        # Папка crops
+        if crops:
+            folder = QTreeWidgetItem([f"crops/ ({len(crops)})", "", "", ""])
+            folder.setFlags(folder.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            folder.setCheckState(0, Qt.Unchecked)
+            self.tree.addTopLevelItem(folder)
+            for rel_name, obj in crops:
+                child_name = rel_name[len("crops/"):]
+                child = self._make_item(child_name, obj)
+                folder.addChild(child)
 
         self.setWindowTitle(f"Файлы на R2: {self.node.name} ({len(self._objects)})")
 
+    def _make_item(self, display_name: str, obj: dict) -> QTreeWidgetItem:
+        key = obj["Key"]
+        size_str = self._format_size(obj.get("Size", 0))
+        date_str = self._format_datetime(obj.get("LastModified")) if obj.get("LastModified") else ""
+
+        item = QTreeWidgetItem([display_name, size_str, date_str, key])
+        item.setCheckState(0, Qt.Unchecked)
+        item.setToolTip(0, key)
+        item.setData(0, Qt.UserRole, key)
+        item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+        return item
+
     # ── Выбор ───────────────────────────────────────────
 
-    def _get_checkboxes(self) -> list[tuple[int, QCheckBox]]:
-        result = []
-        for row in range(self.table.rowCount()):
-            widget = self.table.cellWidget(row, 0)
-            if widget:
-                cb = widget.findChild(QCheckBox)
-                if cb:
-                    result.append((row, cb))
-        return result
+    def _get_all_file_items(self) -> list[QTreeWidgetItem]:
+        """Все листовые items (файлы, не папки)."""
+        items = []
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            if top.childCount() > 0:
+                for j in range(top.childCount()):
+                    items.append(top.child(j))
+            else:
+                items.append(top)
+        return items
 
     def _toggle_select_all(self):
-        cbs = self._get_checkboxes()
-        all_checked = all(cb.isChecked() for _, cb in cbs) if cbs else False
-        for _, cb in cbs:
-            cb.setChecked(not all_checked)
+        items = self._get_all_file_items()
+        all_checked = all(it.checkState(0) == Qt.Checked for it in items) if items else False
+        state = Qt.Unchecked if all_checked else Qt.Checked
+        for it in items:
+            it.setCheckState(0, state)
         self.select_all_btn.setText("Снять все" if not all_checked else "Выбрать все")
 
     def _get_selected_keys(self) -> list[str]:
-        keys = []
-        for row, cb in self._get_checkboxes():
-            if cb.isChecked():
-                item = self.table.item(row, 0)
-                if item:
-                    keys.append(item.data(Qt.UserRole))
-        return keys
+        return [
+            it.data(0, Qt.UserRole)
+            for it in self._get_all_file_items()
+            if it.checkState(0) == Qt.Checked and it.data(0, Qt.UserRole)
+        ]
+
+    # ── Двойной клик → браузер ───────────────────────────
+
+    def _on_double_click(self, item: QTreeWidgetItem, column: int):
+        """Двойной клик → открыть файл в браузере через presigned URL."""
+        r2_key = item.data(0, Qt.UserRole)
+        if not r2_key:
+            return
+        try:
+            url = R2Storage().generate_presigned_url(r2_key)
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+            else:
+                QMessageBox.warning(self, "Ошибка", "Не удалось сгенерировать ссылку.")
+        except Exception as e:
+            logger.error(f"Presigned URL error: {e}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть файл:\n{e}")
 
     # ── Скачивание ──────────────────────────────────────
 
