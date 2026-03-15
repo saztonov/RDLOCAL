@@ -260,6 +260,12 @@ class TableManagerMixin:
         self.jobs_table.setSortingEnabled(True)
         self._renumber_rows()
 
+        item = self.jobs_table.item(row, 0)
+        if item:
+            self.jobs_table.scrollToItem(
+                item, QAbstractItemView.ScrollHint.PositionAtTop
+            )
+
         display_name = job.task_name if job.task_name else job.document_name
         logger.info(
             f"Задача добавлена в таблицу: row={row}, name={display_name}, "
