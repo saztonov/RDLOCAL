@@ -95,6 +95,10 @@ class TreeContextMenuMixin:
                         action = menu.addAction("🔍 Верификация блоков")
                         action.setData(("verify_blocks", node))
 
+                if node.is_document and node.attributes.get("r2_key"):
+                    action = menu.addAction("☁️ Показать на R2")
+                    action.setData(("show_on_r2", node))
+
                 action = menu.addAction("🗄️ Показать в Supabase")
                 action.setData(("view_in_supabase", node))
 
@@ -171,6 +175,9 @@ class TreeContextMenuMixin:
         elif action == "verify_blocks":
             node = data[1]
             self._verify_blocks(node)
+        elif action == "show_on_r2":
+            node = data[1]
+            self._show_on_r2(node)
         elif action == "view_in_supabase":
             node = data[1]
             self._view_in_supabase(node)
