@@ -190,6 +190,15 @@ def sanitize_html(html: str) -> str:
     # 1. Удаляем мусорные img теги от datalab
     text = DATALAB_IMG_PATTERN.sub("", text)
 
+    # 1.5. Нейтрализация BLOCK-маркеров в OCR-контенте.
+    # Маркеры BLOCK: XXXX-XXXX-XXX — артефакт визуального разделителя полос,
+    # воспроизведённый OCR-движком (например, Datalab помещает текст баннера
+    # в page-header div). Не должны присутствовать в содержимом блока.
+    text = re.sub(
+        r'BLOCK:\s*[A-Z0-9]{2,5}[-\s]*[A-Z0-9]{2,5}[-\s]*[A-Z0-9]{2,5}',
+        '', text, flags=re.IGNORECASE
+    )
+
     # 2. Удаляем вложенные DOCTYPE/html/head/body артефакты (бывает внутри блоков)
     text = re.sub(r'<!DOCTYPE\s+html[^>]*>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'<html[^>]*>', '', text, flags=re.IGNORECASE)
@@ -248,6 +257,21 @@ def sanitize_html(html: str) -> str:
 
     # 8. Нормализуем множественные пустые строки
     text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # 9. Балансировка div тегов.
+    # Safety-net: если OCR или парсинг фрагментов нарушил баланс div,
+    # добавляем недостающие закрывающие теги или удаляем лишние.
+    open_divs = len(re.findall(r'<div\b', text, re.IGNORECASE))
+    close_divs = text.count('</div>')
+    if open_divs > close_divs:
+        text += '</div>' * (open_divs - close_divs)
+    elif close_divs > open_divs:
+        # Удаляем лишние </div> с конца (остатки обёрточных тегов)
+        excess = close_divs - open_divs
+        for _ in range(excess):
+            idx = text.rfind('</div>')
+            if idx >= 0:
+                text = text[:idx] + text[idx + 6:]
 
     return text.strip()
 

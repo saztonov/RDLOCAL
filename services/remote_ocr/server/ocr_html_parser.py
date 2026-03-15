@@ -174,6 +174,22 @@ def build_segments_from_html(
     # Сортируем маркеры по позиции
     markers.sort(key=lambda x: x["start"])
 
+    # Дедупликация: оставляем первый маркер для каждого block_id.
+    # OCR может воспроизвести BLOCK-маркер из визуального разделителя
+    # внутри содержимого блока (например, в page-header div от Datalab),
+    # что создаёт дубликат маркера и ломает баланс div-тегов.
+    seen_ids: set[str] = set()
+    unique_markers = []
+    for marker in markers:
+        if marker["block_id"] not in seen_ids:
+            seen_ids.add(marker["block_id"])
+            unique_markers.append(marker)
+        else:
+            logger.debug(
+                f"Дубль маркера для {marker['block_id']} на позиции {marker['start']}, пропущен"
+            )
+    markers = unique_markers
+
     # Извлекаем контент между маркерами
     for i, marker in enumerate(markers):
         block_id = marker["block_id"]
