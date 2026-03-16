@@ -103,7 +103,7 @@ class FileDownloadMixin:
         # Показываем модальное окно загрузки
         self._download_dialog = QProgressDialog(
             f"Загрузка документа и связанных файлов...",
-            None,  # Без кнопки отмены
+            "Отмена",
             0,
             len(tasks),
             self,
@@ -112,6 +112,7 @@ class FileDownloadMixin:
         self._download_dialog.setWindowModality(Qt.WindowModal)
         self._download_dialog.setMinimumDuration(0)
         self._download_dialog.setValue(0)
+        self._download_dialog.canceled.connect(self._on_download_canceled)
         self._download_dialog.show()
 
         # Асинхронное скачивание
@@ -168,8 +169,11 @@ class FileDownloadMixin:
 
         # Проверяем есть ли дополнительные файлы в node_files
         try:
+            from rd_core.r2_storage import R2Storage
+
             client = TreeClient()
             node_files = client.get_node_files(node_id)
+            r2 = R2Storage()
 
             for nf in node_files:
                 # Пропускаем PDF и кропы
@@ -182,6 +186,14 @@ class FileDownloadMixin:
                 if nf.file_type not in download_file_types:
                     continue
 
+                # Проверяем существование файла в R2 (быстрый HEAD запрос)
+                try:
+                    if not r2.exists(nf.r2_key):
+                        logger.warning(f"File not found in R2, skipping: {nf.r2_key}")
+                        continue
+                except Exception as e:
+                    logger.warning(f"R2 exists check failed for {nf.r2_key}: {e}")
+
                 # Формируем локальный путь для файла
                 if nf.r2_key.startswith("tree_docs/"):
                     rel = nf.r2_key[len("tree_docs/") :]
@@ -191,17 +203,13 @@ class FileDownloadMixin:
                 file_local_path = Path(projects_dir) / "cache" / rel
                 file_local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # OCR result-файлы всегда перескачиваем (могут быть обновлены после повторного OCR)
-                # PDF пропускаем если уже есть (он не меняется)
-                if file_local_path.exists() and nf.file_type not in download_file_types:
-                    continue
-
                 tasks.append(
                     TransferTask(
                         transfer_type=TransferType.DOWNLOAD,
                         local_path=str(file_local_path),
                         r2_key=nf.r2_key,
                         node_id=node_id,
+                        timeout=15,  # OCR файлы маленькие — 15с достаточно
                     )
                 )
                 logger.debug(f"Added download task: {nf.file_type.value} -> {file_local_path}")
@@ -210,6 +218,12 @@ class FileDownloadMixin:
             logger.warning(f"Failed to get additional files for download: {e}")
 
         return tasks
+
+    def _on_download_canceled(self):
+        """Отмена загрузки пользователем"""
+        logger.info("Download canceled by user")
+        if hasattr(self, "_download_worker") and self._download_worker:
+            self._download_worker.stop()
 
     def _on_download_progress(self, message: str, current: int, total: int):
         """Обновление прогресса загрузки"""
@@ -229,6 +243,13 @@ class FileDownloadMixin:
 
     def _on_all_downloads_finished(self):
         """Все загрузки завершены - открываем PDF"""
+        # Проверяем отмену до закрытия диалога
+        was_canceled = (
+            hasattr(self, "_download_worker")
+            and self._download_worker
+            and not self._download_worker._running
+        )
+
         # Закрываем диалог прогресса
         if hasattr(self, "_download_dialog") and self._download_dialog:
             self._download_dialog.close()
@@ -239,6 +260,12 @@ class FileDownloadMixin:
         # Убираем из активных загрузок
         if self._active_downloads and hasattr(self, "_pending_download_r2_key"):
             self._active_downloads.discard(self._pending_download_r2_key)
+
+        # При отмене — не открываем PDF
+        if was_canceled:
+            logger.info("Download was canceled, not opening PDF")
+            self._download_worker = None
+            return
 
         # Проверяем ошибки
         if hasattr(self, "_download_errors") and self._download_errors:

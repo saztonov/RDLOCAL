@@ -145,6 +145,16 @@ async def pass2_ocr_from_manifest_async(
         if checkpoint_path and checkpoint_counter % CHECKPOINT_SAVE_INTERVAL == 0:
             await asyncio.to_thread(checkpoint.save, checkpoint_path)
 
+    def _is_paused() -> bool:
+        """Безопасная проверка паузы — ошибки не ломают задачу."""
+        if not check_paused:
+            return False
+        try:
+            return check_paused()
+        except Exception as exc:
+            logger.warning(f"PASS2 ASYNC: ошибка в check_paused: {exc}")
+            return False
+
     # Semaphore для ограничения параллельных задач
     max_workers = max_concurrent or settings.ocr_threads_per_job
     concurrency_semaphore = asyncio.Semaphore(max_workers)
@@ -159,9 +169,12 @@ async def pass2_ocr_from_manifest_async(
                 last_block_info["info"] = block_info
             if on_progress and total_requests > 0:
                 # on_progress может быть sync, запускаем в thread pool
-                await asyncio.to_thread(
-                    on_progress, processed, total_requests, last_block_info["info"]
-                )
+                try:
+                    await asyncio.to_thread(
+                        on_progress, processed, total_requests, last_block_info["info"]
+                    )
+                except Exception as exc:
+                    logger.warning(f"PASS2 ASYNC: ошибка в on_progress callback: {exc}")
 
     # --- Обработка strips ---
     # Retry для всех бэкендов: LM Studio (ngrok instability) и cloud (transient 429/5xx)
@@ -177,7 +190,7 @@ async def pass2_ocr_from_manifest_async(
     async def _process_strip_async(
         strip: StripManifestEntry, strip_idx: int
     ) -> Optional[Tuple[StripManifestEntry, Dict[int, str], int]]:
-        if check_paused and check_paused():
+        if _is_paused():
             return None
 
         # Пропускаем уже обработанные strips (checkpoint)
@@ -313,7 +326,7 @@ async def pass2_ocr_from_manifest_async(
     async def _process_image_async(
         entry: CropManifestEntry,
     ) -> Optional[Tuple[str, str, int, int]]:
-        if check_paused and check_paused():
+        if _is_paused():
             return None
 
         # Пропускаем уже обработанные image блоки (checkpoint)
@@ -466,7 +479,7 @@ async def pass2_ocr_from_manifest_async(
 
     async def _strip_worker():
         while not strip_queue.empty():
-            if check_paused and check_paused():
+            if _is_paused():
                 return
             try:
                 strip, idx = strip_queue.get_nowait()
@@ -549,7 +562,7 @@ async def pass2_ocr_from_manifest_async(
 
     async def _image_worker():
         while not image_queue.empty():
-            if check_paused and check_paused():
+            if _is_paused():
                 return
             try:
                 entry = image_queue.get_nowait()

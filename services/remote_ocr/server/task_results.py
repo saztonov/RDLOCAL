@@ -423,18 +423,29 @@ def _generate_correction_results(
         with open(annotation_path, "r", encoding="utf-8") as f:
             old_annotation = json.load(f)
 
-        # Обновляем блоки в аннотации
-        for page in old_annotation.get("pages", []):
-            for blk in page.get("blocks", []):
-                block_id = blk.get("id")
-                if block_id in new_ocr_map:
-                    blk["ocr_text"] = new_ocr_map[block_id]
-                if block_id in correction_block_ids:
-                    blk["is_correction"] = False
+        # Миграция v0 формата (плоский list блоков) → структурированный dict
+        if isinstance(old_annotation, list):
+            from rd_core.annotation_io import is_flat_format, migrate_flat_to_structured
+            if is_flat_format(old_annotation):
+                logger.info(f"[{job.id}] Migrating v0 annotation to structured format")
+                old_annotation = migrate_flat_to_structured(old_annotation, pdf_path=str(pdf_path))
+            else:
+                logger.warning(f"[{job.id}] Unexpected annotation format (list), skipping update")
+                old_annotation = None
 
-        with open(annotation_path, "w", encoding="utf-8") as f:
-            json.dump(old_annotation, f, ensure_ascii=False, indent=2)
-        logger.info(f"[{job.id}] Updated annotation.json")
+        # Обновляем блоки в аннотации
+        if old_annotation:
+            for page in old_annotation.get("pages", []):
+                for blk in page.get("blocks", []):
+                    block_id = blk.get("id")
+                    if block_id in new_ocr_map:
+                        blk["ocr_text"] = new_ocr_map[block_id]
+                    if block_id in correction_block_ids:
+                        blk["is_correction"] = False
+
+            with open(annotation_path, "w", encoding="utf-8") as f:
+                json.dump(old_annotation, f, ensure_ascii=False, indent=2)
+            logger.info(f"[{job.id}] Updated annotation.json")
     else:
         logger.warning(f"[{job.id}] Could not download annotation.json from {old_ann_r2_key}")
 

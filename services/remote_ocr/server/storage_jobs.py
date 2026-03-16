@@ -353,7 +353,11 @@ def is_job_paused(job_id: str) -> bool:
         return cached
 
     # Cache miss - query DB
-    job = get_job(job_id)
+    try:
+        job = get_job(job_id)
+    except Exception as exc:
+        logger.warning(f"is_job_paused: ошибка запроса к БД для {job_id}: {exc}")
+        return False
     is_paused = job.status in ("paused", "cancelled") if job else False
 
     # Update cache

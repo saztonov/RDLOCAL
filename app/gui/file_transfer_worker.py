@@ -30,6 +30,7 @@ class TransferTask:
     file_size: int = 0
     filename: str = ""
     parent_node_id: str = ""  # Для upload - ID родительской папки
+    timeout: int = 60  # Таймаут скачивания в секундах
 
 
 class FileTransferWorker(QThread):
@@ -66,8 +67,23 @@ class FileTransferWorker(QThread):
                 error = "" if success else "Ошибка загрузки в R2"
             else:  # DOWNLOAD
                 display_name = Path(task.r2_key).name
-                success = r2.download_file(task.r2_key, task.local_path)
-                error = "" if success else "Ошибка скачивания из R2"
+                if task.timeout < 60:
+                    # Короткий таймаут для вспомогательных файлов (OCR результаты)
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+                    from concurrent.futures import TimeoutError as _TE
+
+                    with _TPE(max_workers=1) as mini:
+                        fut = mini.submit(r2.download_file, task.r2_key, task.local_path)
+                        try:
+                            success = fut.result(timeout=task.timeout)
+                            error = "" if success else "Ошибка скачивания из R2"
+                        except _TE:
+                            success = False
+                            error = f"Таймаут скачивания ({task.timeout}с)"
+                            logger.warning(f"Download timeout ({task.timeout}s): {task.r2_key}")
+                else:
+                    success = r2.download_file(task.r2_key, task.local_path)
+                    error = "" if success else "Ошибка скачивания из R2"
 
             # Обновляем счётчик завершённых задач
             with self._lock:

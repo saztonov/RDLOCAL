@@ -1,6 +1,7 @@
 """Обработчики чтения задач OCR"""
 import json
 import os
+import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
@@ -74,6 +75,11 @@ def get_job_handler(
 ) -> dict:
     """Получить информацию о задаче"""
     check_api_key(x_api_key)
+
+    try:
+        _uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid job_id: {job_id}")
 
     job = require_job(job_id)
 

@@ -107,8 +107,11 @@ def run_two_pass_ocr(
                 status_msg = f"🔍 PASS 2: {block_info} ({current}/{total})"
             else:
                 status_msg = f"🔍 PASS 2: Распознавание ({current}/{total})"
-            if not is_job_paused(job.id):
-                updater.update("processing", progress=progress, status_message=status_msg)
+            try:
+                if not is_job_paused(job.id):
+                    updater.update("processing", progress=progress, status_message=status_msg)
+            except Exception as exc:
+                logger.warning(f"on_pass2_progress: ошибка обновления прогресса: {exc}")
 
         # Создаём или обновляем checkpoint
         if USE_CHECKPOINT and checkpoint is None:
