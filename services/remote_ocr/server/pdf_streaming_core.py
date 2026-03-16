@@ -207,6 +207,35 @@ class StreamingPDFProcessor:
             rect = page.rect
             rotation = page.rotation
 
+            # Используем cropbox — именно его рендерит get_pixmap(),
+            # и именно относительно него вычислены coords_norm.
+            # page.rect может отличаться от cropbox при ротации,
+            # а mediabox может отличаться при наличии CropBox в PDF (CAD-чертежи).
+            cropbox = page.cropbox
+
+            # Диагностика расхождений MediaBox/CropBox/rect
+            mediabox = page.mediabox
+            if (
+                abs(cropbox.x0 - mediabox.x0) > 0.5
+                or abs(cropbox.y0 - mediabox.y0) > 0.5
+                or abs(cropbox.width - mediabox.width) > 0.5
+                or abs(cropbox.height - mediabox.height) > 0.5
+                or abs(cropbox.x0 - rect.x0) > 0.5
+                or abs(cropbox.y0 - rect.y0) > 0.5
+            ):
+                logger.info(
+                    "PDF crop box mismatch block=%s page=%d: "
+                    "rect=(%.1f,%.1f,%.1f,%.1f) "
+                    "cropbox=(%.1f,%.1f,%.1f,%.1f) "
+                    "mediabox=(%.1f,%.1f,%.1f,%.1f) rotation=%d",
+                    block.id,
+                    block.page_index,
+                    rect.x0, rect.y0, rect.x1, rect.y1,
+                    cropbox.x0, cropbox.y0, cropbox.x1, cropbox.y1,
+                    mediabox.x0, mediabox.y0, mediabox.x1, mediabox.y1,
+                    rotation,
+                )
+
             normalized_coords = normalize_coords_norm(block.coords_norm)
             if normalized_coords is None:
                 logger.warning(
@@ -218,10 +247,10 @@ class StreamingPDFProcessor:
                 return None
 
             nx1, ny1, nx2, ny2 = normalized_coords
-            x1_pt = max(rect.x0, rect.x0 + nx1 * rect.width - padding_pt)
-            y1_pt = max(rect.y0, rect.y0 + ny1 * rect.height - padding_pt)
-            x2_pt = min(rect.x1, rect.x0 + nx2 * rect.width + padding_pt)
-            y2_pt = min(rect.y1, rect.y0 + ny2 * rect.height + padding_pt)
+            x1_pt = max(cropbox.x0, cropbox.x0 + nx1 * cropbox.width - padding_pt)
+            y1_pt = max(cropbox.y0, cropbox.y0 + ny1 * cropbox.height - padding_pt)
+            x2_pt = min(cropbox.x1, cropbox.x0 + nx2 * cropbox.width + padding_pt)
+            y2_pt = min(cropbox.y1, cropbox.y0 + ny2 * cropbox.height + padding_pt)
 
             if x2_pt <= x1_pt or y2_pt <= y1_pt:
                 logger.warning(
@@ -264,6 +293,14 @@ class StreamingPDFProcessor:
 
             if crop_width <= 0 or crop_height <= 0:
                 return None
+
+            logger.debug(
+                "PDF crop block=%s: coords_norm=(%.4f,%.4f,%.4f,%.4f) "
+                "clip=(%.1f,%.1f,%.1f,%.1f) size=%.1fx%.1f",
+                block.id, nx1, ny1, nx2, ny2,
+                clip_rect.x0, clip_rect.y0, clip_rect.x1, clip_rect.y1,
+                crop_width, crop_height,
+            )
 
             new_doc = fitz.open()
             new_page = new_doc.new_page(width=crop_width, height=crop_height)
