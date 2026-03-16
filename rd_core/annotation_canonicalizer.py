@@ -155,7 +155,7 @@ def sync_block_to_page(
     return (
         tuple(block.coords_px) != old_coords_px
         or tuple(block.coords_norm) != old_coords_norm
-        or list(block.polygon_points) != old_polygon
+        or (list(block.polygon_points) if block.polygon_points else None) != old_polygon
     )
 
 
