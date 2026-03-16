@@ -191,8 +191,9 @@ class FileDownloadMixin:
                 file_local_path = Path(projects_dir) / "cache" / rel
                 file_local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Не скачиваем если уже есть
-                if file_local_path.exists():
+                # OCR result-файлы всегда перескачиваем (могут быть обновлены после повторного OCR)
+                # PDF пропускаем если уже есть (он не меняется)
+                if file_local_path.exists() and nf.file_type not in download_file_types:
                     continue
 
                 tasks.append(
@@ -238,11 +239,6 @@ class FileDownloadMixin:
         # Убираем из активных загрузок
         if self._active_downloads and hasattr(self, "_pending_download_r2_key"):
             self._active_downloads.discard(self._pending_download_r2_key)
-
-        # Помечаем done-джобы для этого узла как скачанные (координация с auto-download)
-        node_id = getattr(self, "_pending_download_node_id", None)
-        if node_id and hasattr(self, "remote_ocr_panel") and self.remote_ocr_panel:
-            self.remote_ocr_panel.controller.mark_node_downloads_complete(node_id)
 
         # Проверяем ошибки
         if hasattr(self, "_download_errors") and self._download_errors:

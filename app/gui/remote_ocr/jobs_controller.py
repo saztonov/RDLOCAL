@@ -886,6 +886,17 @@ class JobsController(QObject):
         if latest_done is None:
             return
 
+        # Пропускаем если все блоки уже имеют ocr_text
+        # (результаты уже применены из локального result.json при открытии)
+        current_doc = getattr(self.main_window, "annotation_document", None)
+        if current_doc:
+            all_blocks = [
+                b for p in current_doc.pages for b in p.blocks
+            ]
+            if all_blocks and all(b.ocr_text for b in all_blocks):
+                self._downloaded_jobs.add(latest_done.id)
+                return
+
         # Показываем toast если панель скрыта
         if not self._panel_visible:
             from app.gui.toast import show_toast

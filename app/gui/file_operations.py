@@ -278,6 +278,63 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
             doc.pages.append(page)
         return doc
 
+    def _apply_ocr_from_local_result(self, pdf_path: str):
+        """Применить ocr_text из локального _result.json к блокам без ocr_text.
+
+        Решает проблему: аннотация из Supabase может быть без ocr_text,
+        но _result.json уже скачан и содержит распознанный текст.
+        """
+        if not self.annotation_document:
+            return
+
+        result_path = Path(pdf_path).parent / f"{Path(pdf_path).stem}_result.json"
+        if not result_path.exists():
+            return
+
+        # Проверяем, есть ли блоки без ocr_text
+        has_empty = any(
+            not block.ocr_text
+            for page in self.annotation_document.pages
+            for block in page.blocks
+        )
+        if not has_empty:
+            return
+
+        try:
+            import json
+
+            with open(result_path, "r", encoding="utf-8") as f:
+                result_data = json.load(f)
+
+            # Индексируем ocr_text по block_id из result.json
+            ocr_by_id = {}
+            for page in result_data.get("pages", []):
+                for block in page.get("blocks", []):
+                    block_id = block.get("id")
+                    ocr_text = block.get("ocr_text")
+                    if block_id and ocr_text:
+                        ocr_by_id[block_id] = ocr_text
+
+            if not ocr_by_id:
+                return
+
+            # Применяем только к блокам с пустым ocr_text
+            updated = 0
+            for page in self.annotation_document.pages:
+                for block in page.blocks:
+                    if not block.ocr_text and block.id in ocr_by_id:
+                        block.ocr_text = ocr_by_id[block.id]
+                        updated += 1
+
+            if updated > 0:
+                logger.info(
+                    f"Applied ocr_text from local result.json: {updated} blocks updated"
+                )
+                self._auto_save_annotation()
+
+        except Exception as e:
+            logger.warning(f"Failed to apply OCR from local result.json: {e}")
+
     def _open_pdf(self):
         """Открыть PDF файл через диалог"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -329,6 +386,9 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         # Загружаем OCR result file для preview
         if hasattr(self, "_load_ocr_result_file"):
             self._load_ocr_result_file()
+
+        # Применяем ocr_text из локального result.json (если блоки без ocr_text)
+        self._apply_ocr_from_local_result(pdf_path)
 
         # Обновляем статистику OCR
         if hasattr(self, "remote_ocr_panel") and self.remote_ocr_panel:
