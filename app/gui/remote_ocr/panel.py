@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.remote_ocr.cancel_delegate import CancelButtonDelegate
 from app.gui.remote_ocr.jobs_controller import JobsController
 from app.gui.remote_ocr.jobs_model import JOB_ID_ROLE, JobsTableModel
 
@@ -133,15 +134,23 @@ class RemoteOCRPanel(QDockWidget):
         self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.jobs_table.customContextMenuRequested.connect(self._show_context_menu)
         self.jobs_table.selectionModel().selectionChanged.connect(self._update_reorder_buttons)
+        self.jobs_table.setMouseTracking(True)
+
+        # Delegate для кнопки отмены в колонке "Действия"
+        self._cancel_delegate = CancelButtonDelegate(self.jobs_table)
+        self._cancel_delegate.cancel_requested.connect(self.controller.cancel_job)
+        self.jobs_table.setItemDelegateForColumn(6, self._cancel_delegate)
 
         header = self.jobs_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
         header.resizeSection(0, 35)   # №
         header.resizeSection(1, 150)  # Наименование
         header.resizeSection(2, 120)  # Время начала
         header.resizeSection(3, 100)  # Статус
         header.resizeSection(4, 70)   # Прогресс
+        header.setSectionResizeMode(5, QHeaderView.Stretch)  # Детали
+        header.resizeSection(6, 50)   # Действия
 
         layout.addWidget(self.jobs_table)
 

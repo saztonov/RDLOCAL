@@ -6,7 +6,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from app.gui.utils import format_datetime_utc3
 from app.ocr_client.models import JobInfo
 
-COLUMNS = ["№", "Наименование", "Время начала", "Статус", "Прогресс", "Детали"]
+COLUMNS = ["№", "Наименование", "Время начала", "Статус", "Прогресс", "Детали", "Действия"]
 
 JOB_ID_ROLE = Qt.UserRole + 1
 
@@ -70,6 +70,8 @@ class JobsTableModel(QAbstractTableModel):
                 return f"{int(job.progress * 100)}%"
             elif col == 5:  # Детали
                 return job.status_message or ""
+            elif col == 6:  # Действия (delegate рисует кнопку)
+                return ""
 
         elif role == Qt.ToolTipRole:
             if col == 3 and job.error_message:
@@ -83,6 +85,8 @@ class JobsTableModel(QAbstractTableModel):
                 return job.created_at or ""
             elif col == 4:
                 return job.progress
+            elif col == 6:  # Статус для delegate
+                return job.status
 
         elif role == JOB_ID_ROLE:
             return job.id
