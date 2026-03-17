@@ -72,10 +72,17 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
         try:
             started = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             runtime_hours = (datetime.now(timezone.utc) - started).total_seconds() / 3600
-            if runtime_hours > settings.job_max_runtime_hours:
+            # LM Studio движки (Chandra/Qwen через ngrok) получают увеличенный лимит
+            is_lmstudio = job.engine in ("chandra", "qwen")
+            max_hours = (
+                settings.job_max_runtime_hours_lmstudio
+                if is_lmstudio
+                else settings.job_max_runtime_hours
+            )
+            if runtime_hours > max_hours:
                 error_msg = (
                     f"Превышено время выполнения: {runtime_hours:.1f}h "
-                    f"(лимит: {settings.job_max_runtime_hours}h)"
+                    f"(лимит: {max_hours}h)"
                 )
                 update_job_status(
                     job_id, "error",

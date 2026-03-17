@@ -25,6 +25,8 @@ task_retry_delay: 60
 # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
 # Максимальное время выполнения одной задачи в часах
 job_max_runtime_hours: 2
+# Увеличенный лимит для LM Studio движков (Chandra/Qwen через ngrok)
+job_max_runtime_hours_lmstudio: 6
 # Максимальное количество попыток (защита от бесконечного зацикливания)
 job_max_retries: 3
 

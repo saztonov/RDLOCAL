@@ -107,6 +107,7 @@ class Settings:
 
     # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
     job_max_runtime_hours: int = _cfg("job_max_runtime_hours", "JOB_MAX_RUNTIME_HOURS", int)
+    job_max_runtime_hours_lmstudio: int = _cfg("job_max_runtime_hours_lmstudio", "JOB_MAX_RUNTIME_HOURS_LMSTUDIO", int)
     job_max_retries: int = _cfg("job_max_retries", "JOB_MAX_RETRIES", int)
 
     # ===== OCR THREADING =====
