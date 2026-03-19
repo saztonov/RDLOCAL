@@ -1,0 +1,140 @@
+"""Фоновый детектор зомби-задач после Hard timeout.
+
+После Hard timeout (SIGKILL) Celery worker убит, cleanup не выполняется:
+- Задача остаётся в статусе "processing" в БД навсегда
+- Redis locks (lmstudio:active_jobs) не освобождены
+- Пользователь не может отменить (worker мёртв)
+
+Этот модуль запускает фоновый async loop в FastAPI lifespan,
+который периодически находит и очищает такие зомби-задачи.
+"""
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+
+from .celery_app import celery_app
+from .execution_lock import force_release_execution_lock
+from .logging_config import get_logger
+from .lmstudio_lifecycle import release_chandra, release_lmstudio
+from .storage import get_job, list_jobs, update_job_status
+
+logger = get_logger(__name__)
+
+# Интервал проверки (секунды)
+ZOMBIE_CHECK_INTERVAL = 300  # 5 минут
+
+# Задача считается зомби если в статусе "processing" и updated_at старше этого порога
+ZOMBIE_THRESHOLD_SECONDS = 900  # 15 минут
+
+
+def _detect_and_cleanup_zombies() -> int:
+    """Найти и очистить зомби-задачи.
+
+    Returns:
+        Количество очищенных зомби-задач.
+    """
+    try:
+        jobs = list_jobs()
+    except Exception as exc:
+        logger.warning(f"Zombie detector: ошибка получения списка задач: {exc}")
+        return 0
+
+    processing_jobs = [j for j in jobs if j.status == "processing"]
+    if not processing_jobs:
+        return 0
+
+    # Получаем список активных Celery задач
+    active_task_ids: set[str] = set()
+    try:
+        inspect = celery_app.control.inspect(timeout=5.0)
+        active = inspect.active() or {}
+        reserved = inspect.reserved() or {}
+        for worker_tasks in active.values():
+            for task in worker_tasks:
+                active_task_ids.add(task.get("id", ""))
+        for worker_tasks in reserved.values():
+            for task in worker_tasks:
+                active_task_ids.add(task.get("id", ""))
+    except Exception as exc:
+        logger.warning(f"Zombie detector: ошибка inspect Celery: {exc}")
+        # Если не удалось получить список — используем только проверку по времени
+        active_task_ids = None
+
+    now = datetime.now(timezone.utc)
+    cleaned = 0
+
+    for job in processing_jobs:
+        # Проверка по времени обновления
+        try:
+            updated = datetime.fromisoformat(job.updated_at.replace("Z", "+00:00"))
+            age_seconds = (now - updated).total_seconds()
+        except (ValueError, TypeError, AttributeError):
+            continue
+
+        if age_seconds < ZOMBIE_THRESHOLD_SECONDS:
+            continue
+
+        # Проверка наличия в Celery (если доступно)
+        if active_task_ids is not None and job.celery_task_id in active_task_ids:
+            continue  # Задача ещё активна в Celery — не зомби
+
+        # Это зомби — очищаем
+        logger.warning(
+            f"Zombie detector: задача {job.id[:8]} — зомби "
+            f"(updated {int(age_seconds)}s ago, celery_task={job.celery_task_id})",
+            extra={
+                "event": "zombie_detected",
+                "job_id": job.id,
+                "age_seconds": int(age_seconds),
+            },
+        )
+
+        try:
+            update_job_status(
+                job.id, "error",
+                error_message="Задача прервана (worker killed by hard timeout)",
+                status_message="❌ Worker killed (hard timeout)",
+            )
+        except Exception as exc:
+            logger.warning(f"Zombie detector: ошибка обновления статуса {job.id[:8]}: {exc}")
+            continue
+
+        # Освобождение execution lock
+        force_release_execution_lock(job.id)
+
+        # Освобождение LM Studio locks
+        engine = getattr(job, "engine", None)
+        if engine:
+            try:
+                if engine == "chandra":
+                    release_chandra(job.id)
+                elif engine == "qwen":
+                    release_lmstudio("qwen", job.id)
+            except Exception as exc:
+                logger.warning(f"Zombie detector: ошибка release LM Studio {job.id[:8]}: {exc}")
+
+        cleaned += 1
+
+    return cleaned
+
+
+async def zombie_detector_loop() -> None:
+    """Фоновый async loop для периодической проверки зомби-задач."""
+    logger.info(
+        f"Zombie detector запущен (interval={ZOMBIE_CHECK_INTERVAL}s, "
+        f"threshold={ZOMBIE_THRESHOLD_SECONDS}s)"
+    )
+
+    while True:
+        try:
+            await asyncio.sleep(ZOMBIE_CHECK_INTERVAL)
+            cleaned = await asyncio.to_thread(_detect_and_cleanup_zombies)
+            if cleaned > 0:
+                logger.info(f"Zombie detector: очищено {cleaned} зомби-задач")
+        except asyncio.CancelledError:
+            logger.info("Zombie detector остановлен")
+            raise
+        except Exception as exc:
+            logger.error(f"Zombie detector: неожиданная ошибка: {exc}", exc_info=True)
+            await asyncio.sleep(60)  # Подождать перед retry

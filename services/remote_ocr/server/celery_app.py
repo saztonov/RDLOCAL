@@ -27,10 +27,22 @@ celery_app.conf.update(
     worker_prefetch_multiplier=settings.worker_prefetch,
     # Перезапуск воркера после N задач (защита от утечек памяти)
     worker_max_tasks_per_child=settings.worker_max_tasks,
+    # ===== BROKER =====
+    # visibility_timeout: время, после которого Redis переподаёт не-ACK задачу.
+    # Дефолт = 3600s (1 час), но OCR задачи могут работать до 4+ часов.
+    # При visibility_timeout < task_time → duplicate delivery (задача исполняется
+    # параллельно двумя воркерами). Ставим 24 часа для полной безопасности.
+    broker_transport_options={
+        "visibility_timeout": 86400,
+    },
     # ===== ЗАДАЧИ =====
     # Подтверждение после выполнения (не терять при падении)
     task_acks_late=True,
-    task_reject_on_worker_lost=True,
+    # НЕ переподавать задачу при потере worker (hard timeout SIGKILL).
+    # При True: worker killed → task re-queued → duplicate delivery → зацикливание.
+    # При False: worker killed → task lost → zombie_detector переводит в "error".
+    # Ручной restart через UI — надёжнее автоматического зацикливания.
+    task_reject_on_worker_lost=False,
     # Soft/hard time limits
     task_soft_time_limit=settings.task_soft_timeout,
     task_time_limit=settings.task_hard_timeout,

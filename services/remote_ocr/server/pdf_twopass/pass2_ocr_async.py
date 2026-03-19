@@ -28,6 +28,9 @@ logger = get_logger(__name__)
 # Интервал сохранения checkpoint (каждые N обработанных элементов)
 CHECKPOINT_SAVE_INTERVAL = 10
 
+# Sentinel для обнаружения отмены во время OCR-запроса
+_CANCELLED_SENTINEL = object()
+
 
 def _should_retry_ocr(text: Optional[str], item_id: str, attempt: int, max_retries: int) -> bool:
     """Проверить результат OCR и решить, нужен ли retry.
@@ -155,6 +158,32 @@ async def pass2_ocr_from_manifest_async(
             logger.warning(f"PASS2 ASYNC: ошибка в check_paused: {exc}")
             return False
 
+    async def _cancellable_recognize(backend, *args, check_interval=5.0):
+        """Вызов backend.recognize с проверкой отмены каждые check_interval секунд.
+
+        Возвращает _CANCELLED_SENTINEL если задача отменена во время ожидания.
+        """
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(None, backend.recognize, *args)
+        while True:
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=check_interval)
+            except asyncio.TimeoutError:
+                if _is_paused():
+                    future.cancel()
+                    logger.info("PASS2 ASYNC: OCR-запрос прерван — задача отменена")
+                    return _CANCELLED_SENTINEL
+                # иначе продолжаем ждать завершения backend.recognize
+
+    def _drain_queue(queue: asyncio.Queue) -> None:
+        """Очистить очередь при отмене, чтобы все workers остановились."""
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+                queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
     # Semaphore для ограничения параллельных задач
     max_workers = max_concurrent or settings.ocr_threads_per_job
     concurrency_semaphore = asyncio.Semaphore(max_workers)
@@ -202,6 +231,9 @@ async def pass2_ocr_from_manifest_async(
             logger.warning(f"Strip {strip.strip_id} не найден: {strip.strip_path}")
             return None
 
+        if _is_paused():
+            return None
+
         async with concurrency_semaphore:
             try:
                 strip_blocks = [
@@ -238,6 +270,8 @@ async def pass2_ocr_from_manifest_async(
                 response_text = None
                 for strip_attempt in range(_STRIP_MAX_RETRIES + 1):
                     if strip_attempt > 0:
+                        if _is_paused():
+                            return None
                         delay = _STRIP_RETRY_DELAYS[min(strip_attempt - 1, len(_STRIP_RETRY_DELAYS) - 1)]
                         logger.warning(
                             f"PASS2 ASYNC: strip {strip.strip_id} retry "
@@ -259,9 +293,11 @@ async def pass2_ocr_from_manifest_async(
                             return strip, error_results, strip_idx
 
                         try:
-                            response_text = await asyncio.to_thread(
-                                strip_backend.recognize, merged_image, prompt_data
+                            response_text = await _cancellable_recognize(
+                                strip_backend, merged_image, prompt_data
                             )
+                            if response_text is _CANCELLED_SENTINEL:
+                                return None
                         finally:
                             await rate_limiter.release_async()
                     finally:
@@ -353,6 +389,9 @@ async def pass2_ocr_from_manifest_async(
             logger.warning(f"Image crop не найден: {entry.crop_path}")
             return None
 
+        if _is_paused():
+            return None
+
         async with concurrency_semaphore:
             try:
                 # Извлечение текста pdfplumber (CPU-bound)
@@ -394,6 +433,8 @@ async def pass2_ocr_from_manifest_async(
                 text = None
                 for img_attempt in range(_IMAGE_MAX_RETRIES + 1):
                     if img_attempt > 0:
+                        if _is_paused():
+                            return None
                         delay = _IMAGE_RETRY_DELAYS[min(img_attempt - 1, len(_IMAGE_RETRY_DELAYS) - 1)]
                         logger.warning(
                             f"PASS2 ASYNC: image {entry.block_id} retry "
@@ -411,21 +452,19 @@ async def pass2_ocr_from_manifest_async(
                     try:
                         if use_pdf:
                             logger.info(f"PASS2 ASYNC: используется PDF-кроп для {entry.block_id}")
-                            text = await asyncio.to_thread(
-                                backend.recognize,
-                                None,
-                                prompt_data,
-                                None,
-                                entry.pdf_crop_path,
+                            text = await _cancellable_recognize(
+                                backend, None, prompt_data, None, entry.pdf_crop_path,
                             )
                         else:
                             crop = await asyncio.to_thread(Image.open, entry.crop_path)
                             try:
-                                text = await asyncio.to_thread(
-                                    backend.recognize, crop, prompt_data
+                                text = await _cancellable_recognize(
+                                    backend, crop, prompt_data
                                 )
                             finally:
                                 crop.close()
+                        if text is _CANCELLED_SENTINEL:
+                            return None
                     except Exception as ocr_err:
                         text = make_error(str(ocr_err))
                     finally:
@@ -480,6 +519,7 @@ async def pass2_ocr_from_manifest_async(
     async def _strip_worker():
         while not strip_queue.empty():
             if _is_paused():
+                _drain_queue(strip_queue)
                 return
             try:
                 strip, idx = strip_queue.get_nowait()
@@ -563,6 +603,7 @@ async def pass2_ocr_from_manifest_async(
     async def _image_worker():
         while not image_queue.empty():
             if _is_paused():
+                _drain_queue(image_queue)
                 return
             try:
                 entry = image_queue.get_nowait()

@@ -345,6 +345,11 @@ def invalidate_pause_cache(job_id: str) -> None:
     _invalidate_pause_cache(job_id)
 
 
+def set_pause_cache(job_id: str, is_paused: bool) -> None:
+    """Установить статус паузы в Redis-кеш (public API)"""
+    _set_pause_cache(job_id, is_paused)
+
+
 def is_job_paused(job_id: str) -> bool:
     """Проверить, поставлена ли задача на паузу (с Redis кешированием)"""
     # Check cache first

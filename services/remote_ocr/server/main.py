@@ -1,6 +1,7 @@
 """FastAPI сервер для удалённого OCR (все данные через Supabase + R2)"""
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -44,7 +45,20 @@ async def lifespan(app: FastAPI):
     )
 
     init_db()
+
+    # Запуск фонового zombie detector
+    from .zombie_detector import zombie_detector_loop
+
+    zombie_task = asyncio.create_task(zombie_detector_loop())
+
     yield
+
+    # Остановка zombie detector
+    zombie_task.cancel()
+    try:
+        await zombie_task
+    except asyncio.CancelledError:
+        pass
 
     _logger.info("Server shutting down", extra={"event": "server_shutdown"})
 

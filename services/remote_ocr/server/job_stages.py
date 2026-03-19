@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .debounced_updater import cleanup_updater, get_debounced_updater
+from .execution_lock import acquire_execution_lock, release_execution_lock
 from .job_context import JobBootstrapError, JobContext, JobSkipped, JobValidationError
 from .logging_config import get_logger
 from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
@@ -92,6 +93,11 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
                 raise JobValidationError(error_msg)
         except (ValueError, TypeError) as e:
             logger.warning(f"Job {job_id}: ошибка парсинга started_at ({job.started_at}): {e}")
+
+    # Execution lock: предотвращение параллельной обработки одного job
+    # (защита от duplicate delivery при visibility_timeout / requeue)
+    if not acquire_execution_lock(job_id, celery_task_id):
+        raise JobSkipped("duplicate", f"Job already executing (duplicate delivery)")
 
     # Инкрементируем retry_count и ставим started_at
     new_retry_count = increment_retry_count(job_id)
@@ -341,9 +347,13 @@ def handle_error(job_id: str, exc: Exception, ctx: Optional[JobContext], start_t
 
 # ── Cleanup ───────────────────────────────────────────────────────────
 
-def cleanup(job_id: str, ctx: Optional[JobContext], engine: str, lmstudio_acquired: bool) -> None:
-    """Освобождение ресурсов: debounced updater, temp dir, LM Studio, GC."""
+def cleanup(job_id: str, ctx: Optional[JobContext], engine: str, lmstudio_acquired: bool,
+            celery_task_id: str = "") -> None:
+    """Освобождение ресурсов: execution lock, debounced updater, temp dir, LM Studio, GC."""
     start_mem = ctx.start_mem if ctx else 0.0
+
+    # Execution lock
+    release_execution_lock(job_id, celery_task_id)
 
     # Debounced updater metrics
     stats = cleanup_updater(job_id)

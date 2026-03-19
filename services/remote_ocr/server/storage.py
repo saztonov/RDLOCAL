@@ -30,6 +30,7 @@ from .storage_jobs import (  # noqa: F401
     increment_retry_count,
     invalidate_pause_cache,
     is_job_paused,
+    set_pause_cache,
     list_jobs,
     list_jobs_changed_since,
     pause_job,
