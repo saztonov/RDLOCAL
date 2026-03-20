@@ -59,6 +59,7 @@ class JobsController(QObject):
         jobs_error = Signal(str)
         job_created = Signal(object)
         job_create_error = Signal(str, str)
+        lifecycle_result = Signal(str, bool, str)  # (op_name, success, message)
         download_started = Signal(str, int)
         download_progress = Signal(str, int, str)
         download_finished = Signal(str, str)
@@ -111,6 +112,7 @@ class JobsController(QObject):
         self._worker.download_progress.connect(self._on_download_progress)
         self._worker.download_finished.connect(self._on_download_finished)
         self._worker.download_error.connect(self._on_download_error)
+        self._worker.lifecycle_result.connect(self._on_lifecycle_result)
 
     # ══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -172,22 +174,7 @@ class JobsController(QObject):
         node_id = getattr(mw, "_current_node_id", None) or None
         r2_key = getattr(mw, "_current_r2_key", None) or None
 
-        r2 = None
-        if node_id and r2_key:
-            try:
-                from rd_core.r2_storage import R2Storage
-
-                r2 = R2Storage()
-                if not r2.exists(r2_key):
-                    QMessageBox.warning(
-                        mw,
-                        "Ошибка",
-                        "PDF не загружен в облако.\n"
-                        "Синхронизируйте документ или перезагрузите его в дерево проектов.",
-                    )
-                    return
-            except Exception as e:
-                logger.warning(f"Не удалось проверить R2: {e}")
+        # r2.exists() проверка перенесена в _create_job_bg (background thread)
 
         from PySide6.QtWidgets import QDialog
 
@@ -224,16 +211,13 @@ class JobsController(QObject):
             if mode_dialog.selected_mode == SmartOCRModeDialog.MODE_SMART:
                 selected_blocks = blocks_needing
                 self._is_correction_mode = True
-                if node_id and r2_key and r2:
-                    block_ids = [b.id for b in selected_blocks]
-                    self._clean_old_ocr_results(
-                        node_id, r2_key, r2, blocks_to_reprocess=block_ids
-                    )
+                cleanup_blocks = [b.id for b in selected_blocks]
+                self._clear_ocr_text_in_memory(blocks_to_reprocess=cleanup_blocks)
             else:
                 selected_blocks = all_blocks
                 self._is_correction_mode = False
-                if node_id and r2_key and r2:
-                    self._clean_old_ocr_results(node_id, r2_key, r2)
+                cleanup_blocks = None
+                self._clear_ocr_text_in_memory()
 
         elif has_previous and not blocks_needing:
             QMessageBox.information(
@@ -246,8 +230,8 @@ class JobsController(QObject):
         else:
             selected_blocks = all_blocks
             self._is_correction_mode = False
-            if node_id and r2_key and r2:
-                self._clean_old_ocr_results(node_id, r2_key, r2)
+            cleanup_blocks = None
+            self._clear_ocr_text_in_memory()
 
         client = self._get_client()
         if client is None:
@@ -285,6 +269,9 @@ class JobsController(QObject):
         )
         self.job_uploading.emit(temp_job)
 
+        # Снимок annotation_document для фонового save_to_db
+        annotation_doc = mw.annotation_document
+
         self._executor.submit(
             self._create_job_bg,
             client,
@@ -299,77 +286,43 @@ class JobsController(QObject):
             node_id,
             temp_job_id,
             self._is_correction_mode,
+            r2_key,
+            cleanup_blocks,
+            annotation_doc,
         )
 
     def cancel_job(self, job_id: str) -> None:
-        """Отменить задачу."""
-        from PySide6.QtWidgets import QMessageBox
-
+        """Отменить задачу (в background)."""
         client = self._get_client()
         if client is None:
             return
-
-        try:
-            if client.cancel_job(job_id):
-                from app.gui.toast import show_toast
-
-                show_toast(self.main_window, f"Задача {job_id[:8]}... отменена")
-                self.refresh(manual=True)
-            else:
-                QMessageBox.warning(self.main_window, "Ошибка", "Не удалось отменить задачу")
-        except Exception as e:
-            logger.error(f"Ошибка отмены задачи: {e}")
-            QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось отменить задачу:\n{e}"
-            )
+        # Оптимистичное обновление статуса в кэше
+        cached = self._jobs_cache.get(job_id)
+        if cached:
+            cached.status = "cancelled"
+            self._emit_jobs_list()
+        self._executor.submit(self._lifecycle_op_bg, "cancel", client.cancel_job, job_id)
 
     def resume_job(self, job_id: str) -> None:
-        """Возобновить задачу с паузы."""
-        from PySide6.QtWidgets import QMessageBox
-
+        """Возобновить задачу с паузы (в background)."""
         client = self._get_client()
         if client is None:
             return
-
-        try:
-            if client.resume_job(job_id):
-                from app.gui.toast import show_toast
-
-                show_toast(self.main_window, f"Задача {job_id[:8]}... возобновлена")
-                self.refresh(manual=True)
-            else:
-                QMessageBox.warning(self.main_window, "Ошибка", "Не удалось возобновить")
-        except Exception as e:
-            logger.error(f"Ошибка возобновления задачи: {e}")
-            QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось возобновить:\n{e}"
-            )
+        cached = self._jobs_cache.get(job_id)
+        if cached:
+            cached.status = "queued"
+            self._emit_jobs_list()
+        self._executor.submit(self._lifecycle_op_bg, "resume", client.resume_job, job_id)
 
     def delete_job(self, job_id: str) -> None:
-        """Удалить задачу (без удаления файлов из R2)."""
-        from PySide6.QtWidgets import QMessageBox
-
+        """Удалить задачу (в background)."""
         client = self._get_client()
         if client is None:
             return
-
-        try:
-            if client.delete_job(job_id):
-                from app.gui.toast import show_toast
-
-                show_toast(self.main_window, f"Задача {job_id[:8]}... удалена")
-                self._jobs_cache.pop(job_id, None)
-                # Эмитим обновлённый список
-                all_jobs = list(self._jobs_cache.values())
-                all_jobs.sort(key=lambda j: (j.priority, j.created_at))
-                self.jobs_updated.emit(all_jobs)
-            else:
-                QMessageBox.warning(self.main_window, "Ошибка", "Не удалось удалить задачу")
-        except Exception as e:
-            logger.error(f"Ошибка удаления задачи: {e}")
-            QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось удалить задачу:\n{e}"
-            )
+        # Оптимистичное удаление из кэша
+        self._jobs_cache.pop(job_id, None)
+        self._emit_jobs_list()
+        self._executor.submit(self._lifecycle_op_bg, "delete", client.delete_job, job_id)
 
     def cancel_all_jobs(self) -> None:
         """Отменить все активные задачи (queued/processing/paused)."""
@@ -379,58 +332,34 @@ class JobsController(QObject):
         if client is None:
             return
 
-        try:
-            cached_jobs = (
-                list(self._jobs_cache.values())
-                if self._jobs_cache
-                else client.list_jobs()[0]
-            )
-            active_jobs = [
-                j for j in cached_jobs if j.status in ("queued", "processing", "paused")
-            ]
+        cached_jobs = list(self._jobs_cache.values()) if self._jobs_cache else []
+        active_jobs = [
+            j for j in cached_jobs if j.status in ("queued", "processing", "paused")
+        ]
 
-            if not active_jobs:
-                from app.gui.toast import show_toast
-
-                show_toast(self.main_window, "Нет активных задач для отмены")
-                return
-
-            reply = QMessageBox.question(
-                self.main_window,
-                "Отмена задач",
-                f"Отменить все активные задачи ({len(active_jobs)} шт.)?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-            cancelled = 0
-            errors = 0
-            for job in active_jobs:
-                try:
-                    if client.cancel_job(job.id):
-                        cancelled += 1
-                    else:
-                        errors += 1
-                except Exception as e:
-                    logger.warning(f"Ошибка отмены задачи {job.id}: {e}")
-                    errors += 1
-
-            self.refresh(manual=True)
-
+        if not active_jobs:
             from app.gui.toast import show_toast
 
-            if errors == 0:
-                show_toast(self.main_window, f"Отменено {cancelled} задач")
-            else:
-                show_toast(self.main_window, f"Отменено {cancelled}, ошибок: {errors}")
+            show_toast(self.main_window, "Нет активных задач для отмены")
+            return
 
-        except Exception as e:
-            logger.error(f"Ошибка отмены всех задач: {e}")
-            QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось отменить задачи:\n{e}"
-            )
+        reply = QMessageBox.question(
+            self.main_window,
+            "Отмена задач",
+            f"Отменить все активные задачи ({len(active_jobs)} шт.)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Оптимистичное обновление
+        for job in active_jobs:
+            job.status = "cancelled"
+        self._emit_jobs_list()
+
+        job_ids = [j.id for j in active_jobs]
+        self._executor.submit(self._cancel_all_bg, client, job_ids)
 
     def clear_all_jobs(self) -> None:
         """Очистить все задачи."""
@@ -454,47 +383,15 @@ class JobsController(QObject):
         if reply != QMessageBox.Yes:
             return
 
-        try:
-            jobs = (
-                list(self._jobs_cache.values())
-                if self._jobs_cache
-                else client.list_jobs()[0]
-            )
-            deleted = 0
-            errors = 0
+        job_ids = [j.id for j in self._jobs_cache.values()]
+        # Оптимистичная очистка
+        self._jobs_cache.clear()
+        self._emit_jobs_list()
 
-            for job in jobs:
-                try:
-                    if client.delete_job(job.id):
-                        deleted += 1
-                    else:
-                        errors += 1
-                except Exception as e:
-                    logger.warning(f"Ошибка удаления задачи {job.id}: {e}")
-                    errors += 1
-
-            self.refresh(manual=True)
-
-            from app.gui.toast import show_toast
-
-            if errors == 0:
-                show_toast(self.main_window, f"Удалено {deleted} задач")
-            else:
-                show_toast(self.main_window, f"Удалено {deleted}, ошибок: {errors}")
-
-        except Exception as e:
-            logger.error(f"Ошибка очистки задач: {e}")
-            QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось очистить задачи:\n{e}"
-            )
+        self._executor.submit(self._clear_all_bg, client, job_ids)
 
     def reorder_job(self, job_id: str, direction: str) -> None:
-        """Переместить задачу вверх/вниз в очереди обработки.
-
-        Args:
-            job_id: ID задачи.
-            direction: "up" или "down".
-        """
+        """Переместить задачу вверх/вниз в очереди обработки (в background)."""
         cached_job = self._jobs_cache.get(job_id)
         if not cached_job or cached_job.status != "queued":
             return
@@ -503,23 +400,72 @@ class JobsController(QObject):
         if client is None:
             return
 
+        label = "вверх" if direction == "up" else "вниз"
+        self._executor.submit(
+            self._lifecycle_op_bg, f"reorder_{label}",
+            client.reorder_job, job_id, direction,
+        )
+
+    # ── Background lifecycle helpers ───────────────────────────────────
+
+    def _lifecycle_op_bg(self, op_name: str, fn, *args) -> None:
+        """Выполнить lifecycle-операцию в background и emit результат."""
         try:
-            ok = client.reorder_job(job_id, direction)
-            if ok:
-                from app.gui.toast import show_toast
-
-                label = "вверх" if direction == "up" else "вниз"
-                show_toast(self.main_window, f"Задача перемещена {label}")
-                self.refresh(manual=True)
-            else:
-                from app.gui.toast import show_toast
-
-                show_toast(self.main_window, "Не удалось переместить задачу")
+            ok = fn(*args)
+            self._worker.lifecycle_result.emit(
+                op_name, bool(ok),
+                "" if ok else f"Операция {op_name} не выполнена",
+            )
         except Exception as e:
-            logger.error(f"Ошибка перемещения задачи: {e}")
-            from app.gui.toast import show_toast
+            logger.error(f"Ошибка lifecycle-операции {op_name}: {e}")
+            self._worker.lifecycle_result.emit(op_name, False, str(e))
 
-            show_toast(self.main_window, f"Ошибка: {e}")
+    def _cancel_all_bg(self, client, job_ids: list[str]) -> None:
+        """Отменить список задач в background."""
+        cancelled = 0
+        errors = 0
+        for jid in job_ids:
+            try:
+                if client.cancel_job(jid):
+                    cancelled += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.warning(f"Ошибка отмены задачи {jid}: {e}")
+                errors += 1
+        msg = f"Отменено {cancelled}" + (f", ошибок: {errors}" if errors else "")
+        self._worker.lifecycle_result.emit("cancel_all", errors == 0, msg)
+
+    def _clear_all_bg(self, client, job_ids: list[str]) -> None:
+        """Удалить список задач в background."""
+        deleted = 0
+        errors = 0
+        for jid in job_ids:
+            try:
+                if client.delete_job(jid):
+                    deleted += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.warning(f"Ошибка удаления задачи {jid}: {e}")
+                errors += 1
+        msg = f"Удалено {deleted}" + (f", ошибок: {errors}" if errors else "")
+        self._worker.lifecycle_result.emit("clear_all", errors == 0, msg)
+
+    def _emit_jobs_list(self) -> None:
+        """Эмитить текущий кэш задач для обновления UI."""
+        all_jobs = list(self._jobs_cache.values())
+        all_jobs.sort(key=lambda j: (j.priority, j.created_at))
+        self.jobs_updated.emit(all_jobs)
+
+    def _on_lifecycle_result(self, op_name: str, success: bool, message: str) -> None:
+        """Слот: результат lifecycle-операции из background."""
+        from app.gui.toast import show_toast
+
+        if message:
+            show_toast(self.main_window, message)
+        # Синхронизируем с сервером после любой операции
+        self.refresh(manual=True)
 
     def show_job_details(self, job_id: str) -> None:
         """Показать детальную информацию о задаче."""
@@ -932,8 +878,17 @@ class JobsController(QObject):
         node_id: str | None = None,
         temp_job_id: str | None = None,
         is_correction_mode: bool = False,
+        r2_key: str | None = None,
+        cleanup_blocks: list | None = None,
+        annotation_document: object | None = None,
     ) -> None:
-        """Фоновое создание задачи."""
+        """Фоновое создание задачи.
+
+        Порядок операций:
+        1. Проверка r2.exists (если node_id + r2_key)
+        2. Отправка job на сервер
+        3. Cleanup старых результатов (только при успехе)
+        """
         try:
             from app.ocr_client import (
                 AuthenticationError,
@@ -942,6 +897,24 @@ class JobsController(QObject):
                 get_or_create_client_id,
             )
 
+            # 1. Проверка наличия PDF в R2 (перенесено из GUI-потока)
+            if node_id and r2_key:
+                try:
+                    from rd_core.r2_storage import R2Storage
+
+                    r2 = R2Storage()
+                    if not r2.exists(r2_key):
+                        self._worker.job_create_error.emit(
+                            "r2",
+                            "PDF не загружен в облако.\n"
+                            "Синхронизируйте документ или перезагрузите его "
+                            "в дерево проектов.",
+                        )
+                        return
+                except Exception as e:
+                    logger.warning(f"Не удалось проверить R2: {e}")
+
+            # 2. Отправка задачи на сервер
             client_id = get_or_create_client_id()
             logger.info(
                 f"Начало создания задачи: engine={engine}, blocks={len(blocks)}"
@@ -960,6 +933,19 @@ class JobsController(QObject):
                 is_correction_mode=is_correction_mode,
             )
             logger.info(f"Задача создана: id={job_info.id}, status={job_info.status}")
+
+            # 3. Cleanup старых результатов — ТОЛЬКО после успешного создания job
+            if node_id and r2_key:
+                try:
+                    self._clean_old_ocr_results_bg(
+                        node_id,
+                        r2_key,
+                        blocks_to_reprocess=cleanup_blocks,
+                        annotation_document=annotation_document,
+                    )
+                except Exception as e:
+                    logger.warning(f"Post-create cleanup failed (non-fatal): {e}")
+
             job_info._temp_job_id = temp_job_id
             self._worker.job_created.emit(job_info)
         except AuthenticationError:
@@ -1215,32 +1201,57 @@ class JobsController(QObject):
     # INTERNAL: Clean old OCR results
     # ══════════════════════════════════════════════════════════════════
 
-    def _clean_old_ocr_results(
+    # ── Cleanup: разделён на in-memory (GUI) и background (R2/Supabase) ──
+
+    def _clear_ocr_text_in_memory(
+        self,
+        blocks_to_reprocess: list | None = None,
+    ) -> int:
+        """Быстрая очистка ocr_text в памяти (вызывается из GUI-потока).
+
+        Returns:
+            Количество очищенных блоков.
+        """
+        reprocess_set = set(blocks_to_reprocess) if blocks_to_reprocess else None
+        cleared = 0
+        if self.main_window.annotation_document:
+            for page in self.main_window.annotation_document.pages:
+                for block in page.blocks:
+                    if hasattr(block, "ocr_text") and block.ocr_text:
+                        if reprocess_set is None or block.id in reprocess_set:
+                            block.ocr_text = None
+                            cleared += 1
+        return cleared
+
+    def _clean_old_ocr_results_bg(
         self,
         node_id: str,
         r2_key: str,
-        r2: object,
         blocks_to_reprocess: list | None = None,
+        annotation_document: object | None = None,
     ) -> None:
-        """Очистить старые результаты OCR перед новым распознаванием.
+        """Очистить старые результаты OCR (вызывается из background-потока).
+
+        Выполняет тяжёлые операции: R2 cleanup, Supabase node_files,
+        сохранение аннотации. Вызывается ПОСЛЕ успешного создания job.
 
         Args:
             node_id: ID узла в дереве проектов.
             r2_key: R2 ключ PDF файла.
-            r2: объект R2Storage.
-            blocks_to_reprocess: список ID блоков для переобработки (smart mode).
-                Если None -- полная очистка (кропы + node_files + все ocr_text).
-                Если задан -- очищаем только ocr_text указанных блоков.
+            blocks_to_reprocess: список ID блоков для smart mode.
+            annotation_document: снимок annotation_document для save_to_db.
         """
         import shutil
         from pathlib import PurePosixPath
 
         from app.gui.folder_settings_dialog import get_projects_dir
-        from app.tree_client import FileType, TreeClient
 
         is_smart_mode = blocks_to_reprocess is not None
 
         try:
+            from rd_core.r2_storage import R2Storage
+
+            r2 = R2Storage()
             pdf_stem = Path(r2_key).stem
             r2_prefix = str(PurePosixPath(r2_key).parent)
             projects_dir = get_projects_dir()
@@ -1287,40 +1298,27 @@ class JobsController(QObject):
                         shutil.rmtree(crops_folder, ignore_errors=True)
 
                 # 2. Удаляем записи из node_files (CROP)
+                from app.tree_client import FileType, TreeClient
+
                 client = TreeClient()
                 node_files = client.get_node_files(node_id)
                 for nf in node_files:
                     if nf.file_type == FileType.CROP:
                         client.delete_node_file(nf.id)
 
-            # 3. Очищаем ocr_text в блоках текущего документа
-            reprocess_set = set(blocks_to_reprocess) if blocks_to_reprocess else None
+            # 3. Сохраняем аннотацию с очищенными ocr_text в Supabase
+            if annotation_document:
+                from app.annotation_db import AnnotationDBIO
 
-            if self.main_window.annotation_document:
-                cleared = 0
-                for page in self.main_window.annotation_document.pages:
-                    for block in page.blocks:
-                        if hasattr(block, "ocr_text") and block.ocr_text:
-                            if reprocess_set is None or block.id in reprocess_set:
-                                block.ocr_text = None
-                                cleared += 1
-
-                should_save = cleared > 0 or is_smart_mode
-                if should_save:
-                    from app.annotation_db import AnnotationDBIO
-
-                    if node_id and self.main_window.annotation_document:
-                        success = AnnotationDBIO.save_to_db(
-                            self.main_window.annotation_document, node_id
-                        )
-                        if success:
-                            logger.debug(
-                                f"Saved cleared annotation to Supabase: {node_id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Failed to save annotation to Supabase: {node_id}"
-                            )
+                success = AnnotationDBIO.save_to_db(annotation_document, node_id)
+                if success:
+                    logger.debug(
+                        f"Saved cleared annotation to Supabase: {node_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to save annotation to Supabase: {node_id}"
+                    )
 
             mode_str = (
                 f"smart ({len(blocks_to_reprocess)} blocks)"

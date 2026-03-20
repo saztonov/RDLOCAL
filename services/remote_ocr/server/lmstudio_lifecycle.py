@@ -1,5 +1,9 @@
 """Управление lifecycle моделей LM Studio при параллельных Celery задачах.
 
+Delayed unload: вместо немедленной выгрузки при remaining==0,
+модель остаётся загруженной на UNLOAD_GRACE_SECONDS. Если за это время
+придёт новая задача — выгрузка отменяется (acquire удаляет pending ключ).
+
 Celery prefork = отдельные процессы. Каждый создаёт Backend
 и вызывает unload_model() в finally. Redis SET координирует
 выгрузку: модель выгружается только когда последняя задача завершится.
@@ -30,10 +34,18 @@ _pool_lock = threading.Lock()
 # TTL для SET-ключа — страховка от крашей (24 часа)
 _SAFETY_TTL = 86400
 
+# Grace period перед выгрузкой модели (секунды)
+UNLOAD_GRACE_SECONDS = 120
+
 
 def _active_key(engine: str) -> str:
     """Redis key для множества активных задач данного движка."""
     return f"lmstudio:{engine}:active_jobs"
+
+
+def _pending_unload_key(engine: str) -> str:
+    """Redis key для отложенной выгрузки."""
+    return f"lmstudio:{engine}:pending_unload"
 
 
 def _get_redis_pool() -> redis.ConnectionPool:
@@ -68,6 +80,8 @@ def acquire_lmstudio(engine: str, job_id: str) -> int:
         client.sadd(key, job_id)
         # TTL обновляется при каждом acquire — страховка от крашей
         client.expire(key, _SAFETY_TTL)
+        # Отменяем pending unload — новая задача пришла
+        client.delete(_pending_unload_key(engine))
         count = client.scard(key)
         logger.info(
             f"{engine} acquire: job={job_id}, active_tasks={count}",
@@ -97,6 +111,103 @@ def release_lmstudio(engine: str, job_id: str) -> int:
     except Exception as e:
         logger.warning(f"{engine} release failed (fallback: will unload): {e}")
         return 0
+
+
+def schedule_pending_unload(engine: str) -> None:
+    """Запланировать отложенную выгрузку модели (если нет активных задач).
+
+    Сохраняет timestamp, когда выгрузка была запланирована.
+    Background loop через UNLOAD_GRACE_SECONDS проверит и выгрузит.
+    """
+    import time
+
+    try:
+        client = _get_redis_client()
+        count = client.scard(_active_key(engine))
+        if count == 0:
+            client.set(
+                _pending_unload_key(engine),
+                str(time.time()),
+                ex=UNLOAD_GRACE_SECONDS + 60,  # +60s запас чтобы loop успел проверить
+            )
+            logger.info(
+                f"{engine}: pending unload запланирован (grace={UNLOAD_GRACE_SECONDS}s)",
+                extra={"event": f"{engine}_pending_unload"},
+            )
+    except Exception as e:
+        logger.warning(f"{engine} schedule_pending_unload failed: {e}")
+
+
+def check_and_unload_models() -> None:
+    """Проверить pending unloads и выгрузить модели если grace period истёк.
+
+    Вызывается из background loop (каждые 30 сек).
+    """
+    import time
+
+    for engine in ("chandra", "qwen"):
+        try:
+            client = _get_redis_client()
+            pending_ts = client.get(_pending_unload_key(engine))
+            if pending_ts is None:
+                continue
+
+            elapsed = time.time() - float(pending_ts)
+            if elapsed < UNLOAD_GRACE_SECONDS:
+                continue  # Grace period ещё не истёк
+
+            # Проверяем что нет новых активных задач
+            count = client.scard(_active_key(engine))
+            if count > 0:
+                # Новая задача пришла, удаляем pending
+                client.delete(_pending_unload_key(engine))
+                continue
+
+            # Grace period истёк, нет активных — выгружаем
+            client.delete(_pending_unload_key(engine))
+            _do_unload_model(engine)
+
+        except Exception as e:
+            logger.warning(f"check_and_unload_models({engine}): {e}")
+
+
+def _do_unload_model(engine: str) -> None:
+    """Выполнить выгрузку модели LM Studio."""
+    from .settings import settings
+
+    base_url = None
+    if engine == "chandra":
+        base_url = getattr(settings, "chandra_base_url", None)
+    elif engine == "qwen":
+        base_url = getattr(settings, "qwen_base_url", None) or getattr(
+            settings, "chandra_base_url", None
+        )
+
+    if not base_url:
+        return
+
+    try:
+        import requests
+
+        resp = requests.get(f"{base_url}/api/v1/models", timeout=10)
+        if resp.status_code != 200:
+            return
+
+        for m in resp.json().get("models", []):
+            if engine in m.get("key", "").lower():
+                for inst in m.get("loaded_instances", []):
+                    requests.post(
+                        f"{base_url}/api/v1/models/unload",
+                        json={"instance_id": inst["id"]},
+                        timeout=30,
+                    )
+                    logger.info(
+                        f"{engine}: модель выгружена после grace period: {inst['id']}",
+                        extra={"event": f"{engine}_delayed_unload"},
+                    )
+                break
+    except Exception as e:
+        logger.warning(f"_do_unload_model({engine}): {e}")
 
 
 # ── Обратная совместимость (Chandra) ────────────────────────────────

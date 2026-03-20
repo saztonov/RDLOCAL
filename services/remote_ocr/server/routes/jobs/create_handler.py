@@ -104,6 +104,24 @@ async def create_job_handler(
     else:
         r2_prefix = f"ocr_jobs/{job_id}"
 
+    # Проверка очереди ПЕРЕД созданием job в БД
+    can_accept, queue_size, max_size = check_queue_capacity()
+    if not can_accept:
+        _logger.warning(
+            f"Очередь полна, задача отклонена: {queue_size}/{max_size}",
+            extra={
+                "event": "queue_rejected",
+                "action": "create",
+                "client_id": client_id,
+                "queue_size": queue_size,
+                "max_queue_size": max_size,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Queue is full ({queue_size}/{max_size}). Try again later.",
+        )
+
     job = create_job(
         document_id=document_id,
         document_name=document_name,
@@ -119,24 +137,6 @@ async def create_job_handler(
     save_job_settings(
         job.id, text_model, table_model, image_model, stamp_model, is_correction
     )
-
-    can_accept, queue_size, max_size = check_queue_capacity()
-    if not can_accept:
-        _logger.warning(
-            f"Очередь полна, задача отклонена: {queue_size}/{max_size}",
-            extra={
-                "event": "queue_rejected",
-                "action": "create",
-                "job_id": job_id,
-                "client_id": client_id,
-                "queue_size": queue_size,
-                "max_queue_size": max_size,
-            },
-        )
-        raise HTTPException(
-            status_code=503,
-            detail=f"Queue is full ({queue_size}/{max_size}). Try again later.",
-        )
 
     try:
         s3_client, bucket_name = get_r2_sync_client()
@@ -192,7 +192,14 @@ async def create_job_handler(
 
     # Запускаем OCR задачу в Celery
     block_count = count_blocks_from_data(blocks_data)
-    dispatch_ocr_task(job.id, block_count, job.priority)
+    try:
+        dispatch_ocr_task(job.id, block_count, job.priority)
+    except Exception as e:
+        _logger.error(f"Dispatch failed, rolling back job {job.id}: {e}")
+        delete_job(job.id)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to dispatch OCR task: {e}"
+        )
 
     _logger.info(
         f"Задача создана и поставлена в очередь: {job.id}",

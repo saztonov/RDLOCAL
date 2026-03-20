@@ -42,7 +42,30 @@ class QwenBackend:
         self._model_lock = threading.Lock()
         self._auth = get_ngrok_auth()
         self.session = create_retry_session(auth=self._auth, ngrok_mode=True)
+        self._deadline: Optional[float] = None
+        self._cancel_event: Optional[threading.Event] = None
         logger.info(f"QwenBackend инициализирован (base_url: {self.base_url}, mode: {self.mode})")
+
+    def set_deadline(self, deadline: float) -> None:
+        """Установить крайний срок (unix timestamp) для прекращения retry."""
+        self._deadline = deadline
+
+    def set_cancel_event(self, event: threading.Event) -> None:
+        """Установить event для кооперативной отмены."""
+        self._cancel_event = event
+
+    def _interruptible_sleep(self, seconds: float) -> bool:
+        """Sleep с проверкой отмены. Возвращает True если отменено."""
+        if self._cancel_event:
+            return self._cancel_event.wait(timeout=seconds)
+        time.sleep(seconds)
+        return False
+
+    def _is_budget_exhausted(self, planned_delay: float = 0, reserve: float = 120) -> bool:
+        """Проверить, хватает ли времени на delay + reserve."""
+        if self._deadline is None:
+            return False
+        return time.time() + planned_delay > self._deadline - reserve
 
     def _discover_model(self) -> str:
         if self._model_id:
@@ -176,11 +199,22 @@ class QwenBackend:
             for attempt in range(self._MAX_APP_RETRIES + 1):
                 if attempt > 0:
                     delay = self._APP_RETRY_DELAYS[min(attempt - 1, len(self._APP_RETRY_DELAYS) - 1)]
+
+                    if self._is_budget_exhausted(delay):
+                        logger.warning(
+                            f"Qwen: time budget exhausted before retry {attempt}, "
+                            f"aborting (last error: {last_error})"
+                        )
+                        return make_error(
+                            f"Qwen: time budget exhausted после {attempt - 1} попыток"
+                        )
+
                     logger.warning(
                         f"Qwen API retry {attempt}/{self._MAX_APP_RETRIES}, "
                         f"ожидание {delay}с (предыдущая ошибка: {last_error})"
                     )
-                    time.sleep(delay)
+                    if self._interruptible_sleep(delay):
+                        return make_error("Qwen: операция отменена")
 
                 try:
                     response = self.session.post(

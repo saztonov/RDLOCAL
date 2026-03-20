@@ -1,6 +1,7 @@
 """Datalab OCR Backend (sync)"""
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -44,12 +45,35 @@ class DatalabOCRBackend:
         self.poll_interval, self.poll_max_attempts, self.max_retries, self.extras, self.quality_threshold = \
             init_params(api_key, poll_interval, poll_max_attempts, max_retries, extras, quality_threshold)
 
+        self._deadline: Optional[float] = None
+        self._cancel_event: Optional[threading.Event] = None
         self.session = create_retry_session()
         logger.info(
             f"Datalab OCR инициализирован (poll_interval={self.poll_interval}s, "
             f"poll_max_attempts={self.poll_max_attempts}, max_retries={self.max_retries}, "
             f"extras={self.extras}, quality_threshold={self.quality_threshold})"
         )
+
+    def set_deadline(self, deadline: float) -> None:
+        """Установить крайний срок (unix timestamp) для прекращения retry/polling."""
+        self._deadline = deadline
+
+    def set_cancel_event(self, event: threading.Event) -> None:
+        """Установить event для кооперативной отмены."""
+        self._cancel_event = event
+
+    def _interruptible_sleep(self, seconds: float) -> bool:
+        """Sleep с проверкой отмены. Возвращает True если отменено."""
+        if self._cancel_event:
+            return self._cancel_event.wait(timeout=seconds)
+        time.sleep(seconds)
+        return False
+
+    def _is_budget_exhausted(self, planned_delay: float = 0, reserve: float = 120) -> bool:
+        """Проверить, хватает ли времени на delay + reserve."""
+        if self._deadline is None:
+            return False
+        return time.time() + planned_delay > self._deadline - reserve
 
     def supports_pdf_input(self) -> bool:
         return True
@@ -92,8 +116,11 @@ class DatalabOCRBackend:
 
                         if response.status_code == 429:
                             wait_time = min(60, (2**retry) * 10)
+                            if self._is_budget_exhausted(wait_time):
+                                return make_error("Datalab: time budget exhausted (429 retry)")
                             logger.warning(f"Datalab API 429: ждём {wait_time}с (попытка {retry + 1}/{self.max_retries})")
-                            time.sleep(wait_time)
+                            if self._interruptible_sleep(wait_time):
+                                return make_error("Datalab: операция отменена")
                             continue
                         break
 
@@ -113,14 +140,19 @@ class DatalabOCRBackend:
                     low_quality_retry = False
 
                     for attempt in range(self.poll_max_attempts):
-                        time.sleep(self.poll_interval)
+                        if self._is_budget_exhausted(self.poll_interval):
+                            logger.warning("Datalab: time budget exhausted during polling")
+                            break
+                        if self._interruptible_sleep(self.poll_interval):
+                            return make_error("Datalab: операция отменена")
 
                         logger.debug(f"Datalab: попытка поллинга {attempt + 1}/{self.poll_max_attempts}")
                         poll_response = self.session.get(check_url, headers=self.headers, timeout=30)
 
                         if poll_response.status_code == 429:
                             logger.warning("Datalab: 429 при поллинге, ждём 30с")
-                            time.sleep(30)
+                            if self._interruptible_sleep(30):
+                                return make_error("Datalab: операция отменена")
                             continue
 
                         if poll_response.status_code != 200:
@@ -157,8 +189,12 @@ class DatalabOCRBackend:
                     if low_quality_retry:
                         if full_retry < self.max_retries - 1:
                             wait_time = (full_retry + 1) * 5
+                            if self._is_budget_exhausted(wait_time):
+                                logger.warning("Datalab: time budget exhausted, skipping quality retry")
+                                return self.last_html_result or make_error("Datalab: time budget exhausted")
                             logger.info(f"Datalab: ожидание {wait_time}с перед retry из-за низкого качества")
-                            time.sleep(wait_time)
+                            if self._interruptible_sleep(wait_time):
+                                return make_error("Datalab: операция отменена")
                         continue
 
                     logger.warning(
@@ -167,8 +203,11 @@ class DatalabOCRBackend:
                     )
                     if full_retry < self.max_retries - 1:
                         wait_time = (full_retry + 1) * 10
+                        if self._is_budget_exhausted(wait_time):
+                            return make_error("Datalab: time budget exhausted")
                         logger.info(f"Datalab: ожидание {wait_time}с перед повторной отправкой")
-                        time.sleep(wait_time)
+                        if self._interruptible_sleep(wait_time):
+                            return make_error("Datalab: операция отменена")
 
                 logger.error(f"Datalab: превышено время ожидания после {self.max_retries} полных попыток")
                 logger.warning("Datalab: пропускаем блок из-за таймаута, продолжаем обработку")

@@ -174,6 +174,17 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
     backends = create_job_backends(job)
     engine = backends.engine
 
+    # Устанавливаем deadline для бэкендов (time budget)
+    from .timeout_utils import calculate_dynamic_timeout
+
+    soft_timeout, _ = calculate_dynamic_timeout(total_blocks)
+    import time as _time
+
+    deadline = _time.time() + soft_timeout
+    for backend in (backends.strip, backends.image, backends.stamp):
+        if hasattr(backend, "set_deadline"):
+            backend.set_deadline(deadline)
+
     logger.info(
         f"Бэкенды готовы: engine={engine}, блоков={total_blocks}",
         extra={
@@ -373,21 +384,22 @@ def cleanup(job_id: str, ctx: Optional[JobContext], engine: str, lmstudio_acquir
         except Exception as e:
             logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
 
-    # LM Studio
-    backends = ctx.backends if ctx else None
+    # LM Studio — delayed unload (grace period вместо немедленной выгрузки)
+    from .lmstudio_lifecycle import schedule_pending_unload
+
     if engine == "chandra" and lmstudio_acquired:
         remaining = release_chandra(job_id)
-        if remaining == 0 and backends is not None:
-            backends.unload_all()
-            logger.info("Chandra: последняя задача завершена, модели выгружены")
+        if remaining == 0:
+            schedule_pending_unload("chandra")
+            logger.info("Chandra: последняя задача завершена, выгрузка отложена (grace period)")
         else:
             logger.info(f"Chandra: модели НЕ выгружены, активных задач: {remaining}")
 
     if engine == "qwen" and lmstudio_acquired:
         remaining = release_lmstudio("qwen", job_id)
-        if remaining == 0 and backends is not None:
-            backends.unload_all()
-            logger.info("Qwen: последняя задача завершена, модели выгружены")
+        if remaining == 0:
+            schedule_pending_unload("qwen")
+            logger.info("Qwen: последняя задача завершена, выгрузка отложена (grace period)")
         else:
             logger.info(f"Qwen: модели НЕ выгружены, активных задач: {remaining}")
 

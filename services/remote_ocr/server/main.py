@@ -51,14 +51,32 @@ async def lifespan(app: FastAPI):
 
     zombie_task = asyncio.create_task(zombie_detector_loop())
 
+    # Запуск фонового LM Studio unload checker
+    async def _unload_checker_loop():
+        from .lmstudio_lifecycle import check_and_unload_models
+
+        while True:
+            try:
+                await asyncio.sleep(30)
+                await asyncio.to_thread(check_and_unload_models)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                _logger.warning(f"Unload checker error: {exc}")
+                await asyncio.sleep(60)
+
+    unload_task = asyncio.create_task(_unload_checker_loop())
+
     yield
 
-    # Остановка zombie detector
+    # Остановка фоновых задач
     zombie_task.cancel()
-    try:
-        await zombie_task
-    except asyncio.CancelledError:
-        pass
+    unload_task.cancel()
+    for task in (zombie_task, unload_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     _logger.info("Server shutting down", extra={"event": "server_shutdown"})
 
@@ -158,10 +176,35 @@ async def readiness() -> JSONResponse:
     # Config: хотя бы один OCR ключ
     checks["config"] = bool(settings.openrouter_api_key or settings.datalab_api_key)
 
+    # Provider health (информационное, НЕ влияет на ready)
+    providers: dict = {}
+    if settings.datalab_api_key:
+        try:
+            import httpx
+
+            resp = httpx.get("https://www.datalab.to/api/v1/status", timeout=5)
+            providers["datalab"] = {"configured": True, "reachable": resp.status_code == 200}
+        except Exception:
+            providers["datalab"] = {"configured": True, "reachable": False}
+
+    for engine_name in ("chandra", "qwen"):
+        url = getattr(settings, f"{engine_name}_base_url", None)
+        if url:
+            try:
+                import httpx
+
+                resp = httpx.get(f"{url}/v1/models", timeout=5)
+                providers[engine_name] = {"configured": True, "reachable": resp.status_code == 200}
+            except Exception:
+                providers[engine_name] = {"configured": True, "reachable": False}
+
     ready = all(checks.values())
+    result = {"ready": ready, "checks": checks}
+    if providers:
+        result["providers"] = providers
     return JSONResponse(
         status_code=200 if ready else 503,
-        content={"ready": ready, "checks": checks},
+        content=result,
     )
 
 
