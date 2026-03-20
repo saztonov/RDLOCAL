@@ -13,12 +13,12 @@ from rd_core.ocr.utils import strip_think_tags, strip_untagged_reasoning
 logger = logging.getLogger(__name__)
 
 # ── Модель и конфиг загрузки ────────────────────────────────────────
+# n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
 QWEN_MODEL_KEY = os.getenv("QWEN_MODEL_KEY", "qwen/qwen3.5-9b")
 QWEN_LOAD_CONFIG = {
     "context_length": 16384,
     "flash_attention": True,
     "eval_batch_size": 512,
-    "n_parallel": 2,
 }
 
 # ── Промпты: TEXT / TABLE (fallback) ────────────────────────────────

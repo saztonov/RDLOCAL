@@ -36,13 +36,13 @@ CHANDRA_DEFAULT_SYSTEM = (
 DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
 
 # LM Studio native API: конфигурация загрузки модели
+# n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
 CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-OCR-GGUF")
 CHANDRA_LOAD_CONFIG = {
     "context_length": 16384,
     "flash_attention": True,
     "eval_batch_size": 512,
     "offload_kv_cache_to_gpu": True,
-    "n_parallel": 2,
 }
 
 # Retry конфигурация
@@ -74,11 +74,13 @@ def get_ngrok_auth() -> Optional[tuple]:
 
 
 def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
-    """Собрать payload для Chandra API."""
-    if prompt and isinstance(prompt, dict):
-        system_prompt = prompt.get("system", "") or CHANDRA_DEFAULT_SYSTEM
-    else:
-        system_prompt = CHANDRA_DEFAULT_SYSTEM
+    """Собрать payload для Chandra API.
+
+    Chandra всегда использует специализированные промпты для строительной
+    документации (CHANDRA_DEFAULT_SYSTEM / CHANDRA_DEFAULT_PROMPT),
+    игнорируя generic промпты из worker_prompts.
+    """
+    system_prompt = CHANDRA_DEFAULT_SYSTEM
 
     messages = []
     if system_prompt:

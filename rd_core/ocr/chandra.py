@@ -109,6 +109,30 @@ class ChandraBackend:
             elapsed = time.time() - start
             logger.warning(f"Chandra preload не удался ({elapsed:.1f}с, non-fatal): {e}")
 
+    def _load_model_with_retry(self, model_key: str, load_config: dict):
+        """POST /api/v1/models/load с retry при unrecognized_keys."""
+        payload = {"model": model_key, "echo_load_config": True, **load_config}
+        logger.info(f"Preload: POST /api/v1/models/load {model_key} (context_length={load_config.get('context_length')})...")
+        resp = self._preload_session.post(
+            f"{self.base_url}/api/v1/models/load", json=payload, timeout=120,
+        )
+        if resp.status_code == 400:
+            try:
+                err = resp.json().get("error", {})
+                if err.get("code") == "unrecognized_keys":
+                    msg = err.get("message", "")
+                    bad_keys = [k.strip().strip("'\"") for k in msg.split(":")[-1].split(",")]
+                    for k in bad_keys:
+                        load_config.pop(k, None)
+                    logger.warning(f"Preload: LM Studio не поддерживает ключи {bad_keys}, retry без них")
+                    payload = {"model": model_key, "echo_load_config": True, **load_config}
+                    resp = self._preload_session.post(
+                        f"{self.base_url}/api/v1/models/load", json=payload, timeout=120,
+                    )
+            except Exception:
+                pass
+        return resp
+
     def _ensure_model_loaded(self) -> None:
         required_ctx = CHANDRA_LOAD_CONFIG["context_length"]
         try:
@@ -128,7 +152,11 @@ class ChandraBackend:
                     need_reload, reason = needs_model_reload(loaded, required_ctx)
 
                     if not need_reload:
-                        logger.info(f"Preload: модель {m['key']} уже загружена ({reason})")
+                        ctx_list = [inst.get("context_length", "?") for inst in loaded]
+                        logger.info(
+                            f"Preload: модель {m['key']} уже загружена ({reason}), "
+                            f"instances={len(loaded)}, context_lengths={ctx_list}"
+                        )
                         return
 
                     logger.info(f"Preload: модель {m['key']}: {reason}, выполняем reload")
@@ -144,21 +172,17 @@ class ChandraBackend:
                     actual_key = m.get("key", CHANDRA_MODEL_KEY)
                     break
 
-            logger.info(f"Preload: POST /api/v1/models/load {actual_key} (context_length={required_ctx})...")
-            load_resp = self._preload_session.post(
-                f"{self.base_url}/api/v1/models/load",
-                json={"model": actual_key, "echo_load_config": True, **CHANDRA_LOAD_CONFIG},
-                timeout=120,
-            )
+            load_config = {**CHANDRA_LOAD_CONFIG}
+            load_resp = self._load_model_with_retry(actual_key, load_config)
 
-            if load_resp.status_code == 200:
+            if load_resp and load_resp.status_code == 200:
                 load_data = load_resp.json()
-                actual_ctx = load_data.get("load_config", {}).get("context_length", "?")
+                lc = load_data.get("load_config", {})
                 logger.info(
-                    f"Preload: модель загружена: context_length={actual_ctx}, "
+                    f"Preload: модель загружена: context_length={lc.get('context_length', '?')}, "
                     f"время={load_data.get('load_time_seconds', '?')}с"
                 )
-            else:
+            elif load_resp:
                 logger.warning(f"Preload: ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
 
         except Exception as e:
