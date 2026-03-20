@@ -81,8 +81,10 @@ class QwenBackend:
             try:
                 resp = self.session.get(f"{self.base_url}/v1/models", timeout=30)
                 if resp.status_code == 200:
+                    model_key_lower = QWEN_MODEL_KEY.lower()
                     for m in resp.json().get("data", []):
-                        if "qwen" in m.get("id", "").lower():
+                        mid = m.get("id", "").lower()
+                        if model_key_lower in mid or mid in model_key_lower:
                             self._model_id = m["id"]
                             logger.info(f"Qwen модель найдена: {self._model_id}")
                             return self._model_id
@@ -124,8 +126,9 @@ class QwenBackend:
             models = resp.json().get("models", [])
             target_model = None
 
+            model_key_lower = QWEN_MODEL_KEY.lower()
             for m in models:
-                if "qwen" in m.get("key", "").lower():
+                if model_key_lower in m.get("key", "").lower():
                     target_model = m
                     loaded = m.get("loaded_instances", [])
                     need_reload, reason = needs_model_reload(loaded, required_ctx)
@@ -178,8 +181,9 @@ class QwenBackend:
             if resp.status_code != 200:
                 return
 
+            model_key_lower = QWEN_MODEL_KEY.lower()
             for m in resp.json().get("models", []):
-                if "qwen" in m.get("key", "").lower():
+                if model_key_lower in m.get("key", "").lower():
                     for inst in m.get("loaded_instances", []):
                         self.session.post(
                             f"{self.base_url}/api/v1/models/unload",

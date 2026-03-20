@@ -38,7 +38,7 @@ DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
 # LM Studio native API: конфигурация загрузки модели
 CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-OCR-GGUF")
 CHANDRA_LOAD_CONFIG = {
-    "context_length": 8192,
+    "context_length": 16384,
     "flash_attention": True,
     "eval_batch_size": 512,
     "offload_kv_cache_to_gpu": True,

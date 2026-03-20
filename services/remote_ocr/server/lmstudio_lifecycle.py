@@ -193,8 +193,18 @@ def _do_unload_model(engine: str) -> None:
         if resp.status_code != 200:
             return
 
+        # Определяем точный model key для matching
+        if engine == "chandra":
+            from rd_core.ocr._chandra_common import CHANDRA_MODEL_KEY
+            model_key_lower = CHANDRA_MODEL_KEY.lower()
+        elif engine == "qwen":
+            from rd_core.ocr._qwen_common import QWEN_MODEL_KEY
+            model_key_lower = QWEN_MODEL_KEY.lower()
+        else:
+            model_key_lower = engine
+
         for m in resp.json().get("models", []):
-            if engine in m.get("key", "").lower():
+            if model_key_lower in m.get("key", "").lower():
                 for inst in m.get("loaded_instances", []):
                     requests.post(
                         f"{base_url}/api/v1/models/unload",
