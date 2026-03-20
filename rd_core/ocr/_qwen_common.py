@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 # ── Модель и конфиг загрузки ────────────────────────────────────────
 QWEN_MODEL_KEY = os.getenv("QWEN_MODEL_KEY", "qwen/qwen3.5-9b")
 QWEN_LOAD_CONFIG = {
-    "context_length": 65536,
+    "context_length": 8192,
     "flash_attention": True,
     "eval_batch_size": 512,
+    "n_parallel": 2,
 }
 
 # ── Промпты: TEXT / TABLE (fallback) ────────────────────────────────
