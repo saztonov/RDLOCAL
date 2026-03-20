@@ -68,7 +68,10 @@ def create_job_backends(job) -> JobBackends:
             "chandra",
             base_url=settings.chandra_base_url,
         )
-        strip_backend.preload()
+        try:
+            strip_backend.preload()
+        except Exception as e:
+            logger.warning(f"Preload chandra strip failed (non-fatal): {e}")
         needs_lmstudio = True
     elif engine == "qwen" and settings.qwen_base_url:
         strip_backend = create_ocr_engine(
@@ -76,7 +79,10 @@ def create_job_backends(job) -> JobBackends:
             base_url=settings.qwen_base_url,
             mode="text",
         )
-        strip_backend.preload()
+        try:
+            strip_backend.preload()
+        except Exception as e:
+            logger.warning(f"Preload qwen strip failed (non-fatal): {e}")
         needs_lmstudio = True
     elif engine == "datalab" and settings.datalab_api_key:
         datalab_limiter = get_datalab_limiter()

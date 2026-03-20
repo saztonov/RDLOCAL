@@ -37,6 +37,7 @@ class ChandraBackend:
         self._model_lock = threading.Lock()
         self._auth = get_ngrok_auth()
         self.session = create_retry_session(auth=self._auth, ngrok_mode=True)
+        self._preload_session = create_retry_session(auth=self._auth, preload_mode=True)
         self._deadline: Optional[float] = None
         self._cancel_event: Optional[threading.Event] = None
         logger.info(f"ChandraBackend инициализирован (base_url: {self.base_url})")
@@ -88,15 +89,31 @@ class ChandraBackend:
             return self._model_id
 
     def preload(self) -> None:
-        self._discover_model()
-        logger.info(f"Chandra модель предзагружена: {self._model_id}")
+        """Предзагрузка модели. Non-fatal: при ошибке/таймауте логируем и продолжаем."""
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+
+        PRELOAD_TIMEOUT = 60
+        start = time.time()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self._discover_model)
+                future.result(timeout=PRELOAD_TIMEOUT)
+            elapsed = time.time() - start
+            logger.info(f"Chandra модель предзагружена: {self._model_id} ({elapsed:.1f}с)")
+        except FuturesTimeoutError:
+            elapsed = time.time() - start
+            logger.warning(f"Chandra preload timeout ({elapsed:.1f}с), продолжаем без preload")
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.warning(f"Chandra preload не удался ({elapsed:.1f}с, non-fatal): {e}")
 
     def _ensure_model_loaded(self) -> None:
         required_ctx = CHANDRA_LOAD_CONFIG["context_length"]
         try:
-            resp = self.session.get(f"{self.base_url}/api/v1/models", timeout=10)
+            logger.info(f"Preload: GET /api/v1/models (timeout=10s)...")
+            resp = self._preload_session.get(f"{self.base_url}/api/v1/models", timeout=10)
             if resp.status_code != 200:
-                logger.debug("LM Studio native API недоступен, пропускаем preload")
+                logger.warning(f"Preload: GET /api/v1/models → {resp.status_code}, пропускаем")
                 return
 
             models = resp.json().get("models", [])
@@ -108,13 +125,13 @@ class ChandraBackend:
                     need_reload, reason = needs_model_reload(loaded, required_ctx)
 
                     if not need_reload:
-                        logger.debug(f"Модель {m['key']}: {reason}")
+                        logger.info(f"Preload: модель {m['key']} уже загружена ({reason})")
                         return
 
-                    logger.info(f"Модель {m['key']}: {reason}, выполняем reload")
+                    logger.info(f"Preload: модель {m['key']}: {reason}, выполняем reload")
                     for inst in loaded:
                         try:
-                            self.session.post(
+                            self._preload_session.post(
                                 f"{self.base_url}/api/v1/models/unload",
                                 json={"instance_id": inst["id"]}, timeout=30,
                             )
@@ -124,8 +141,8 @@ class ChandraBackend:
                     actual_key = m.get("key", CHANDRA_MODEL_KEY)
                     break
 
-            logger.info(f"Загружаем модель {actual_key} (context_length={required_ctx})")
-            load_resp = self.session.post(
+            logger.info(f"Preload: POST /api/v1/models/load {actual_key} (context_length={required_ctx})...")
+            load_resp = self._preload_session.post(
                 f"{self.base_url}/api/v1/models/load",
                 json={"model": actual_key, "echo_load_config": True, **CHANDRA_LOAD_CONFIG},
                 timeout=120,
@@ -135,14 +152,14 @@ class ChandraBackend:
                 load_data = load_resp.json()
                 actual_ctx = load_data.get("load_config", {}).get("context_length", "?")
                 logger.info(
-                    f"Модель загружена: context_length={actual_ctx}, "
+                    f"Preload: модель загружена: context_length={actual_ctx}, "
                     f"время={load_data.get('load_time_seconds', '?')}с"
                 )
             else:
-                logger.warning(f"Ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
+                logger.warning(f"Preload: ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
 
         except Exception as e:
-            logger.debug(f"Native API preload недоступен: {e}")
+            logger.warning(f"Preload: native API недоступен: {e}")
 
     def unload_model(self) -> None:
         if not self._model_id:
