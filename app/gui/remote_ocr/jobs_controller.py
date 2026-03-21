@@ -846,6 +846,7 @@ class JobsController(QObject):
 
     def _on_jobs_loaded(self, jobs: list, server_time: str = "") -> None:
         """Слот: список задач получен."""
+        t0 = time.time()
         self._is_fetching = False
         self._force_full_refresh = False
 
@@ -899,6 +900,7 @@ class JobsController(QObject):
 
         # Сохраняем snapshot для мгновенного старта
         self._save_snapshot()
+        logger.info(f"_on_jobs_loaded processed {len(merged_jobs)} jobs in {time.time() - t0:.2f}s")
 
         # Auto-download
         self._check_auto_download(merged_jobs)

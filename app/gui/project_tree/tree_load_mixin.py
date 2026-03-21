@@ -1,6 +1,7 @@
 """Миксин загрузки и обновления дерева проектов."""
 
 import logging
+import time as _time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QTreeWidgetItem
@@ -39,15 +40,21 @@ class TreeLoadMixin:
 
     def _on_roots_loaded(self, roots: list):
         """Обработка корневых узлов"""
+        t0 = _time.time()
         self._last_node_count = len(roots)
         # Кэшируем корневые узлы
         self._node_cache.put_root_nodes(roots)
 
-        for node in roots:
-            item = self._item_builder.create_item(node)
-            self.tree.addTopLevelItem(item)
-            self._item_builder.add_placeholder(item, node)
+        self.tree.setUpdatesEnabled(False)
+        try:
+            for node in roots:
+                item = self._item_builder.create_item(node)
+                self.tree.addTopLevelItem(item)
+                self._item_builder.add_placeholder(item, node)
+        finally:
+            self.tree.setUpdatesEnabled(True)
 
+        logger.info(f"_on_roots_loaded: {len(roots)} items in {_time.time() - t0:.2f}s")
         self.status_label.setText(f"Проектов: {len(roots)}")
 
         doc_ids = []
@@ -70,7 +77,13 @@ class TreeLoadMixin:
 
     def _on_statuses_loaded(self, statuses: dict):
         """Обработка PDF статусов"""
-        self._pdf_status_manager.apply_statuses(statuses)
+        t0 = _time.time()
+        self.tree.setUpdatesEnabled(False)
+        try:
+            self._pdf_status_manager.apply_statuses(statuses)
+        finally:
+            self.tree.setUpdatesEnabled(True)
+        logger.info(f"_on_statuses_loaded: {len(statuses)} items in {_time.time() - t0:.2f}s")
 
     def _on_load_error(self, error_msg: str):
         """Обработка ошибки загрузки"""
