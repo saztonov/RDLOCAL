@@ -113,14 +113,13 @@ class TestParseResponseReasoningFallback:
         assert "<p>OCR result</p>" in result
 
     def test_reasoning_only_no_html(self):
-        """reasoning без HTML — возвращается как plain text OCR (не ошибка)."""
+        """reasoning без HTML — теперь возвращает ошибку (reasoning отброшен)."""
         resp = _make_response(
             content="",
             reasoning_content="Просто текст без HTML разметки с данными чертежа",
         )
         result = parse_response(resp)
-        assert not is_error(result)
-        assert "Просто текст" in result
+        assert is_error(result)
 
 
 class TestParseResponseListContent:
@@ -184,8 +183,8 @@ class TestStripReasoningBeforeHtml:
     def test_no_html(self):
         text = "Just plain text without any HTML tags"
         result, stripped = _strip_reasoning_before_html(text)
-        assert result == text
-        assert stripped == 0
+        assert result == ""
+        assert stripped == len(text)
 
     def test_empty_string(self):
         result, stripped = _strip_reasoning_before_html("")
@@ -272,3 +271,135 @@ class TestStripUntaggedReasoningSafetyNet:
         text = 'Какой-то обычный OCR текст без HTML'
         result = strip_untagged_reasoning(text)
         assert result == text
+
+    def test_pure_reasoning_no_html_returns_empty(self):
+        """Reasoning prefix + no HTML → empty string."""
+        text = "The user wants me to process a table...\nI need to identify columns."
+        result = strip_untagged_reasoning(text)
+        assert result == ""
+
+
+# ── Тесты structured output ──────────────────────────────────────
+
+
+class TestStructuredOutput:
+    """Тесты structured output (response_format json_schema)."""
+
+    def test_structured_json_content(self):
+        """Structured JSON в content — извлекаем ocr_html."""
+        resp = _make_response(
+            content='{"ocr_html": "<p>OCR result</p>"}',
+        )
+        result = parse_response(resp)
+        assert "<p>OCR result</p>" in result
+        assert not is_error(result)
+
+    def test_structured_json_with_whitespace(self):
+        resp = _make_response(
+            content='  {"ocr_html": "<table><tr><td>Cell</td></tr></table>"}  ',
+        )
+        result = parse_response(resp)
+        assert "<table>" in result
+
+    def test_invalid_json_falls_through(self):
+        """Невалидный JSON — fallback на обычный парсинг."""
+        resp = _make_response(
+            content='<p>Regular HTML content</p>',
+        )
+        result = parse_response(resp)
+        assert "<p>Regular HTML content</p>" in result
+
+    def test_structured_json_empty_html(self):
+        """JSON с пустым ocr_html — content не парсится как structured,
+        но проходит как обычный текст (JSON строка)."""
+        resp = _make_response(
+            content='{"ocr_html": ""}',
+        )
+        result = parse_response(resp)
+        # Пустой ocr_html не извлекается structured парсером,
+        # content проходит как обычный текст
+        assert not is_error(result)
+
+
+# ── Тесты предотвращения утечки reasoning ─────────────────────────
+
+
+class TestReasoningLeakPrevention:
+    """Тесты предотвращения утечки reasoning (issue 9VMW-X3JY-UD4)."""
+
+    def test_pure_reasoning_in_reasoning_content_returns_error(self):
+        """Чистый reasoning в reasoning_content → ошибка."""
+        resp = _make_response(
+            content="",
+            reasoning_content=(
+                "The user wants me to process a table from Russian "
+                "construction documentation. I need to identify...\n"
+                "I will now generate the HTML table based on this analysis."
+            ),
+        )
+        result = parse_response(resp)
+        assert is_error(result)
+
+    def test_pure_reasoning_in_content_falls_through(self):
+        """Reasoning в content без HTML → fallback на reasoning_content."""
+        resp = _make_response(
+            content="The user wants me to analyze this document...",
+            reasoning_content="<p>Actual OCR result</p>",
+        )
+        result = parse_response(resp)
+        assert "<p>Actual OCR result</p>" in result
+        assert "The user wants" not in result
+
+    def test_content_with_reasoning_prefix_and_html(self):
+        """Content с reasoning + HTML — reasoning обрезается."""
+        resp = _make_response(
+            content="The user wants me to...\n\n<p>OCR text</p>",
+        )
+        result = parse_response(resp)
+        assert result.startswith("<p>")
+        assert "The user wants" not in result
+
+    def test_reasoning_content_with_trailing_div(self):
+        """reasoning + одинокий </div> — не считать OCR."""
+        resp = _make_response(
+            content="",
+            reasoning_content=(
+                "The user wants me to analyze this table.\n"
+                "I will now generate the HTML.\n</div>"
+            ),
+        )
+        result = parse_response(resp)
+        assert is_error(result)
+
+
+# ── Тесты reasoning-detection в is_suspicious_output ──────────────
+
+
+class TestSuspiciousReasoningDetection:
+    """Тесты reasoning-detection в is_suspicious_output."""
+
+    def test_reasoning_prose_is_suspicious(self):
+        from rd_core.ocr_result import is_suspicious_output
+        text = (
+            "The user wants me to process a table from Russian construction documentation. "
+            "I need to identify the document type.\n"
+            "I will now generate the HTML table based on this analysis."
+        )
+        suspicious, reason = is_suspicious_output(text)
+        assert suspicious
+        assert "reasoning" in reason.lower()
+
+    def test_normal_russian_text_not_suspicious(self):
+        from rd_core.ocr_result import is_suspicious_output
+        text = "Общие сведения и указания по рабочей документации"
+        suspicious, _ = is_suspicious_output(text)
+        assert not suspicious
+
+    def test_normal_html_not_suspicious(self):
+        from rd_core.ocr_result import is_suspicious_output
+        text = (
+            '<div data-bbox="0 0 100 50"><p>Общие сведения и указания по рабочей '
+            'документации. Многоквартирный жилой дом со встроенными помещениями.</p></div>'
+        )
+        suspicious, _ = is_suspicious_output(text)
+        assert not suspicious

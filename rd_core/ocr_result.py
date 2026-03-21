@@ -98,6 +98,25 @@ _TABLE_STRUCTURE_KEYS = frozenset({
     "table", "rowspan", "colspan", "cells", "rows", "columns",
 })
 
+# Паттерны reasoning/self-talk модели (English + Russian)
+_REASONING_PATTERNS = re.compile(
+    r'(?:'
+    r'(?:The user wants|I need to|I will now|I should|Let me|Looking at|Analyzing)\b|'
+    r'(?:Давай|Мне нужно|Я должен|Рассмотрим|Анализируя)\b|'
+    r'^\d+\.\s+\*\*'
+    r')',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_REASONING_CONCLUSION_RE = re.compile(
+    r'(?:I will now generate|based on this analysis|Let me now|I will now output)\b',
+    re.IGNORECASE,
+)
+
+_HTML_TAG_RE_SIMPLE = re.compile(
+    r'<(?:p|table|div|h[1-6]|ul|ol|tr|td|th)\b', re.IGNORECASE,
+)
+
 
 class _TextExtractor(HTMLParser):
     """Извлекает чистый текст из HTML, игнорируя теги."""
@@ -203,5 +222,14 @@ def is_suspicious_output(ocr_text: str, ocr_html: str = "") -> Tuple[bool, str]:
         plain_clean = plain.strip()
         if len(plain_clean) < 20:
             return True, f"низкая текстовая плотность ({len(plain_clean)} символов чистого текста)"
+
+    # 4. Reasoning-like response (self-talk модели вместо OCR)
+    if _REASONING_PATTERNS.search(stripped):
+        reasoning_matches = list(_REASONING_PATTERNS.finditer(stripped))
+        has_conclusion = bool(_REASONING_CONCLUSION_RE.search(stripped))
+        if len(reasoning_matches) >= 2 or has_conclusion:
+            has_html = bool(_HTML_TAG_RE_SIMPLE.search(stripped))
+            if not has_html or len(reasoning_matches) >= 3:
+                return True, "suspicious OCR output: reasoning-like response"
 
     return False, ""

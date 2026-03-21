@@ -1,11 +1,12 @@
 """Общая логика для sync/async Chandra бэкендов."""
+import json as _json
 import logging
 import os
 import re
 from typing import Optional, Tuple
 
 from rd_core.ocr_result import make_error, make_non_retriable
-from rd_core.ocr.utils import extract_message_text, strip_think_tags
+from rd_core.ocr.utils import extract_message_text, strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,8 @@ Guidelines:
 * Forms: Mark checkboxes and radio buttons properly.
 * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
 * Use the simplest possible HTML structure that accurately represents the content of the block.
-* Make sure the text is accurate and easy for a human to read and interpret. Reading order should be correct and natural."""
+* Make sure the text is accurate and easy for a human to read and interpret. Reading order should be correct and natural.
+* IMPORTANT: Return your result as a JSON object with a single key "ocr_html" containing the HTML string. Example: {{"ocr_html": "<p>recognized text</p>"}}"""
 
 CHANDRA_DEFAULT_SYSTEM = (
     "You are a specialist OCR system for Russian construction documentation "
@@ -48,6 +50,26 @@ CHANDRA_LOAD_CONFIG = {
     "flash_attention": True,
     "eval_batch_size": 512,
     "offload_kv_cache_to_gpu": True,
+}
+
+# Structured output schema для LM Studio — заставляет модель возвращать JSON
+# вместо free-form text, предотвращая утечку reasoning в content.
+CHANDRA_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "ocr_result",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "ocr_html": {
+                    "type": "string",
+                    "description": "OCR result as clean HTML",
+                },
+            },
+            "required": ["ocr_html"],
+        },
+    },
 }
 
 # Retry конфигурация
@@ -113,6 +135,7 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
         "top_k": 40,
         "repetition_penalty": 1.1,
         "min_p": 0.05,
+        "response_format": CHANDRA_RESPONSE_FORMAT,
     }
 
 
@@ -121,6 +144,26 @@ _HTML_TAG_RE = re.compile(
     r'<(?:p|table|h[1-6]|div|ul|ol|span|br|hr|math|input|thead|tbody|tr|th|td)\b',
     re.IGNORECASE,
 )
+
+
+def _try_extract_structured_ocr(text: str) -> Optional[str]:
+    """Попытка извлечь OCR HTML из structured JSON output.
+
+    Если content — валидный JSON с ключом "ocr_html", извлекаем значение.
+    Если нет — возвращаем None (fallback на обычный парсинг).
+    """
+    stripped = text.strip()
+    if not (stripped.startswith('{') and stripped.endswith('}')):
+        return None
+    try:
+        data = _json.loads(stripped)
+        if isinstance(data, dict) and "ocr_html" in data:
+            html = data["ocr_html"]
+            if isinstance(html, str) and html.strip():
+                return html.strip()
+    except (_json.JSONDecodeError, ValueError):
+        pass
+    return None
 
 
 def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
@@ -141,7 +184,7 @@ def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
 
     match = _HTML_TAG_RE.search(text)
     if not match:
-        return text, 0  # нет HTML — может быть plain text OCR
+        return "", len(text)  # нет HTML в reasoning_content → чистый reasoning
 
     reasoning_len = match.start()
     return text[match.start():], reasoning_len
@@ -150,7 +193,7 @@ def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
 def _normalize_chandra_response(message: dict) -> Tuple[str, str]:
     """Нормализовать ответ Chandra: извлечь OCR-текст из content или reasoning_content.
 
-    Порядок: content (str/list) → reasoning_content (с очисткой reasoning).
+    Порядок: structured JSON → content (str/list) → reasoning_content (с очисткой reasoning).
     Структурированное логирование источника и метрик.
 
     Returns:
@@ -166,10 +209,26 @@ def _normalize_chandra_response(message: dict) -> Tuple[str, str]:
         content = ""
 
     if content:
-        logger.debug(
-            f"Chandra: ответ из content ({len(content)} симв.)",
-        )
-        return content, "content"
+        # Попытка парсинга structured output (JSON с ocr_html)
+        extracted = _try_extract_structured_ocr(content)
+        if extracted is not None:
+            logger.debug(
+                f"Chandra: structured output из content ({len(extracted)} симв.)",
+            )
+            return extracted, "content"
+
+        # Очистка reasoning без <think> тегов в content
+        content = strip_untagged_reasoning(content, backend_name="Chandra")
+        if not content:
+            logger.warning(
+                "Chandra: content содержал только reasoning, "
+                "пробуем reasoning_content",
+            )
+        else:
+            logger.debug(
+                f"Chandra: ответ из content ({len(content)} симв.)",
+            )
+            return content, "content"
 
     # 2. Fallback: reasoning_content
     reasoning = (message.get("reasoning_content") or "").strip()
@@ -191,6 +250,22 @@ def _normalize_chandra_response(message: dict) -> Tuple[str, str]:
             f"Chandra: обрезан reasoning из reasoning_content "
             f"({stripped_chars} симв. удалено, {len(text)} симв. OCR осталось)",
         )
+
+    # Валидация: после очистки reasoning текст должен содержать HTML
+    if text and not _HTML_TAG_RE.search(text):
+        logger.warning(
+            f"Chandra: reasoning_content после очистки не содержит HTML "
+            f"({len(text)} симв.), отклоняем",
+        )
+        text = ""
+
+    if not text:
+        logger.error(
+            "Chandra: reasoning_content не содержит валидный OCR "
+            "(чистый reasoning без HTML), блок будет помечен как ошибка",
+            extra={"event": "chandra_reasoning_only", "reasoning_len": len(reasoning)},
+        )
+        return "", "empty"
 
     logger.warning(
         "Chandra: LM Studio вернул OCR в reasoning_content "

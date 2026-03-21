@@ -82,8 +82,12 @@ def strip_untagged_reasoning(text: str, backend_name: str = "LLM") -> str:
     # Ищем первый HTML-тег
     html_match = _HTML_START_RE.search(text)
     if not html_match:
-        # Нет HTML вообще — возвращаем как есть
-        return text
+        # Reasoning обнаружен + нет HTML = чистый reasoning
+        _logger.warning(
+            f"{backend_name}: обнаружен чистый reasoning без HTML "
+            f"({len(text)} симв.), отклоняем"
+        )
+        return ""
 
     reasoning_part = text[:html_match.start()]
     html_part = text[html_match.start():]
