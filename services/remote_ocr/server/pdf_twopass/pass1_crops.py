@@ -338,7 +338,7 @@ def _group_and_merge_strips(
             current_strip_height += new_height
 
         # LM Studio бэкенды: каждый блок отдельно (не объединять в общие strips)
-        if engine in ("chandra", "qwen") and current_strip_blocks:
+        if engine == "chandra" and current_strip_blocks:
             _save_current_strip()
 
     _save_current_strip()

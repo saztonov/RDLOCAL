@@ -73,8 +73,8 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
         try:
             started = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             runtime_hours = (datetime.now(timezone.utc) - started).total_seconds() / 3600
-            # LM Studio движки (Chandra/Qwen через ngrok) получают увеличенный лимит
-            is_lmstudio = job.engine in ("chandra", "qwen")
+            # LM Studio движки (Chandra через ngrok) получают увеличенный лимит
+            is_lmstudio = job.engine == "chandra"
             max_hours = (
                 settings.job_max_runtime_hours_lmstudio
                 if is_lmstudio
@@ -201,8 +201,6 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
     if backends.needs_lmstudio:
         if engine == "chandra":
             acquire_chandra(job_id)
-        elif engine == "qwen":
-            acquire_lmstudio("qwen", job_id)
         lmstudio_acquired = True
 
     return JobContext(
@@ -400,14 +398,6 @@ def cleanup(job_id: str, ctx: Optional[JobContext], engine: str, lmstudio_acquir
             logger.info("Chandra: последняя задача завершена, выгрузка отложена (grace period)")
         else:
             logger.info(f"Chandra: модели НЕ выгружены, активных задач: {remaining}")
-
-    if engine == "qwen" and lmstudio_acquired:
-        remaining = release_lmstudio("qwen", job_id)
-        if remaining == 0:
-            schedule_pending_unload("qwen")
-            logger.info("Qwen: последняя задача завершена, выгрузка отложена (grace period)")
-        else:
-            logger.info(f"Qwen: модели НЕ выгружены, активных задач: {remaining}")
 
     # Кэш и GC
     clear_page_size_cache()

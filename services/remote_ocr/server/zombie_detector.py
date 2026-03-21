@@ -43,11 +43,11 @@ _SUSPECTS_TTL = 1800  # 30 минут TTL для SET
 def _get_zombie_threshold(job) -> float:
     """Динамический threshold в зависимости от engine задачи.
 
-    LM Studio задачи (chandra/qwen) могут работать часами —
+    LM Studio задачи (chandra) могут работать часами —
     фиксированный 15-минутный порог вызывает ложные срабатывания.
     """
     engine = getattr(job, "engine", None)
-    if engine in ("chandra", "qwen"):
+    if engine == "chandra":
         max_hours = getattr(settings, "job_max_runtime_hours_lmstudio", 6)
         return max_hours * 3600 + _ZOMBIE_GRACE_SECONDS
     max_timeout = getattr(settings, "max_task_timeout", 14400)
@@ -201,8 +201,6 @@ def _detect_and_cleanup_zombies() -> int:
             try:
                 if engine == "chandra":
                     release_chandra(job.id)
-                elif engine == "qwen":
-                    release_lmstudio("qwen", job.id)
             except Exception as exc:
                 logger.warning(f"Zombie detector: ошибка release LM Studio {job.id[:8]}: {exc}")
 

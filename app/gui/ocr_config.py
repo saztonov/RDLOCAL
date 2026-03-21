@@ -49,7 +49,7 @@ def get_ocr_defaults() -> Dict[str, str]:
             "default_image_model", "google/gemini-3.1-flash-lite-preview"
         ),
         "stamp_model": config.get(
-            "default_stamp_model", "qwen/qwen3.5-9b"
+            "default_stamp_model", "google/gemini-3.1-flash-lite-preview"
         ),
         "engine": config.get("default_engine", "datalab"),
     }

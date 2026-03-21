@@ -129,6 +129,11 @@ class JobsController(QObject):
         self._panel_visible = visible
         if visible:
             has_snapshot = bool(self._jobs_cache and self._last_server_time)
+            logger.info(
+                f"Panel visible: has_snapshot={has_snapshot}, "
+                f"cache_size={len(self._jobs_cache)}, "
+                f"server_time={self._last_server_time}"
+            )
             self.refresh(force_full=not has_snapshot, show_loading=not has_snapshot)
         self._adjust_poll_interval()
 
@@ -154,6 +159,7 @@ class JobsController(QObject):
         if show_loading:
             self.connection_status.emit("loading")
 
+        logger.info(f"Refresh: force_full={force_full}, show_loading={show_loading}")
         self._executor.submit(self._fetch_bg)
 
     def create_job(self) -> None:
@@ -252,8 +258,8 @@ class JobsController(QObject):
             return
 
         engine = dialog.ocr_backend if dialog.ocr_backend in (
-            "openrouter", "datalab", "chandra", "qwen"
-        ) else "openrouter"
+            "datalab", "chandra"
+        ) else "datalab"
 
         self._pending_output_dir = dialog.output_dir
 
@@ -608,15 +614,16 @@ class JobsController(QObject):
                 "saved_at": time.time(),
             }, ensure_ascii=False)
 
-            settings = QSettings()
+            settings = QSettings("PDFAnnotationTool", "RemoteOCR")
             settings.setValue(self._SNAPSHOT_KEY, payload)
+            logger.info(f"Snapshot сохранён: {len(jobs_data)} задач")
         except Exception as e:
             logger.debug(f"Не удалось сохранить snapshot: {e}")
 
     def _load_snapshot(self) -> None:
         """Загрузить snapshot из QSettings в кэш."""
         try:
-            settings = QSettings()
+            settings = QSettings("PDFAnnotationTool", "RemoteOCR")
             raw = settings.value(self._SNAPSHOT_KEY)
             if not raw:
                 return
@@ -788,14 +795,18 @@ class JobsController(QObject):
             and not force_full
         )
 
+        mode = "delta" if use_delta else "full"
+        logger.info(f"Fetch started: mode={mode}, base_url={client.base_url}")
+        t0 = time.time()
+
         try:
             if use_delta:
-                logger.debug(f"Fetching job changes since {self._last_server_time}")
                 jobs, server_time = client.list_jobs(since=self._last_server_time)
-                logger.debug(f"Fetched {len(jobs)} changed jobs")
-
-                if jobs:
-                    logger.info(f"Получено {len(jobs)} изменений с сервера")
+                elapsed = time.time() - t0
+                logger.info(
+                    f"Fetch completed: mode=delta, changes={len(jobs)}, "
+                    f"elapsed={elapsed:.2f}s"
+                )
 
                 # Обновляем кеш изменёнными задачами
                 for job in jobs:
@@ -811,13 +822,20 @@ class JobsController(QObject):
                     all_jobs, server_time or self._last_server_time or ""
                 )
             else:
-                logger.debug(f"Fetching full jobs list from {client.base_url}")
                 jobs, server_time = client.list_jobs(document_id=None)
-                logger.debug(f"Fetched {len(jobs)} jobs, server_time={server_time}")
+                elapsed = time.time() - t0
+                logger.info(
+                    f"Fetch completed: mode=full, jobs={len(jobs)}, "
+                    f"elapsed={elapsed:.2f}s"
+                )
                 self._worker.jobs_loaded.emit(jobs, server_time)
 
         except Exception as e:
-            logger.error(f"Ошибка получения задач: {e}", exc_info=True)
+            elapsed = time.time() - t0
+            logger.error(
+                f"Fetch failed: mode={mode}, elapsed={elapsed:.2f}s, error={e}",
+                exc_info=True,
+            )
             if use_delta:
                 self._force_full_refresh = True
             self._worker.jobs_error.emit(str(e))

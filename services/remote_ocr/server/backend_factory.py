@@ -59,7 +59,7 @@ def create_job_backends(job) -> JobBackends:
     image_model = (job_settings.image_model if job_settings else "") or ""
     stamp_model = (job_settings.stamp_model if job_settings else "") or ""
 
-    engine = job.engine or "openrouter"
+    engine = job.engine or "datalab"
     needs_lmstudio = False
 
     # --- Strip backend ---
@@ -73,17 +73,6 @@ def create_job_backends(job) -> JobBackends:
             strip_backend.preload()
         except Exception as e:
             logger.warning(f"Preload chandra strip failed (non-fatal): {e}")
-        needs_lmstudio = True
-    elif engine == "qwen" and settings.qwen_base_url:
-        strip_backend = create_ocr_engine(
-            "qwen",
-            base_url=settings.qwen_base_url,
-            mode="text",
-        )
-        try:
-            strip_backend.preload()
-        except Exception as e:
-            logger.warning(f"Preload qwen strip failed (non-fatal): {e}")
         needs_lmstudio = True
     elif engine == "datalab" and settings.datalab_api_key:
         datalab_limiter = get_datalab_limiter()
@@ -127,15 +116,7 @@ def create_job_backends(job) -> JobBackends:
         image_backend = create_ocr_engine("dummy")
 
     # --- Stamp backend ---
-    if engine == "qwen" and settings.qwen_base_url:
-        logger.info("STAMP модель: Qwen (LM Studio, mode=stamp)")
-        stamp_backend = create_ocr_engine(
-            "qwen",
-            base_url=settings.qwen_base_url,
-            mode="stamp",
-        )
-        needs_lmstudio = True
-    elif settings.openrouter_api_key:
+    if settings.openrouter_api_key:
         stmp_model = (
             stamp_model
             or image_model

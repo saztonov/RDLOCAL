@@ -133,7 +133,7 @@ def run_two_pass_ocr(
         reset_async_limiter()
 
         # Для LM Studio бэкендов: ограничение параллельности (Max Concurrent Predictions)
-        if engine in ("chandra", "qwen"):
+        if engine == "chandra":
             max_concurrent = getattr(settings, f"{engine}_max_concurrent", 2)
         else:
             max_concurrent = None

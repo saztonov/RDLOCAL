@@ -34,7 +34,7 @@ async def create_job_handler(
     document_name: str = Form(...),
     client_id: str = Form(...),
     task_name: str = Form(""),
-    engine: str = Form("openrouter"),
+    engine: str = Form("datalab"),
     text_model: str = Form(""),
     table_model: str = Form(""),
     image_model: str = Form(""),

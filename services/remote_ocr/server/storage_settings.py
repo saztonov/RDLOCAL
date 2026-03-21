@@ -24,19 +24,8 @@ def get_category_prompt(
 
     code = category_code or "default"
 
-    if engine == "qwen":
-        if code == "stamp":
-            return {
-                "system": settings.qwen_stamp_system_prompt,
-                "user": settings.qwen_stamp_user_prompt,
-            }
-        return {
-            "system": settings.qwen_text_system_prompt,
-            "user": settings.qwen_text_user_prompt,
-        }
-    else:
-        # openrouter / datalab / chandra / default
-        if code == "stamp":
+    # openrouter / datalab / chandra / default
+    if code == "stamp":
             return {
                 "system": settings.openrouter_stamp_system_prompt,
                 "user": settings.openrouter_stamp_user_prompt,

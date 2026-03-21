@@ -25,10 +25,9 @@ def _is_chandra_backend(backend) -> bool:
 
 
 def _is_lmstudio_backend(backend) -> bool:
-    """Проверить, является ли бэкенд LM Studio (Chandra/Qwen)."""
+    """Проверить, является ли бэкенд LM Studio (Chandra)."""
     return type(backend).__name__ in (
         "ChandraBackend", "AsyncChandraBackend",
-        "QwenBackend", "AsyncQwenBackend",
     )
 
 
@@ -38,8 +37,6 @@ def _get_engine_name(backend) -> str:
     name_map = {
         "ChandraBackend": "chandra",
         "AsyncChandraBackend": "chandra",
-        "QwenBackend": "qwen",
-        "AsyncQwenBackend": "qwen",
         "DatalabOCRBackend": "datalab",
         "OpenRouterBackend": "openrouter",
     }

@@ -83,6 +83,7 @@ class JobDetailsDialog(QDialog):
         engine_label = {
             "openrouter": "OpenRouter",
             "datalab": "Datalab",
+            "chandra": "Chandra 2",
             "local": "Локальный",
         }.get(engine, engine)
         main_layout.addRow("Движок:", QLabel(engine_label))

@@ -210,7 +210,7 @@ async def pass2_ocr_from_manifest_async(
     # --- Обработка strips ---
     # Retry для всех бэкендов: LM Studio (ngrok instability) и cloud (transient 429/5xx)
     _is_lmstudio = type(strip_backend).__name__ in (
-        "ChandraBackend", "QwenBackend",
+        "ChandraBackend",
     )
     _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 1
     _STRIP_RETRY_DELAYS = [30, 60] if _is_lmstudio else [5]
@@ -425,7 +425,7 @@ async def pass2_ocr_from_manifest_async(
 
                 category_id = getattr(block, "category_id", None)
                 category_code = getattr(block, "category_code", None)
-                engine = "qwen" if "Qwen" in type(backend).__name__ else None
+                engine = None
 
                 prompt_data = fill_image_prompt_variables(
                     prompt_data=block.prompt,

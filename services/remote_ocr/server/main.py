@@ -187,7 +187,7 @@ async def readiness() -> JSONResponse:
         except Exception:
             providers["datalab"] = {"configured": True, "reachable": False}
 
-    for engine_name in ("chandra", "qwen"):
+    for engine_name in ("chandra",):
         url = getattr(settings, f"{engine_name}_base_url", None)
         if url:
             try:

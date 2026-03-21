@@ -41,13 +41,6 @@ def create_ocr_engine(backend: str = "dummy", **kwargs) -> OCRBackend:
             "event": "ocr_backend_created", "backend": "chandra",
         })
         return ChandraBackend(**kwargs)
-    elif backend == "qwen":
-        from rd_core.ocr.qwen import QwenBackend
-
-        logger.info("Создан OCR бэкенд", extra={
-            "event": "ocr_backend_created", "backend": "qwen", "model_name": f"qwen-{mode}" if mode else "qwen",
-        })
-        return QwenBackend(**kwargs)
     elif backend == "dummy":
         from rd_core.ocr.dummy import DummyOCRBackend
 

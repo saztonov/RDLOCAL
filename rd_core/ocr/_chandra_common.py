@@ -37,9 +37,9 @@ DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
 
 # LM Studio native API: конфигурация загрузки модели
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
-CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-OCR-GGUF")
+CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-ocr-2-GGUF")
 CHANDRA_LOAD_CONFIG = {
-    "context_length": 16384,
+    "context_length": 36601,
     "flash_attention": True,
     "eval_batch_size": 512,
     "offload_kv_cache_to_gpu": True,
@@ -103,8 +103,11 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
         "model": model_id,
         "messages": messages,
         "max_tokens": 12384,
-        "temperature": 0,
-        "top_p": 0.1,
+        "temperature": 0.1,
+        "top_p": 0.95,
+        "top_k": 40,
+        "repetition_penalty": 1.1,
+        "min_p": 0.05,
     }
 
 

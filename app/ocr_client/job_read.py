@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Optional
 
 from app.ocr_client.models import JobInfo
@@ -54,9 +55,14 @@ class JobReadMixin:
         if since:
             params["since"] = since
 
-        logger.debug(f"list_jobs: GET {self.base_url}/jobs params={params}")
+        logger.info(f"list_jobs: GET {self.base_url}/jobs params={params}")
+        t0 = time.time()
         resp = self._request_with_retry("get", "/jobs", params=params)
-        logger.debug(f"list_jobs response: {resp.status_code}, len={len(resp.content)}")
+        elapsed = time.time() - t0
+        logger.info(
+            f"list_jobs response: status={resp.status_code}, "
+            f"size={len(resp.content)}B, elapsed={elapsed:.2f}s"
+        )
         data = resp.json()
 
         jobs = [_parse_job(j) for j in data.get("jobs", [])]

@@ -25,7 +25,7 @@ task_retry_delay: 60
 # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
 # Максимальное время выполнения одной задачи в часах
 job_max_runtime_hours: 2
-# Увеличенный лимит для LM Studio движков (Chandra/Qwen через ngrok)
+# Увеличенный лимит для LM Studio движков (Chandra через ngrok)
 job_max_runtime_hours_lmstudio: 4
 # Максимальное количество попыток (защита от бесконечного зацикливания)
 job_max_retries: 3
@@ -65,13 +65,6 @@ chandra_retry_delay: 2
 # Снижен с 300 до 90: LM Studio отвечает за <60s, 300s вызывал каскадные зависания
 chandra_http_timeout: 90
 
-# ===== QWEN (LM Studio) =====
-# Параллельных запросов к Qwen PER TASK
-# LM Studio: Max Concurrent Predictions >= qwen_max_concurrent * num_workers
-qwen_max_concurrent: 4
-# Пауза между retry при верификации блоков, секунды
-qwen_retry_delay: 2
-
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
 max_retry_blocks: 0
@@ -110,12 +103,12 @@ max_queue_size: 100
 default_task_priority: 5
 
 # ===== МОДЕЛИ OCR ПО УМОЛЧАНИЮ =====
-# Движок по умолчанию: datalab | chandra | openrouter
+# Движок по умолчанию: datalab | chandra
 default_engine: "datalab"
 # Модель для распознавания изображений (OpenRouter)
 default_image_model: "google/gemini-3.1-flash-lite-preview"
 # Модель для распознавания штампов (OpenRouter)
-default_stamp_model: "qwen/qwen3.5-9b"
+default_stamp_model: "google/gemini-3.1-flash-lite-preview"
 
 # =====================================================
 # ПРОМПТЫ ДЛЯ OCR
@@ -252,94 +245,3 @@ openrouter_stamp_user_prompt: |
 
   Return exactly one JSON object matching the system schema.
 
-# -- Qwen: TEXT/TABLE blocks --
-qwen_text_system_prompt: |
-  You are an OCR transcription model for Russian construction documents.
-  Your task is to transcribe one block exactly and reconstruct its local layout in HTML.
-
-  Rules:
-  - Preserve text exactly as shown: Russian, Latin, digits, units, punctuation, and technical symbols (Ø, ±, №, %, x, ×, /, -, superscripts, subscripts).
-  - Do not guess missing characters, numbers, units, references, or table cells.
-  - Do not translate, normalize, expand abbreviations, or explain.
-  - Reading order: top-to-bottom, left-to-right inside the block.
-  - Keep only content from this block.
-  - Return exactly one JSON object. No Markdown. No commentary. No <think> blocks.
-
-  JSON schema:
-  {"type":"text"|"table"|"mixed","content_html":"string","confidence":0.0}
-
-  HTML rules for content_html:
-  - Text paragraphs: <p>...</p>
-  - Tables: <table><tr><td>...</td></tr></table>
-  - Use rowspan/colspan only when clearly visible. Use SINGLE QUOTES for HTML attributes to prevent breaking JSON (e.g., <td colspan='2'>).
-  - Use <br> only for meaningful visual line breaks.
-  - Use <math>...</math> only for clearly visible formulas.
-  - Keep blank cells blank; do not fill from neighboring cells.
-  - Preserve original row/column order.
-
-  Confidence rubric:
-  - 0.90-1.00: almost everything is clearly readable
-  - 0.70-0.89: minor ambiguity
-  - 0.40-0.69: several unclear fragments
-  - 0.00-0.39: heavily unreadable block
-
-qwen_text_user_prompt: |
-  Analyze only the attached block.
-
-  Steps:
-  1) Decide whether the block is text, table, or mixed.
-  2) Transcribe all visible content exactly.
-  3) Reconstruct the local layout in content_html. Use SINGLE QUOTES inside HTML attributes.
-  4) For tables, preserve row order, column order, and merged cells only when clearly visible.
-  5) For formulas, preserve symbols and indices exactly.
-  6) If some fragments are unreadable, keep only the readable fragments and do not invent the missing parts.
-
-  Return exactly one JSON object matching the system schema.
-
-# -- Qwen: STAMP blocks --
-qwen_stamp_system_prompt: |
-  You are an OCR extractor for Russian construction title blocks (основные надписи).
-  Structured field accuracy has higher priority than stamp_html reconstruction.
-
-  Rules:
-  - Preserve original text exactly as written: Russian, Latin, digits, symbols.
-  - Do not guess missing sheet numbers, dates, surnames, scales, formats, or codes.
-  - Do not translate or normalize.
-  - Use the image for layout, signatures, handwritten surnames, and handwritten dates.
-  - Return exactly one JSON object. No Markdown. No commentary. No <think> blocks.
-
-  JSON schema:
-  {
-    "organization": "",
-    "project_name": "",
-    "project_code": "",
-    "document_name": "",
-    "stage": "",
-    "sheet_number": "",
-    "total_sheets": "",
-    "scale": "",
-    "format": "",
-    "signatures": [{"role": "", "name": "", "date": ""}],
-    "changes": [{"number": "", "name": "", "date": ""}],
-    "stamp_html": "<table>...</table>",
-    "confidence": 0.0
-  }
-
-  Additional rules:
-  - If a scalar field is unresolved, use an empty string.
-  - signatures: include only visible rows.
-  - changes: include only visible revision rows.
-  - stamp_html: reproduce only clearly visible cell structure. Use SINGLE QUOTES for HTML attributes.
-  - Field accuracy is more important than perfect stamp_html reconstruction.
-
-qwen_stamp_user_prompt: |
-  This image contains one construction title block.
-
-  Tasks:
-  1) Extract all visible metadata into the structured fields.
-  2) Reconstruct the title-block layout in stamp_html. Use SINGLE QUOTES inside HTML attributes.
-  3) Preserve handwritten names and dates only if visible.
-  4) Do not infer hidden, cropped, or ambiguous fields.
-  5) Keep all codes, scales, sheet numbers, and format values exactly as shown.
-
-  Return exactly one JSON object matching the system schema.

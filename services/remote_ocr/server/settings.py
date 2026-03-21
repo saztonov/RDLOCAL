@@ -129,13 +129,6 @@ class Settings:
     chandra_retry_delay: int = _cfg("chandra_retry_delay", "CHANDRA_RETRY_DELAY", int)
     chandra_http_timeout: int = _cfg("chandra_http_timeout", "CHANDRA_HTTP_TIMEOUT", int)
 
-    # ===== QWEN (LM Studio) =====
-    qwen_base_url: str = field(
-        default_factory=lambda: os.getenv("QWEN_BASE_URL") or os.getenv("CHANDRA_BASE_URL", "")
-    )
-    qwen_max_concurrent: int = _cfg("qwen_max_concurrent", "QWEN_MAX_CONCURRENT", int)
-    qwen_retry_delay: int = _cfg("qwen_retry_delay", "QWEN_RETRY_DELAY", int)
-
     # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
     max_retry_blocks: int = _cfg("max_retry_blocks", "MAX_RETRY_BLOCKS", int)
     verification_timeout_minutes: int = _cfg("verification_timeout_minutes", "VERIFICATION_TIMEOUT_MINUTES", int)
@@ -168,10 +161,6 @@ class Settings:
     openrouter_image_user_prompt: str = _cfg("openrouter_image_user_prompt", "OPENROUTER_IMAGE_USER_PROMPT")
     openrouter_stamp_system_prompt: str = _cfg("openrouter_stamp_system_prompt", "OPENROUTER_STAMP_SYSTEM_PROMPT")
     openrouter_stamp_user_prompt: str = _cfg("openrouter_stamp_user_prompt", "OPENROUTER_STAMP_USER_PROMPT")
-    qwen_text_system_prompt: str = _cfg("qwen_text_system_prompt", "QWEN_TEXT_SYSTEM_PROMPT")
-    qwen_text_user_prompt: str = _cfg("qwen_text_user_prompt", "QWEN_TEXT_USER_PROMPT")
-    qwen_stamp_system_prompt: str = _cfg("qwen_stamp_system_prompt", "QWEN_STAMP_SYSTEM_PROMPT")
-    qwen_stamp_user_prompt: str = _cfg("qwen_stamp_user_prompt", "QWEN_STAMP_USER_PROMPT")
 
 
 # Lazy singleton: Settings создаётся при первом обращении

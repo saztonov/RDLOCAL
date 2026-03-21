@@ -34,7 +34,7 @@ def run_ocr_task(self, job_id: str) -> dict:
     start_time = time.time()
 
     ctx = None
-    engine = "openrouter"
+    engine = "datalab"
     lmstudio_acquired = False
     try:
         job = validate_job(job_id, self.request.id)

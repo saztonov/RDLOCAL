@@ -155,7 +155,7 @@ async def restart_job_handler(
 
 def start_job_handler(
     job_id: str,
-    engine: str = Form("openrouter"),
+    engine: str = Form("datalab"),
     text_model: str = Form(""),
     table_model: str = Form(""),
     image_model: str = Form(""),
