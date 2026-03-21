@@ -52,6 +52,11 @@ class RemoteOCRPanel(QDockWidget):
         self._setup_ui()
         self._connect_signals()
 
+        # Мгновенный показ из snapshot (до первого сетевого запроса)
+        if self.controller.has_snapshot():
+            self._model.update_jobs(self.controller.get_snapshot_jobs())
+            self.status_label.setText("🟡 Кэш (синхронизация...)")
+
     def _connect_signals(self):
         """Подключить сигналы контроллера к UI"""
         ctrl = self.controller
@@ -113,7 +118,9 @@ class RemoteOCRPanel(QDockWidget):
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setMaximumWidth(30)
         self.refresh_btn.setToolTip("Обновить список")
-        self.refresh_btn.clicked.connect(lambda: self.controller.refresh(manual=True))
+        self.refresh_btn.clicked.connect(
+            lambda: self.controller.refresh(force_full=True, show_loading=True)
+        )
         header_layout.addWidget(self.refresh_btn)
 
         layout.addLayout(header_layout)

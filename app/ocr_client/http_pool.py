@@ -21,7 +21,7 @@ def get_remote_ocr_client(base_url: str, timeout: float = 120.0) -> httpx.Client
         _remote_ocr_http_client = httpx.Client(
             base_url=base_url,
             limits=Limits(max_connections=10, max_keepalive_connections=5),
-            timeout=timeout,
+            timeout=httpx.Timeout(connect=5.0, read=timeout, write=timeout, pool=5.0),
         )
         _remote_ocr_base_url = base_url
     return _remote_ocr_http_client

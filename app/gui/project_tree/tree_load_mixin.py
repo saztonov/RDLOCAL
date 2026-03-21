@@ -15,8 +15,8 @@ class TreeLoadMixin:
 
     def _initial_load(self):
         """Начальная загрузка (асинхронно через QThread)"""
-        if not self.client.is_available():
-            self.status_label.setText("⚠ Supabase недоступен")
+        if not self.client.supabase_url or not self.client.supabase_key:
+            self.status_label.setText("⚠ Supabase не настроен")
             return
 
         self._load_expanded_state()

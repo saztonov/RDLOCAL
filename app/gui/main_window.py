@@ -251,7 +251,6 @@ class MainWindow(
         self.remote_ocr_panel = RemoteOCRPanel(self, self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.remote_ocr_panel)
         self.resizeDocks([self.remote_ocr_panel], [520], Qt.Horizontal)
-        self.remote_ocr_panel.show()
 
     def _toggle_remote_ocr_panel(self):
         """Показать/скрыть панель Remote OCR"""

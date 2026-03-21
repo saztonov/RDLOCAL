@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -12,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QSettings, QTimer, Signal
 
 if TYPE_CHECKING:
     from app.gui.main_window import MainWindow
@@ -64,6 +65,7 @@ class JobsController(QObject):
         download_progress = Signal(str, int, str)
         download_finished = Signal(str, str)
         download_error = Signal(str, str)
+        job_details_loaded = Signal(dict)  # job_details dict
 
     # ── __init__ ──────────────────────────────────────────────────────
 
@@ -101,6 +103,9 @@ class JobsController(QObject):
         self._poll_timer.timeout.connect(self._on_poll_tick)
         # Не запускаем — панель пока не видима
 
+        # Загружаем snapshot для мгновенного показа
+        self._load_snapshot()
+
     # ── Подключение worker-сигналов ───────────────────────────────────
 
     def _connect_worker_signals(self) -> None:
@@ -113,6 +118,7 @@ class JobsController(QObject):
         self._worker.download_finished.connect(self._on_download_finished)
         self._worker.download_error.connect(self._on_download_error)
         self._worker.lifecycle_result.connect(self._on_lifecycle_result)
+        self._worker.job_details_loaded.connect(self._on_job_details_loaded)
 
     # ══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -122,23 +128,30 @@ class JobsController(QObject):
         """Уведомить контроллер о видимости панели — управляет polling."""
         self._panel_visible = visible
         if visible:
-            self.refresh(manual=True)
+            has_snapshot = bool(self._jobs_cache and self._last_server_time)
+            self.refresh(force_full=not has_snapshot, show_loading=not has_snapshot)
         self._adjust_poll_interval()
 
-    def refresh(self, manual: bool = False) -> None:
-        """Обновить список задач."""
+    def refresh(self, *, force_full: bool = False, show_loading: bool = False) -> None:
+        """Обновить список задач.
+
+        Args:
+            force_full: Принудительно полная перезагрузка (кнопка refresh).
+            show_loading: Показать статус "loading" в UI.
+        """
         if self._is_fetching:
             return
 
         # При множественных ошибках сначала проверяем health
-        if not manual and not self._try_health_check_before_poll():
+        if not force_full and not show_loading and not self._try_health_check_before_poll():
             return
 
         self._is_fetching = True
-        self._is_manual_refresh = manual
+        self._is_manual_refresh = force_full
 
-        if manual:
+        if force_full:
             self._force_full_refresh = True
+        if show_loading:
             self.connection_status.emit("loading")
 
         self._executor.submit(self._fetch_bg)
@@ -465,32 +478,43 @@ class JobsController(QObject):
         if message:
             show_toast(self.main_window, message)
         # Синхронизируем с сервером после любой операции
-        self.refresh(manual=True)
+        self.refresh(force_full=True)
 
     def show_job_details(self, job_id: str) -> None:
-        """Показать детальную информацию о задаче."""
-        from PySide6.QtWidgets import QMessageBox
-
+        """Показать детальную информацию о задаче (загрузка в background)."""
         client = self._get_client()
         if client is None:
             return
 
+        pdf_path = getattr(self.main_window, "_current_pdf_path", None)
+        self._executor.submit(self._fetch_job_details_bg, client, job_id, pdf_path)
+
+    def _fetch_job_details_bg(
+        self, client: RemoteOCRClient, job_id: str, pdf_path: str | None
+    ) -> None:
+        """Фоновая загрузка деталей задачи."""
         try:
             job_details = client.get_job_details(job_id)
-
-            pdf_path = getattr(self.main_window, "_current_pdf_path", None)
             if pdf_path:
                 job_details["client_output_dir"] = str(Path(pdf_path).parent)
-
-            from app.gui.job_details_dialog import JobDetailsDialog
-
-            dialog = JobDetailsDialog(job_details, self.main_window)
-            dialog.exec()
+            self._worker.job_details_loaded.emit(job_details)
         except Exception as e:
             logger.error(f"Ошибка получения информации о задаче: {e}")
+            self._worker.job_details_loaded.emit({"_error": str(e)})
+
+    def _on_job_details_loaded(self, job_details: dict) -> None:
+        """Слот: детали задачи загружены — показать диалог."""
+        error = job_details.get("_error")
+        if error:
+            from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
-                self.main_window, "Ошибка", f"Не удалось получить информацию:\n{e}"
+                self.main_window, "Ошибка", f"Не удалось получить информацию:\n{error}"
             )
+            return
+
+        from app.gui.job_details_dialog import JobDetailsDialog
+        dialog = JobDetailsDialog(job_details, self.main_window)
+        dialog.exec()
 
     def auto_download_result(self, job_id: str) -> None:
         """Запустить скачивание результата из R2 в папку текущего документа."""
@@ -502,30 +526,37 @@ class JobsController(QObject):
         if client is None:
             return
 
+        pdf_path = getattr(self.main_window, "_current_pdf_path", None)
+        if not pdf_path:
+            logger.warning(
+                f"Нет открытого документа для сохранения результатов job {job_id}"
+            )
+            return
+
         self._downloading_jobs.add(job_id)
+        extract_dir = str(Path(pdf_path).parent)
+
+        # Вся работа (включая get_job_details) в background thread
+        self._executor.submit(
+            self._auto_download_bg, client, job_id, extract_dir
+        )
+
+    def _auto_download_bg(
+        self, client: RemoteOCRClient, job_id: str, extract_dir: str
+    ) -> None:
+        """Фоновая подготовка и запуск скачивания."""
         try:
             job_details = client.get_job_details(job_id)
             r2_prefix = job_details.get("r2_prefix")
 
             if not r2_prefix:
                 logger.warning(f"Задача {job_id} не имеет r2_prefix")
+                self._downloading_jobs.discard(job_id)
                 return
 
-            pdf_path = getattr(self.main_window, "_current_pdf_path", None)
-            if not pdf_path:
-                logger.warning(
-                    f"Нет открытого документа для сохранения результатов job {job_id}"
-                )
-                return
-
-            pdf_path = Path(pdf_path)
-            extract_dir = pdf_path.parent
-
-            self._executor.submit(
-                self._download_result_bg, job_id, r2_prefix, str(extract_dir)
-            )
-
+            self._download_result_bg(job_id, r2_prefix, extract_dir)
         except Exception as e:
+            logger.error(f"Ошибка подготовки скачивания {job_id}: {e}")
             self._downloading_jobs.discard(job_id)
             logger.error(f"Ошибка подготовки скачивания {job_id}: {e}")
 
@@ -558,6 +589,84 @@ class JobsController(QObject):
         """Освободить ресурсы."""
         self._poll_timer.stop()
         self._executor.shutdown(wait=False)
+
+    # ══════════════════════════════════════════════════════════════════
+    # INTERNAL: Snapshot persistence
+    # ══════════════════════════════════════════════════════════════════
+
+    _SNAPSHOT_KEY = "remote_ocr/jobs_snapshot"
+
+    def _save_snapshot(self) -> None:
+        """Сохранить текущий кэш задач в QSettings для мгновенного старта."""
+        try:
+            from dataclasses import asdict
+
+            jobs_data = [asdict(j) for j in self._jobs_cache.values()]
+            payload = json.dumps({
+                "jobs": jobs_data,
+                "server_time": self._last_server_time or "",
+                "saved_at": time.time(),
+            }, ensure_ascii=False)
+
+            settings = QSettings()
+            settings.setValue(self._SNAPSHOT_KEY, payload)
+        except Exception as e:
+            logger.debug(f"Не удалось сохранить snapshot: {e}")
+
+    def _load_snapshot(self) -> None:
+        """Загрузить snapshot из QSettings в кэш."""
+        try:
+            settings = QSettings()
+            raw = settings.value(self._SNAPSHOT_KEY)
+            if not raw:
+                return
+
+            data = json.loads(raw)
+            saved_at = data.get("saved_at", 0)
+
+            # Snapshot старше 24 часов — игнорируем
+            if time.time() - saved_at > 86400:
+                logger.debug("Snapshot слишком старый, пропускаем")
+                return
+
+            from app.ocr_client.models import JobInfo
+
+            jobs = []
+            for j in data.get("jobs", []):
+                jobs.append(JobInfo(
+                    id=j["id"],
+                    status=j["status"],
+                    progress=j["progress"],
+                    document_id=j["document_id"],
+                    document_name=j["document_name"],
+                    task_name=j.get("task_name", ""),
+                    created_at=j.get("created_at", ""),
+                    updated_at=j.get("updated_at", ""),
+                    error_message=j.get("error_message"),
+                    node_id=j.get("node_id"),
+                    status_message=j.get("status_message"),
+                    priority=j.get("priority", 0),
+                ))
+
+            if jobs:
+                self._jobs_cache = {j.id: j for j in jobs}
+                self._last_server_time = data.get("server_time") or None
+                logger.info(
+                    f"Snapshot загружен: {len(jobs)} задач, "
+                    f"server_time={self._last_server_time}"
+                )
+        except Exception as e:
+            logger.debug(f"Не удалось загрузить snapshot: {e}")
+
+    def has_snapshot(self) -> bool:
+        """Есть ли данные из snapshot для мгновенного показа."""
+        return bool(self._jobs_cache)
+
+    def get_snapshot_jobs(self) -> list:
+        """Получить задачи из snapshot для начального показа."""
+        jobs = list(self._jobs_cache.values())
+        jobs.sort(key=lambda j: (j.priority, j.created_at))
+        return jobs
 
     # ══════════════════════════════════════════════════════════════════
     # INTERNAL: Client
@@ -621,7 +730,7 @@ class JobsController(QObject):
 
     def _on_poll_tick(self) -> None:
         """Слот таймера — инициирует refresh."""
-        self.refresh(manual=False)
+        self.refresh()
 
     def _adjust_poll_interval(self) -> None:
         """Адаптировать интервал polling на основе видимости и активности."""
@@ -652,16 +761,12 @@ class JobsController(QObject):
         if client is None:
             return False
 
-        try:
-            resp = client._request_with_retry("get", "/health")
-            if resp.status_code == 200:
-                logger.info("Health check OK, сброс backoff")
-                self._consecutive_errors = 0
-                self._force_full_refresh = True
-                self._adjust_poll_interval()
-                return True
-        except Exception:
-            pass
+        if client.health():
+            logger.info("Health check OK, сброс backoff")
+            self._consecutive_errors = 0
+            self._force_full_refresh = True
+            self._adjust_poll_interval()
+            return True
 
         return False
 
@@ -773,6 +878,9 @@ class JobsController(QObject):
         self.jobs_updated.emit(merged_jobs)
         self.connection_status.emit("connected")
         self._consecutive_errors = 0
+
+        # Сохраняем snapshot для мгновенного старта
+        self._save_snapshot()
 
         # Auto-download
         self._check_auto_download(merged_jobs)
