@@ -9,6 +9,7 @@ from PIL import Image
 
 from rd_core.ocr._chandra_common import (
     CHANDRA_LOAD_CONFIG,
+    CHANDRA_MAX_IMAGE_SIZE,
     CHANDRA_MODEL_KEY,
     TRANSIENT_CODES,
     build_payload,
@@ -225,7 +226,7 @@ class ChandraBackend:
 
         try:
             model_id = self._discover_model()
-            img_b64 = image_to_base64(image)
+            img_b64 = image_to_base64(image, max_size=CHANDRA_MAX_IMAGE_SIZE)
             payload = build_payload(model_id, prompt, img_b64)
 
             last_error = None

@@ -8,8 +8,11 @@ from rd_core.ocr_result import make_error, make_non_retriable
 logger = logging.getLogger(__name__)
 
 # Промпт из официального репо Chandra (ocr_test.py)
-ALLOWED_TAGS = "p, h1, h2, h3, h4, h5, h6, table, thead, tbody, tr, th, td, ul, ol, li, br, sub, sup, div, span, img, math, mi, mo, mn, msup, msub, mfrac, msqrt, mrow, mover, munder, munderover, mtable, mtr, mtd, mtext, mspace, input"
-ALLOWED_ATTRIBUTES = "colspan, rowspan, alt, type, checked, value, data-bbox, data-label"
+ALLOWED_TAGS = "p, h1, h2, h3, h4, h5, h6, table, thead, tbody, tr, th, td, ul, ol, li, br, sub, sup, div, span, math, mi, mo, mn, msup, msub, mfrac, msqrt, mrow, mover, munder, munderover, mtable, mtr, mtd, mtext, mspace, input"
+ALLOWED_ATTRIBUTES = "colspan, rowspan, type, checked, value, data-bbox, data-label"
+
+# Максимальная сторона изображения для Chandra OCR 2 (из chandra/model/util.py: 3072×2048)
+CHANDRA_MAX_IMAGE_SIZE = 3072
 
 CHANDRA_DEFAULT_PROMPT = f"""OCR this image to HTML.
 
@@ -19,7 +22,7 @@ Guidelines:
 * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
 * Tables: Use colspan and rowspan attributes to match table structure.
 * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
-* Images: Include a description of any images in the alt attribute of an <img> tag. Do not fill out the src property.
+* Images: Ignore any images, diagrams, or illustrations entirely. Do not include <img> tags in the output. Focus only on text content.
 * Forms: Mark checkboxes and radio buttons properly.
 * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
 * Use the simplest possible HTML structure that accurately represents the content of the block.
