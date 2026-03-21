@@ -9,6 +9,7 @@ from rd_core.ocr_result import (  # noqa: F401
     is_non_retriable,
     is_any_error,
     is_success,
+    is_suspicious_output,
     make_error,
     make_non_retriable,
 )

@@ -4,6 +4,7 @@ import os
 from typing import Optional, Tuple
 
 from rd_core.ocr_result import make_error, make_non_retriable
+from rd_core.ocr.utils import strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
 
 # LM Studio native API: конфигурация загрузки модели
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
-CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-ocr-2-GGUF")
+CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-ocr-2")
 CHANDRA_LOAD_CONFIG = {
     "context_length": 36601,
     "flash_attention": True,
@@ -115,13 +116,32 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
 
 
 def parse_response(response_json: dict) -> str:
-    """Парсинг ответа Chandra API. Возвращает текст или сообщение об ошибке."""
+    """Парсинг ответа Chandra API. Возвращает текст или сообщение об ошибке.
+
+    LM Studio может возвращать OCR-результат в reasoning_content вместо content
+    (поведение reasoning/thinking моделей). Если content пуст — используем
+    reasoning_content с очисткой от reasoning-текста.
+    """
     if "choices" not in response_json or not response_json["choices"]:
         err_msg = response_json.get("error", response_json)
         logger.error(f"Chandra: 'choices' missing: {err_msg}")
         return make_error(f"Chandra: некорректный ответ ({err_msg})")
 
-    text = response_json["choices"][0]["message"]["content"].strip()
+    message = response_json["choices"][0]["message"]
+    text = (message.get("content") or "").strip()
+
+    if not text:
+        # Fallback: модель может вернуть OCR в reasoning_content
+        reasoning = (message.get("reasoning_content") or "").strip()
+        if reasoning:
+            logger.info(
+                f"Chandra: content пуст, используем reasoning_content "
+                f"({len(reasoning)} симв.)"
+            )
+            text = strip_think_tags(reasoning, backend_name="Chandra")
+            text = strip_untagged_reasoning(text, backend_name="Chandra")
+            text = text.strip()
+
     if not text:
         logger.warning("Chandra OCR: получен пустой ответ от модели")
         return make_error("Chandra: пустой ответ модели")

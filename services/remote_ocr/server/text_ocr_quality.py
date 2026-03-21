@@ -5,13 +5,12 @@
    (модель fine-tuned с промптом, описывающим изображения, поэтому генерирует
    <img alt="..."> и описания картинок даже в TEXT блоках).
 2. classify_text_output — определяет подозрительные результаты
-   (layout-dump, JSON bbox вместо HTML) для fallback retry.
+   (layout-dump, JSON bbox/table-dump вместо HTML) для fallback retry.
+   Делегирует shared helper is_suspicious_output() из rd_core.ocr_result.
 """
 from __future__ import annotations
 
-import json
 import re
-from html.parser import HTMLParser
 from typing import Tuple
 
 from .logging_config import get_logger
@@ -31,31 +30,6 @@ _IMG_TAG_RE = re.compile(r'<img\b[^>]*/?\s*>', re.IGNORECASE)
 # Множественные пробелы / пустые строки
 _MULTI_WHITESPACE_RE = re.compile(r'\n{3,}')
 _MULTI_SPACE_RE = re.compile(r'[ \t]{2,}')
-
-
-class _TextExtractor(HTMLParser):
-    """Извлекает чистый текст из HTML, игнорируя теги."""
-
-    def __init__(self):
-        super().__init__()
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str):
-        self.parts.append(data)
-
-    def get_text(self) -> str:
-        return "".join(self.parts)
-
-
-def _extract_plain_text(html: str) -> str:
-    """Извлечь чистый текст из HTML строки."""
-    parser = _TextExtractor()
-    try:
-        parser.feed(html)
-    except Exception:
-        # Fallback: strip тегов regex-ом
-        return re.sub(r'<[^>]+>', '', html)
-    return parser.get_text()
 
 
 def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
@@ -111,6 +85,9 @@ def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
 def classify_text_output(ocr_text: str, ocr_html: str = "") -> dict:
     """Классифицировать качество TEXT/TABLE OCR результата.
 
+    Использует shared helper is_suspicious_output() из rd_core.ocr_result
+    для детекции suspicious output (JSON-dump, low density и т.п.).
+
     Args:
         ocr_text: OCR результат (сырой текст из бэкенда)
         ocr_html: OCR HTML (после sanitize, из result.json)
@@ -120,6 +97,8 @@ def classify_text_output(ocr_text: str, ocr_html: str = "") -> dict:
             quality: 'ok' | 'suspicious' | 'empty' | 'api_error'
             reason: описание причины
     """
+    from rd_core.ocr_result import is_suspicious_output
+
     # Пустой результат
     if not ocr_text or not ocr_text.strip():
         return {"quality": "empty", "reason": "пустой ocr_text"}
@@ -130,50 +109,9 @@ def classify_text_output(ocr_text: str, ocr_html: str = "") -> dict:
             return {"quality": "api_error", "reason": "неповторяемая ошибка API"}
         return {"quality": "api_error", "reason": "ошибка API"}
 
-    stripped = ocr_text.strip()
-
-    # JSON array bbox-объектов (layout-only dump)
-    if _is_bbox_json_dump(stripped):
-        return {"quality": "suspicious", "reason": "JSON layout-dump (bbox без HTML content)"}
-
-    # Preformatted JSON в HTML
-    if ocr_html:
-        html_stripped = ocr_html.strip()
-        if html_stripped.startswith("<pre>") and html_stripped.endswith("</pre>"):
-            inner = html_stripped[5:-6].strip()
-            # HTML-encoded JSON
-            if inner.startswith("[{") or inner.startswith("[{"):
-                return {"quality": "suspicious", "reason": "preformatted JSON dump в HTML"}
-            if inner.startswith("[{") or "&quot;" in inner[:50]:
-                return {"quality": "suspicious", "reason": "preformatted JSON dump в HTML"}
-
-    # Низкая текстовая плотность
-    if len(stripped) > 50:
-        plain = _extract_plain_text(stripped)
-        plain_clean = plain.strip()
-        if len(plain_clean) < 20:
-            return {
-                "quality": "suspicious",
-                "reason": f"низкая текстовая плотность ({len(plain_clean)} символов чистого текста)",
-            }
+    # Shared suspicious detection (JSON-dump, preformatted JSON, low density)
+    suspicious, reason = is_suspicious_output(ocr_text, ocr_html)
+    if suspicious:
+        return {"quality": "suspicious", "reason": reason}
 
     return {"quality": "ok", "reason": ""}
-
-
-def _is_bbox_json_dump(text: str) -> bool:
-    """Определить JSON array/object с data-bbox/data-label без HTML content."""
-    if not (text.startswith('[') and text.endswith(']')):
-        return False
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return False
-
-    if not isinstance(data, list) or len(data) == 0:
-        return False
-
-    # Все элементы — dict с data-bbox
-    return all(
-        isinstance(item, dict) and ("data-bbox" in item or "data-label" in item)
-        for item in data
-    )

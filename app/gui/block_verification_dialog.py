@@ -205,15 +205,27 @@ class BlockVerificationDialog(QDialog):
             missing_ocr = len(r.missing_in_ocr_html)
             missing_res = len(r.missing_in_result)
             missing_md = len(r.missing_in_document_md)
-            self.verdict_label.setText(
-                f"<span style='color: #ff6b6b; font-size: 16px;'>❌ Обнаружены расхождения</span><br><br>"
-                f"<b>Ожидалось блоков (без штампов):</b> {expected_count}<br>"
-                f"<b>Отсутствует в ocr.html:</b> {missing_ocr}<br>"
-                f"<b>Отсутствует в result.json:</b> {missing_res}<br>"
-                f"<b>Отсутствует в document.md:</b> {missing_md}"
-            )
+            error_count = len(r.error_blocks)
+            suspicious_count = len(r.suspicious_blocks)
 
-            # Детали отсутствующих блоков
+            verdict_lines = [
+                f"<span style='color: #ff6b6b; font-size: 16px;'>❌ Обнаружены расхождения</span><br><br>",
+                f"<b>Ожидалось блоков (без штампов):</b> {expected_count}<br>",
+            ]
+            if missing_ocr:
+                verdict_lines.append(f"<b>Отсутствует в ocr.html:</b> {missing_ocr}<br>")
+            if missing_res:
+                verdict_lines.append(f"<b>Отсутствует в result.json:</b> {missing_res}<br>")
+            if missing_md:
+                verdict_lines.append(f"<b>Отсутствует в document.md:</b> {missing_md}<br>")
+            if error_count:
+                verdict_lines.append(f"<b>Блоков с ошибками OCR:</b> {error_count}<br>")
+            if suspicious_count:
+                verdict_lines.append(f"<b>Блоков с подозрительным выводом:</b> {suspicious_count}<br>")
+
+            self.verdict_label.setText("".join(verdict_lines))
+
+            # Детали отсутствующих и проблемных блоков
             lines = []
 
             if r.missing_in_ocr_html:
@@ -234,6 +246,22 @@ class BlockVerificationDialog(QDialog):
                 lines.append("=== Отсутствуют в document.md ===")
                 for b in r.missing_in_document_md:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
+
+            if r.error_blocks:
+                if lines:
+                    lines.append("")
+                lines.append("=== Блоки с ошибками OCR ===")
+                for b in r.error_blocks:
+                    reason = r.error_reasons.get(b.id, "")
+                    lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type}) — {reason}")
+
+            if r.suspicious_blocks:
+                if lines:
+                    lines.append("")
+                lines.append("=== Подозрительный OCR вывод ===")
+                for b in r.suspicious_blocks:
+                    reason = r.suspicious_reasons.get(b.id, "")
+                    lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type}) — {reason}")
 
             self.missing_text.setPlainText("\n".join(lines))
             self.missing_group.show()
@@ -300,6 +328,20 @@ class BlockVerificationDialog(QDialog):
                 lines.append("Отсутствуют в document.md:")
                 for b in r.missing_in_document_md:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
+
+            if r.error_blocks:
+                lines.append("")
+                lines.append("Блоки с ошибками OCR:")
+                for b in r.error_blocks:
+                    reason = r.error_reasons.get(b.id, "")
+                    lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type}) — {reason}")
+
+            if r.suspicious_blocks:
+                lines.append("")
+                lines.append("Подозрительный OCR вывод:")
+                for b in r.suspicious_blocks:
+                    reason = r.suspicious_reasons.get(b.id, "")
+                    lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type}) — {reason}")
 
         QApplication.clipboard().setText("\n".join(lines))
 

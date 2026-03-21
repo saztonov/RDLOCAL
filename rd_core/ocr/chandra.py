@@ -111,6 +111,47 @@ class ChandraBackend:
             elapsed = time.time() - start
             logger.warning(f"Chandra preload не удался ({elapsed:.1f}с, non-fatal): {e}")
 
+    def _try_discover_and_load(self, failed_resp, load_config: dict) -> bool:
+        """При model_not_found — найти модель через /v1/models и загрузить."""
+        try:
+            err = failed_resp.json().get("error", {})
+            if err.get("type") != "model_not_found":
+                return False
+        except Exception:
+            return False
+
+        logger.info("Preload: model_not_found, пробуем auto-discovery через /v1/models...")
+        try:
+            resp = self._preload_session.get(f"{self.base_url}/v1/models", timeout=10)
+            if resp.status_code != 200:
+                return False
+
+            model_key_lower = CHANDRA_MODEL_KEY.lower()
+            for m in resp.json().get("data", []):
+                mid = m.get("id", "").lower()
+                if model_key_lower in mid or mid in model_key_lower:
+                    discovered_id = m["id"]
+                    logger.info(f"Preload: найдена модель через discovery: {discovered_id}")
+                    retry_config = {**load_config}
+                    retry_resp = self._load_model_with_retry(discovered_id, retry_config)
+                    if retry_resp and retry_resp.status_code == 200:
+                        load_data = retry_resp.json()
+                        lc = load_data.get("load_config", {})
+                        logger.info(
+                            f"Preload: модель загружена через discovery: "
+                            f"context_length={lc.get('context_length', '?')}, "
+                            f"время={load_data.get('load_time_seconds', '?')}с"
+                        )
+                        return True
+                    else:
+                        logger.warning(f"Preload: повторная загрузка {discovered_id} не удалась")
+                        return False
+
+            logger.warning("Preload: модель не найдена через /v1/models discovery")
+        except Exception as e:
+            logger.warning(f"Preload: auto-discovery ошибка: {e}")
+        return False
+
     def _load_model_with_retry(self, model_key: str, load_config: dict):
         """POST /api/v1/models/load с retry при unrecognized_keys."""
         payload = {"model": model_key, "echo_load_config": True, **load_config}
@@ -185,7 +226,10 @@ class ChandraBackend:
                     f"время={load_data.get('load_time_seconds', '?')}с"
                 )
             elif load_resp:
-                logger.warning(f"Preload: ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
+                # Auto-discovery: при model_not_found ищем модель по /v1/models
+                discovered = self._try_discover_and_load(load_resp, load_config)
+                if not discovered:
+                    logger.warning(f"Preload: ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
 
         except Exception as e:
             logger.warning(f"Preload: native API недоступен: {e}")

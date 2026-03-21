@@ -96,6 +96,20 @@ def generate_results(
                     f"image сегментов ({fmeta['removed_chars']} символов)"
                 )
 
+    # Детекция suspicious output (JSON-dump, low density) → error marker
+    # Suspicious вывод не должен попадать в result.json как "успех",
+    # чтобы верификация могла его повторно обработать.
+    from rd_core.ocr_result import is_suspicious_output, make_error as make_ocr_error
+    for block in blocks:
+        if block.block_type == BlockType.TEXT and block.ocr_text:
+            suspicious, reason = is_suspicious_output(block.ocr_text)
+            if suspicious:
+                logger.warning(
+                    f"Block {block.id}: suspicious output → error marker ({reason})"
+                )
+                block._debug_raw_ocr_text = block.ocr_text
+                block.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
+
     # Логирование состояния блоков
     blocks_with_ocr = sum(1 for b in blocks if b.ocr_text)
     logger.info(

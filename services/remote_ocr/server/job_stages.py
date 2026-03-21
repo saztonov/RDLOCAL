@@ -20,7 +20,7 @@ from .job_context import JobBootstrapError, JobContext, JobSkipped, JobValidatio
 from .logging_config import get_logger
 from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
 from .memory_utils import force_gc, log_memory, log_memory_delta
-from .ocr_constants import is_error, is_non_retriable, is_success
+from .ocr_constants import is_error, is_non_retriable, is_success, is_suspicious_output
 from .settings import settings
 from .storage import get_job, register_ocr_results_to_node, update_job_status
 from .storage_jobs import increment_retry_count, set_job_started_at
@@ -326,11 +326,13 @@ def finalize(ctx: JobContext) -> dict:
         recognized = sum(1 for t in all_ocr_texts if is_success(t))
         error_count = sum(1 for t in all_ocr_texts if is_error(t))
         non_retriable_count = sum(1 for t in all_ocr_texts if is_non_retriable(t))
+        suspicious_count = sum(1 for t in all_ocr_texts if t and is_suspicious_output(t)[0])
     else:
         # Fallback на ctx.blocks (если result.json не создан)
         recognized = sum(1 for b in ctx.blocks if is_success(b.ocr_text))
         error_count = sum(1 for b in ctx.blocks if is_error(b.ocr_text))
         non_retriable_count = sum(1 for b in ctx.blocks if is_non_retriable(b.ocr_text))
+        suspicious_count = sum(1 for b in ctx.blocks if b.ocr_text and is_suspicious_output(b.ocr_text)[0])
 
     if recognized == total_blocks:
         status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
@@ -350,6 +352,7 @@ def finalize(ctx: JobContext) -> dict:
             "recognized_count": recognized,
             "error_count": error_count,
             "non_retriable_count": non_retriable_count,
+            "suspicious_count": suspicious_count,
             "total_blocks": total_blocks,
             "duration_ms": int((time.time() - ctx.start_time) * 1000),
         },

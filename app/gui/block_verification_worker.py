@@ -105,16 +105,35 @@ class VerificationWorker(QThread):
             for match in block_pattern.finditer(ocr_content):
                 result.ocr_html_blocks.add(match.group(1))
 
-        # 3. Загружаем и парсим result.json
+        # Индекс блоков для контентной проверки
+        all_blocks_by_id = {b.id: b for b in result.ann_blocks}
+
+        # 3. Загружаем и парсим result.json + контентная проверка
         self.progress.emit("Загрузка result.json...")
         res_content = r2.download_text(res_r2_key)
         if res_content:
+            from rd_core.ocr_result import is_any_error, is_suspicious_output
+
             res_data = json.loads(res_content)
             for page in res_data.get("pages", []):
                 for block in page.get("blocks", []):
                     block_id = block.get("id", "")
                     if block_id:
                         result.result_blocks.add(block_id)
+
+                    # Контентная проверка OCR-результата
+                    ocr_text = block.get("ocr_text", "")
+                    block_info = all_blocks_by_id.get(block_id)
+                    if block_info and block_info.id in result.expected_blocks:
+                        if ocr_text and is_any_error(ocr_text):
+                            result.error_blocks.append(block_info)
+                            result.error_reasons[block_id] = ocr_text
+                        elif ocr_text:
+                            ocr_html = block.get("ocr_html", "")
+                            suspicious, reason = is_suspicious_output(ocr_text, ocr_html)
+                            if suspicious:
+                                result.suspicious_blocks.append(block_info)
+                                result.suspicious_reasons[block_id] = reason
 
         # 4. Загружаем и парсим document.md
         self.progress.emit("Загрузка document.md...")
