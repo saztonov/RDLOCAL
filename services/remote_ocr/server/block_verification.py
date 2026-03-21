@@ -306,6 +306,8 @@ def verify_and_retry_missing_blocks(
             try:
                 # Создаём Block объект для crop
                 block_obj, _ = Block.from_dict(blk_data, migrate_ids=False)
+                # result.json хранит page_index в 1-based, Block ожидает 0-based
+                block_obj.page_index = item["page_index"]
 
                 # Вырезаем кроп
                 crop = processor.crop_block_image(block_obj, padding=5)
@@ -376,6 +378,9 @@ def verify_and_retry_missing_blocks(
         # Регенерируем HTML и MD
         _regenerate_output_files(result, work_dir, result_json_path)
 
+        # Ресинхронизируем annotation.json с обновлённым result.json
+        _resync_annotation(result, work_dir)
+
     elapsed_total = (time.monotonic() - start_time) / 60
     status_parts = [f"{successful_retries}/{len(missing_blocks)} блоков восстановлено"]
     if total_found > len(missing_blocks):
@@ -396,6 +401,48 @@ def verify_and_retry_missing_blocks(
         },
     )
     return successful_retries > 0
+
+
+def _resync_annotation(result: dict, work_dir: Path):
+    """Ресинхронизировать annotation.json с обновлённым result.json.
+
+    Верификация обновляет ocr_text/ocr_html в result.json, но annotation.json
+    остаётся стейл. Клиент скачивает оба файла, поэтому они должны совпадать.
+    """
+    annotation_path = work_dir / "annotation.json"
+    if not annotation_path.exists():
+        return
+
+    try:
+        with open(annotation_path, "r", encoding="utf-8") as f:
+            ann = json.load(f)
+
+        # Собираем обновлённые ocr_text из result.json по block id
+        result_texts = {}
+        for page in result.get("pages", []):
+            for blk in page.get("blocks", []):
+                bid = blk.get("id")
+                if bid:
+                    result_texts[bid] = (blk.get("ocr_text", ""), blk.get("ocr_html", ""))
+
+        # Обновляем annotation.json
+        updated = 0
+        for page in ann.get("pages", []):
+            for blk in page.get("blocks", []):
+                bid = blk.get("id")
+                if bid in result_texts:
+                    new_text, new_html = result_texts[bid]
+                    old_text = blk.get("ocr_text", "")
+                    if old_text != new_text:
+                        blk["ocr_text"] = new_text
+                        updated += 1
+
+        if updated > 0:
+            with open(annotation_path, "w", encoding="utf-8") as f:
+                json.dump(ann, f, ensure_ascii=False, indent=2)
+            logger.info(f"annotation.json ресинхронизирован ({updated} блоков обновлено)")
+    except Exception as e:
+        logger.warning(f"Ошибка ресинхронизации annotation.json: {e}")
 
 
 def _regenerate_output_files(result: dict, work_dir: Path, result_json_path: Path):

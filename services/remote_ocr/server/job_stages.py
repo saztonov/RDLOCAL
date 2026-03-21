@@ -311,12 +311,26 @@ def finalize(ctx: JobContext) -> dict:
     Returns:
         dict с результатом задачи.
     """
-    blocks = ctx.blocks
     total_blocks = ctx.total_blocks
 
-    recognized = sum(1 for b in blocks if is_success(b.ocr_text))
-    error_count = sum(1 for b in blocks if is_error(b.ocr_text))
-    non_retriable_count = sum(1 for b in blocks if is_non_retriable(b.ocr_text))
+    # Читаем актуальный result.json (может быть обновлён верификацией)
+    result_path = ctx.work_dir / "result.json"
+    if result_path.exists():
+        with open(result_path, "r", encoding="utf-8") as f:
+            result_data = json.load(f)
+        all_ocr_texts = [
+            b.get("ocr_text")
+            for page in result_data.get("pages", [])
+            for b in page.get("blocks", [])
+        ]
+        recognized = sum(1 for t in all_ocr_texts if is_success(t))
+        error_count = sum(1 for t in all_ocr_texts if is_error(t))
+        non_retriable_count = sum(1 for t in all_ocr_texts if is_non_retriable(t))
+    else:
+        # Fallback на ctx.blocks (если result.json не создан)
+        recognized = sum(1 for b in ctx.blocks if is_success(b.ocr_text))
+        error_count = sum(1 for b in ctx.blocks if is_error(b.ocr_text))
+        non_retriable_count = sum(1 for b in ctx.blocks if is_non_retriable(b.ocr_text))
 
     if recognized == total_blocks:
         status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
