@@ -96,6 +96,7 @@ def verify_and_retry_missing_blocks(
     pdf_path: Path,
     work_dir: Path,
     ocr_backend,
+    text_fallback_backend=None,
     on_progress: Callable[[int, int], None] = None,
     job_id: str = None,
 ) -> bool:
@@ -107,11 +108,14 @@ def verify_and_retry_missing_blocks(
         pdf_path: путь к PDF файлу
         work_dir: рабочая директория
         ocr_backend: OCR backend для повторного распознавания (любой OCRBackend)
+        text_fallback_backend: fallback OCR backend для suspicious_output retry
         on_progress: callback (current, total) для обновления прогресса
 
     Returns:
         True если были найдены и обработаны пропущенные блоки
     """
+    from .text_ocr_quality import classify_text_output
+
     if not result_json_path.exists():
         logger.warning(f"result.json не найден: {result_json_path}")
         return False
@@ -121,7 +125,7 @@ def verify_and_retry_missing_blocks(
 
     engine_name = _get_engine_name(ocr_backend)
 
-    # Находим блоки без OCR результата или с ошибками API
+    # Находим блоки без OCR результата, с ошибками API, или с подозрительным output
     missing_blocks = []
     for page in result.get("pages", []):
         for blk in page.get("blocks", []):
@@ -143,13 +147,24 @@ def verify_and_retry_missing_blocks(
             if is_non_retriable(ocr_text):
                 continue
 
-            # Блок нуждается в retry если: нет HTML ИЛИ ocr_text содержит ошибку API
-            has_error = not ocr_html or is_error(ocr_text)
-            if has_error:
+            # Определяем reason для retry
+            reason = None
+            if not ocr_html or is_error(ocr_text):
+                reason = "api_error" if is_error(ocr_text) else "empty"
+            else:
+                # Проверка suspicious output (layout-dump, bbox JSON, etc.)
+                quality = classify_text_output(ocr_text, ocr_html)
+                if quality["quality"] == "suspicious":
+                    reason = "suspicious_output"
+                    logger.info(
+                        f"Блок {block_id}: suspicious output — {quality['reason']}"
+                    )
+
+            if reason:
                 missing_blocks.append({
                     "block": blk,
                     "page_index": blk.get("page_index", 1) - 1,  # Конвертируем в 0-based
-                    "reason": "api_error" if is_error(ocr_text) else "empty",
+                    "reason": reason,
                 })
 
     if not missing_blocks:
@@ -158,15 +173,18 @@ def verify_and_retry_missing_blocks(
 
     total_found = len(missing_blocks)
     error_count = sum(1 for b in missing_blocks if b["reason"] == "api_error")
-    empty_count = total_found - error_count
+    empty_count = sum(1 for b in missing_blocks if b["reason"] == "empty")
+    suspicious_count = sum(1 for b in missing_blocks if b["reason"] == "suspicious_output")
     logger.warning(
         f"Найдено {total_found} нераспознанных текстовых блоков "
-        f"(пустых: {empty_count}, ошибок API: {error_count}), engine: {engine_name}",
+        f"(пустых: {empty_count}, ошибок API: {error_count}, "
+        f"подозрительных: {suspicious_count}), engine: {engine_name}",
         extra={
             "event": "verification_missing_blocks",
             "job_id": job_id,
             "total_blocks": total_found,
             "block_count": error_count,
+            "suspicious_count": suspicious_count,
             "backend": engine_name,
         },
     )
@@ -202,6 +220,8 @@ def verify_and_retry_missing_blocks(
     start_time = time.monotonic()
     stopped_reason = None
     base_delay = _get_chandra_retry_delay()
+
+    fallback_engine_name = _get_engine_name(text_fallback_backend) if text_fallback_backend else None
 
     # Для LM Studio: ждём доступности бэкенда перед началом retry
     if is_lmstudio:
@@ -249,13 +269,24 @@ def verify_and_retry_missing_blocks(
             block_id = blk_data["id"]
             reason = item["reason"]
 
+            # Выбор бэкенда: suspicious_output → fallback (если есть), иначе primary
+            if reason == "suspicious_output" and text_fallback_backend:
+                retry_backend = text_fallback_backend
+                retry_engine = fallback_engine_name
+                method_prefix = "fallback"
+            else:
+                retry_backend = ocr_backend
+                retry_engine = engine_name
+                method_prefix = "retry"
+
             logger.info(
                 f"[{idx+1}/{len(missing_blocks)}] Повторное распознавание блока "
-                f"{block_id} ({reason}), engine: {engine_name}"
+                f"{block_id} ({reason}), engine: {retry_engine}"
             )
 
             # Пауза перед retry с exponential backoff при ошибках
-            if is_lmstudio and idx > 0:
+            # (только для LM Studio primary backend)
+            if _is_lmstudio_backend(retry_backend) and idx > 0:
                 if consecutive_failures > 0:
                     backoff_delay = min(base_delay * (2 ** consecutive_failures), 120)
                     logger.info(
@@ -267,8 +298,8 @@ def verify_and_retry_missing_blocks(
                     time.sleep(base_delay)
 
             # Промежуточная проверка доступности при множественных ошибках
-            if is_lmstudio and consecutive_failures > 0 and consecutive_failures % 3 == 0:
-                if not _check_backend_available(ocr_backend):
+            if _is_lmstudio_backend(retry_backend) and consecutive_failures > 0 and consecutive_failures % 3 == 0:
+                if not _check_backend_available(retry_backend):
                     logger.info("Бэкенд недоступен, ожидание 60с...")
                     time.sleep(60)
 
@@ -288,7 +319,7 @@ def verify_and_retry_missing_blocks(
                 crop.save(crop_path, "PNG")
 
                 # Отправляем на распознавание
-                ocr_text = ocr_backend.recognize(crop)
+                ocr_text = retry_backend.recognize(crop)
                 crop.close()
 
                 if ocr_text and not is_error(ocr_text):
@@ -297,14 +328,37 @@ def verify_and_retry_missing_blocks(
                     blk_data["ocr_html"] = sanitize_html(ocr_text)
                     blk_data["ocr_text"] = ocr_text
                     blk_data["ocr_meta"] = {
-                        "method": [f"retry_{engine_name}"],
+                        "method": [f"{method_prefix}_{retry_engine}"],
                         "match_score": 100.0,
                         "marker_text_sample": "",
                     }
                     successful_retries += 1
                     consecutive_failures = 0
-                    logger.info(f"Блок {block_id} успешно распознан retry ({len(ocr_text)} символов)")
+                    logger.info(f"Блок {block_id} успешно распознан {method_prefix} ({len(ocr_text)} символов)")
                 else:
+                    # Для suspicious_output: если fallback не помог, попробовать primary один раз
+                    if reason == "suspicious_output" and retry_backend is text_fallback_backend:
+                        logger.info(
+                            f"Блок {block_id}: fallback не помог, пробуем primary backend"
+                        )
+                        crop = processor.crop_block_image(block_obj, padding=5)
+                        if crop:
+                            ocr_text = ocr_backend.recognize(crop)
+                            crop.close()
+                            if ocr_text and not is_error(ocr_text):
+                                from rd_core.ocr.generator_common import sanitize_html
+                                blk_data["ocr_html"] = sanitize_html(ocr_text)
+                                blk_data["ocr_text"] = ocr_text
+                                blk_data["ocr_meta"] = {
+                                    "method": [f"retry_{engine_name}"],
+                                    "match_score": 100.0,
+                                    "marker_text_sample": "",
+                                }
+                                successful_retries += 1
+                                consecutive_failures = 0
+                                logger.info(f"Блок {block_id} успешно распознан primary retry ({len(ocr_text)} символов)")
+                                continue
+
                     consecutive_failures += 1
                     logger.warning(f"Блок {block_id} не распознан при retry: {ocr_text[:100] if ocr_text else 'пусто'}")
 

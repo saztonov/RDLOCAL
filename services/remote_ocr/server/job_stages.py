@@ -269,7 +269,10 @@ def generate_and_upload(ctx: JobContext) -> str:
             update_job_status(ctx.job_id, "processing", progress=progress, status_message=status_msg)
 
     r2_prefix = generate_results(
-        ctx.job, ctx.pdf_path, ctx.blocks, ctx.work_dir, ctx.backends.strip, on_verification_progress
+        ctx.job, ctx.pdf_path, ctx.blocks, ctx.work_dir,
+        ctx.backends.strip,
+        text_fallback_backend=ctx.backends.text_fallback,
+        on_verification_progress=on_verification_progress,
     )
 
     # Upload

@@ -66,13 +66,16 @@ def generate_results(
     blocks: list,
     work_dir: Path,
     ocr_backend=None,
+    text_fallback_backend=None,
     on_verification_progress: Callable[[int, int], None] = None,
 ) -> str:
     """Генерация результатов OCR (annotation.json + HTML)"""
     from rd_core.models import Block, Document, Page, ShapeType
+    from rd_core.models.enums import BlockType
     from rd_core.ocr import generate_html_from_pages, generate_md_from_pages
 
     from .pdf_streaming_core import get_page_dimensions_streaming
+    from .text_ocr_quality import filter_mixed_text_output
 
     # Проверяем режим корректировки
     is_correction_mode = job.settings.is_correction_mode if job.settings else False
@@ -81,6 +84,17 @@ def generate_results(
         return _generate_correction_results(
             job, pdf_path, blocks, work_dir, ocr_backend, on_verification_progress
         )
+
+    # Фильтрация image-артефактов из TEXT блоков (mixed-text Chandra output)
+    engine = job.engine or "datalab"
+    for block in blocks:
+        if block.block_type == BlockType.TEXT and block.ocr_text:
+            block.ocr_text, fmeta = filter_mixed_text_output(block.ocr_text, engine)
+            if fmeta.get("removed_image_segments", 0) > 0:
+                logger.info(
+                    f"Block {block.id}: удалено {fmeta['removed_image_segments']} "
+                    f"image сегментов ({fmeta['removed_chars']} символов)"
+                )
 
     # Логирование состояния блоков
     blocks_with_ocr = sum(1 for b in blocks if b.ocr_text)
@@ -213,6 +227,7 @@ def generate_results(
                 pdf_path,
                 work_dir,
                 ocr_backend,
+                text_fallback_backend=text_fallback_backend,
                 on_progress=on_verification_progress,
                 job_id=job.id,
             )
