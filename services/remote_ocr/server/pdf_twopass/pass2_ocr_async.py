@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import os
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -66,6 +67,7 @@ async def pass2_ocr_from_manifest_async(
     max_concurrent: Optional[int] = None,
     checkpoint: Optional[OCRCheckpoint] = None,
     work_dir: Optional[Path] = None,
+    deadline: Optional[float] = None,
 ) -> None:
     """
     PASS 2 ASYNC: Асинхронный OCR с загрузкой кропов с диска.
@@ -216,10 +218,21 @@ async def pass2_ocr_from_manifest_async(
     _IMAGE_MAX_RETRIES = 2 if _is_lmstudio else 1
     _IMAGE_RETRY_DELAYS = [30, 60] if _is_lmstudio else [10]
 
+    # Резерв времени для upload/finalize (секунды)
+    _DEADLINE_RESERVE = 120
+
     async def _process_strip_async(
         strip: StripManifestEntry, strip_idx: int
     ) -> Optional[Tuple[StripManifestEntry, Dict[int, str], int]]:
         if _is_paused():
+            return None
+
+        # Проверка time budget: останавливаемся заранее, чтобы сохранить результаты
+        if deadline and time.time() > deadline - _DEADLINE_RESERVE:
+            logger.warning(
+                f"PASS2 ASYNC: time budget exhausted, пропускаем strip {strip.strip_id}",
+                extra={"event": "pass2_budget_exhausted", "strip_id": strip.strip_id},
+            )
             return None
 
         # Пропускаем уже обработанные strips (checkpoint)
@@ -363,6 +376,14 @@ async def pass2_ocr_from_manifest_async(
         entry: CropManifestEntry,
     ) -> Optional[Tuple[str, str, int, int]]:
         if _is_paused():
+            return None
+
+        # Проверка time budget
+        if deadline and time.time() > deadline - _DEADLINE_RESERVE:
+            logger.warning(
+                f"PASS2 ASYNC: time budget exhausted, пропускаем image {entry.block_id}",
+                extra={"event": "pass2_budget_exhausted", "block_id": entry.block_id},
+            )
             return None
 
         # Пропускаем уже обработанные image блоки (checkpoint)

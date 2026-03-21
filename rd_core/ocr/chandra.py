@@ -31,7 +31,7 @@ class ChandraBackend:
     _MAX_APP_RETRIES = 3
     _APP_RETRY_DELAYS = [30, 60, 120]
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None, http_timeout: int = 90, **kwargs):
         self.base_url = init_base_url(base_url)
         self._model_id: Optional[str] = None
         self._model_lock = threading.Lock()
@@ -40,6 +40,7 @@ class ChandraBackend:
         self._preload_session = create_retry_session(auth=self._auth, preload_mode=True)
         self._deadline: Optional[float] = None
         self._cancel_event: Optional[threading.Event] = None
+        self._http_timeout = http_timeout
         logger.info(f"ChandraBackend инициализирован (base_url: {self.base_url})")
 
     def set_deadline(self, deadline: float) -> None:
@@ -249,11 +250,20 @@ class ChandraBackend:
                     if self._interruptible_sleep(delay):
                         return make_error("Chandra: операция отменена")
 
+                # Проверяем бюджет перед HTTP-запросом (timeout может быть долгим)
+                if self._is_budget_exhausted(self._http_timeout):
+                    logger.warning(
+                        f"Chandra: time budget exhausted before request (attempt {attempt}), aborting"
+                    )
+                    return make_error(
+                        f"Chandra: time budget exhausted перед запросом (attempt {attempt})"
+                    )
+
                 try:
                     response = self.session.post(
                         f"{self.base_url}/v1/chat/completions",
                         headers={"Content-Type": "application/json", "ngrok-skip-browser-warning": "true"},
-                        json=payload, timeout=300,
+                        json=payload, timeout=self._http_timeout,
                     )
                 except requests.exceptions.ConnectionError as e:
                     last_error = f"ConnectionError: {e}"

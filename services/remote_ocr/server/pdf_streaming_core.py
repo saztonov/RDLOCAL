@@ -247,6 +247,25 @@ class StreamingPDFProcessor:
                 return None
 
             nx1, ny1, nx2, ny2 = normalized_coords
+
+            # Пересчёт coords_norm из пространства page.rect в пространство cropbox
+            # Нужен когда cropbox != rect (CAD-чертежи с нестандартным origin)
+            if (abs(rect.x0 - cropbox.x0) > 0.5 or abs(rect.y0 - cropbox.y0) > 0.5
+                    or abs(rect.width - cropbox.width) > 0.5 or abs(rect.height - cropbox.height) > 0.5):
+                if rect.width > 0 and rect.height > 0 and cropbox.width > 0 and cropbox.height > 0:
+                    abs_x1 = rect.x0 + nx1 * rect.width
+                    abs_y1 = rect.y0 + ny1 * rect.height
+                    abs_x2 = rect.x0 + nx2 * rect.width
+                    abs_y2 = rect.y0 + ny2 * rect.height
+                    nx1 = (abs_x1 - cropbox.x0) / cropbox.width
+                    ny1 = (abs_y1 - cropbox.y0) / cropbox.height
+                    nx2 = (abs_x2 - cropbox.x0) / cropbox.width
+                    ny2 = (abs_y2 - cropbox.y0) / cropbox.height
+                    nx1 = max(0.0, min(1.0, nx1))
+                    ny1 = max(0.0, min(1.0, ny1))
+                    nx2 = max(0.0, min(1.0, nx2))
+                    ny2 = max(0.0, min(1.0, ny2))
+
             x1_pt = max(cropbox.x0, cropbox.x0 + nx1 * cropbox.width - padding_pt)
             y1_pt = max(cropbox.y0, cropbox.y0 + ny1 * cropbox.height - padding_pt)
             x2_pt = min(cropbox.x1, cropbox.x0 + nx2 * cropbox.width + padding_pt)

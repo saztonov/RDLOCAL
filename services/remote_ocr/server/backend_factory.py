@@ -67,6 +67,7 @@ def create_job_backends(job) -> JobBackends:
         strip_backend = create_ocr_engine(
             "chandra",
             base_url=settings.chandra_base_url,
+            http_timeout=settings.chandra_http_timeout,
         )
         try:
             strip_backend.preload()

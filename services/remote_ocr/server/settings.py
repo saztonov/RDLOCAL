@@ -127,6 +127,7 @@ class Settings:
     # ===== CHANDRA (LM Studio) =====
     chandra_max_concurrent: int = _cfg("chandra_max_concurrent", "CHANDRA_MAX_CONCURRENT", int)
     chandra_retry_delay: int = _cfg("chandra_retry_delay", "CHANDRA_RETRY_DELAY", int)
+    chandra_http_timeout: int = _cfg("chandra_http_timeout", "CHANDRA_HTTP_TIMEOUT", int)
 
     # ===== QWEN (LM Studio) =====
     qwen_base_url: str = field(

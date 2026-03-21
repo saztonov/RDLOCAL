@@ -27,8 +27,8 @@ def create_retry_session(
         backoff_factor = 1.0
         status_forcelist = (502, 503, 504)
     elif ngrok_mode:
-        total_retries = 6
-        backoff_factor = 2.0
+        total_retries = 2
+        backoff_factor = 1.0
         status_forcelist = (404, 429, 500, 502, 503, 504)
 
     session = requests.Session()

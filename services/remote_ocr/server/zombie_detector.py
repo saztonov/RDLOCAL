@@ -30,7 +30,10 @@ logger = get_logger(__name__)
 ZOMBIE_CHECK_INTERVAL = 300  # 5 минут
 
 # Запас времени сверх динамического threshold (секунды)
-_ZOMBIE_GRACE_SECONDS = 1800  # 30 минут
+_ZOMBIE_GRACE_SECONDS = 900  # 15 минут
+
+# Fast-path: короткий threshold когда Celery inspect подтверждает отсутствие задачи
+_FAST_PATH_THRESHOLD = 600  # 10 минут
 
 # Redis key для double-confirm при недоступном Celery inspect
 _SUSPECTS_KEY = "zombie:suspects"
@@ -144,18 +147,21 @@ def _detect_and_cleanup_zombies() -> int:
         except (ValueError, TypeError, AttributeError):
             continue
 
-        # Динамический threshold по engine
-        threshold = _get_zombie_threshold(job)
-        if age_seconds < threshold:
-            continue
-
         # Проверка наличия в Celery (если доступно)
         if active_task_ids is not None:
             if job.celery_task_id in active_task_ids:
                 _clear_suspect(job.id)
                 continue  # Задача ещё активна в Celery — не зомби
+            # Fast-path: задачи нет в Celery active/reserved →
+            # достаточно короткого threshold (10 мин)
+            if age_seconds < _FAST_PATH_THRESHOLD:
+                continue
         else:
-            # Celery inspect недоступен — требуем double-confirm
+            # Celery inspect недоступен — используем длинный threshold
+            threshold = _get_zombie_threshold(job)
+            if age_seconds < threshold:
+                continue
+            # Требуем double-confirm
             if not _is_confirmed_suspect(job.id):
                 logger.info(
                     f"Zombie detector: {job.id[:8]} — suspect (первое обнаружение, "

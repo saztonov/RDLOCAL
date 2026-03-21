@@ -224,6 +224,11 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
 
 def run_ocr(ctx: JobContext) -> None:
     """Двухпроходный OCR: pass1 (crops) → pass2 (recognition)."""
+    # Вычисляем deadline для PASS2 time budget
+    from .timeout_utils import calculate_dynamic_timeout
+    soft_timeout, _ = calculate_dynamic_timeout(ctx.total_blocks)
+    soft_timeout_at = ctx.start_time + soft_timeout
+
     run_two_pass_ocr(
         ctx.job,
         ctx.pdf_path,
@@ -235,6 +240,7 @@ def run_ocr(ctx: JobContext) -> None:
         ctx.backends.stamp,
         ctx.start_mem,
         engine=ctx.engine,
+        soft_timeout_at=soft_timeout_at,
     )
     force_gc("после OCR обработки")
 
