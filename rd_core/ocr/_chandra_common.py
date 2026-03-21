@@ -29,8 +29,7 @@ Guidelines:
 * Forms: Mark checkboxes and radio buttons properly.
 * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
 * Use the simplest possible HTML structure that accurately represents the content of the block.
-* Make sure the text is accurate and easy for a human to read and interpret. Reading order should be correct and natural.
-* IMPORTANT: Return your result as a JSON object with a single key "ocr_html" containing the HTML string. Example: {{"ocr_html": "<p>recognized text</p>"}}"""
+* Make sure the text is accurate and easy for a human to read and interpret. Reading order should be correct and natural."""
 
 CHANDRA_DEFAULT_SYSTEM = (
     "You are a specialist OCR system for Russian construction documentation "
@@ -50,26 +49,6 @@ CHANDRA_LOAD_CONFIG = {
     "flash_attention": True,
     "eval_batch_size": 512,
     "offload_kv_cache_to_gpu": True,
-}
-
-# Structured output schema для LM Studio — заставляет модель возвращать JSON
-# вместо free-form text, предотвращая утечку reasoning в content.
-CHANDRA_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "ocr_result",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "ocr_html": {
-                    "type": "string",
-                    "description": "OCR result as clean HTML",
-                },
-            },
-            "required": ["ocr_html"],
-        },
-    },
 }
 
 # Retry конфигурация
@@ -135,7 +114,6 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
         "top_k": 40,
         "repetition_penalty": 1.1,
         "min_p": 0.05,
-        "response_format": CHANDRA_RESPONSE_FORMAT,
     }
 
 
