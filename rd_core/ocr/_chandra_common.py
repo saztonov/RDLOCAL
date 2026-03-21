@@ -1,10 +1,11 @@
 """Общая логика для sync/async Chandra бэкендов."""
 import logging
 import os
+import re
 from typing import Optional, Tuple
 
 from rd_core.ocr_result import make_error, make_non_retriable
-from rd_core.ocr.utils import strip_think_tags, strip_untagged_reasoning
+from rd_core.ocr.utils import extract_message_text, strip_think_tags
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +116,99 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
     }
 
 
+# Regex для поиска первого HTML-тега в тексте (OCR-контент Chandra)
+_HTML_TAG_RE = re.compile(
+    r'<(?:p|table|h[1-6]|div|ul|ol|span|br|hr|math|input|thead|tbody|tr|th|td)\b',
+    re.IGNORECASE,
+)
+
+
+def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
+    """Обрезать reasoning-текст перед HTML в reasoning_content ответе.
+
+    Вызывается ТОЛЬКО для текста из reasoning_content (не content),
+    поэтому любой текст до первого HTML-тега — гарантированно reasoning.
+
+    Returns:
+        (cleaned_text, stripped_chars) — очищенный текст и кол-во удалённых символов.
+    """
+    if not text:
+        return text, 0
+
+    stripped = text.lstrip()
+    if stripped.startswith('<'):
+        return text, 0
+
+    match = _HTML_TAG_RE.search(text)
+    if not match:
+        return text, 0  # нет HTML — может быть plain text OCR
+
+    reasoning_len = match.start()
+    return text[match.start():], reasoning_len
+
+
+def _normalize_chandra_response(message: dict) -> Tuple[str, str]:
+    """Нормализовать ответ Chandra: извлечь OCR-текст из content или reasoning_content.
+
+    Порядок: content (str/list) → reasoning_content (с очисткой reasoning).
+    Структурированное логирование источника и метрик.
+
+    Returns:
+        (text, source) — OCR-текст и источник ("content" | "reasoning_content" | "empty").
+    """
+    # 1. Извлечь content (поддержка str и list форматов)
+    raw_content = message.get("content")
+    if isinstance(raw_content, list):
+        content = extract_message_text(message)
+    elif isinstance(raw_content, str):
+        content = raw_content.strip()
+    else:
+        content = ""
+
+    if content:
+        logger.debug(
+            f"Chandra: ответ из content ({len(content)} симв.)",
+        )
+        return content, "content"
+
+    # 2. Fallback: reasoning_content
+    reasoning = (message.get("reasoning_content") or "").strip()
+    if not reasoning:
+        return "", "empty"
+
+    logger.info(
+        f"Chandra: content пуст, используем reasoning_content "
+        f"({len(reasoning)} симв.)"
+    )
+
+    # Очистка: <think> теги → reasoning-проза перед HTML
+    text = strip_think_tags(reasoning, backend_name="Chandra")
+    text, stripped_chars = _strip_reasoning_before_html(text)
+    text = text.strip()
+
+    if stripped_chars > 0:
+        logger.warning(
+            f"Chandra: обрезан reasoning из reasoning_content "
+            f"({stripped_chars} симв. удалено, {len(text)} симв. OCR осталось)",
+        )
+
+    logger.warning(
+        "Chandra: LM Studio вернул OCR в reasoning_content "
+        "(возможная несовместимость версий LM Studio/SDK)",
+    )
+
+    return text, "reasoning_content"
+
+
 def parse_response(response_json: dict) -> str:
     """Парсинг ответа Chandra API. Возвращает текст или сообщение об ошибке.
 
     LM Studio может возвращать OCR-результат в reasoning_content вместо content
-    (поведение reasoning/thinking моделей). Если content пуст — используем
-    reasoning_content с очисткой от reasoning-текста.
+    (поведение reasoning/thinking моделей). Нормализация через
+    _normalize_chandra_response() обеспечивает:
+    - Поддержку str и list форматов content
+    - Автоматическую очистку reasoning-прозы из reasoning_content
+    - Структурированное логирование источника ответа
     """
     if "choices" not in response_json or not response_json["choices"]:
         err_msg = response_json.get("error", response_json)
@@ -128,19 +216,7 @@ def parse_response(response_json: dict) -> str:
         return make_error(f"Chandra: некорректный ответ ({err_msg})")
 
     message = response_json["choices"][0]["message"]
-    text = (message.get("content") or "").strip()
-
-    if not text:
-        # Fallback: модель может вернуть OCR в reasoning_content
-        reasoning = (message.get("reasoning_content") or "").strip()
-        if reasoning:
-            logger.info(
-                f"Chandra: content пуст, используем reasoning_content "
-                f"({len(reasoning)} симв.)"
-            )
-            text = strip_think_tags(reasoning, backend_name="Chandra")
-            text = strip_untagged_reasoning(text, backend_name="Chandra")
-            text = text.strip()
+    text, source = _normalize_chandra_response(message)
 
     if not text:
         logger.warning("Chandra OCR: получен пустой ответ от модели")

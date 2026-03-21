@@ -46,10 +46,14 @@ def strip_think_tags(text: str, backend_name: str = "LLM") -> str:
 _REASONING_PREFIX_RE = re.compile(
     r'^(?:'
     r'\d+\.\s+\*\*|'                                                    # "1. **Analyze..."
-    r'(?:Let me|I need to|I will|First[,.]|Looking at|Analyzing|'
+    r'(?:Let me|I need to|I will|I should|I see|I can|'
+    r'First[,.]|Looking at|Analyzing|'
+    r'The user|The input|The image|The document|The table|'
+    r'This is|This looks|Here |Now |OK |Sure |Based on|Alright|'
     r'To (?:analyze|process|extract|transcribe))\b|'                    # English reasoning
     r'\*\*(?:Analyze|Step|Plan|Approach|Solution|Observation)\b|'        # **Analysis...
-    r'(?:Давай|Мне нужно|Сначала|Анализируя|Рассмотрим)\b'              # Russian reasoning
+    r'(?:Давай|Мне нужно|Сначала|Анализируя|Рассмотрим|'
+    r'Пользователь|Входные данные|На изображении)\b'                     # Russian reasoning
     r')',
     re.IGNORECASE
 )
