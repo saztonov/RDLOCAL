@@ -99,6 +99,7 @@ def verify_and_retry_missing_blocks(
     text_fallback_backend=None,
     on_progress: Callable[[int, int], None] = None,
     job_id: str = None,
+    deadline: float | None = None,
 ) -> bool:
     """
     Верификация блоков после OCR и повторное распознавание пропущенных.
@@ -107,9 +108,11 @@ def verify_and_retry_missing_blocks(
         result_json_path: путь к result.json
         pdf_path: путь к PDF файлу
         work_dir: рабочая директория
-        ocr_backend: OCR backend для повторного распознавания (любой OCRBackend)
+        ocr_backend: OCR backend для повторного распознавание (любой OCRBackend)
         text_fallback_backend: fallback OCR backend для suspicious_output retry
         on_progress: callback (current, total) для обновления прогресса
+        deadline: абсолютное время (time.time()) до которого нужно завершить верификацию.
+            Если задан — заменяет verification_timeout_minutes.
 
     Returns:
         True если были найдены и обработаны пропущенные блоки
@@ -200,6 +203,30 @@ def verify_and_retry_missing_blocks(
     if is_lmstudio:
         timeout_min = max(timeout_min, 30)
 
+    # Если передан deadline задачи — используем его вместо timeout_min.
+    # Резервируем 60с на сохранение результатов и upload.
+    _VERIFICATION_RESERVE = 60
+    if deadline is not None:
+        remaining = deadline - time.time() - _VERIFICATION_RESERVE
+        if remaining <= 0:
+            logger.warning(
+                f"Верификация пропущена: до deadline задачи осталось {remaining + _VERIFICATION_RESERVE:.0f}с"
+            )
+            return False
+        # Пересчитываем timeout_min на основе deadline
+        timeout_min = remaining / 60
+        logger.info(
+            f"Верификация: deadline задачи через {remaining:.0f}с ({timeout_min:.1f} мин)"
+        )
+
+    # Обновляем deadline для backend (Chandra) — иначе _is_budget_exhausted сразу True
+    if deadline is not None:
+        verification_deadline = deadline - _VERIFICATION_RESERVE
+        if hasattr(ocr_backend, "set_deadline"):
+            ocr_backend.set_deadline(verification_deadline)
+        if text_fallback_backend and hasattr(text_fallback_backend, "set_deadline"):
+            text_fallback_backend.set_deadline(verification_deadline)
+
     if max_blocks > 0 and len(missing_blocks) > max_blocks:
         logger.warning(
             f"Ограничение верификации: {len(missing_blocks)} -> {max_blocks} блоков"
@@ -216,10 +243,13 @@ def verify_and_retry_missing_blocks(
 
     successful_retries = 0
     consecutive_failures = 0
+    consecutive_budget_exhausted = 0  # счётчик "time budget exhausted" ошибок подряд
     MAX_CONSECUTIVE_FAILURES = 10
+    MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK = 3  # после 3 budget exhausted — переключаемся на fallback
     start_time = time.monotonic()
     stopped_reason = None
     base_delay = _get_chandra_retry_delay()
+    primary_backend_disabled = False  # True если primary отказал, используем только fallback
 
     fallback_engine_name = _get_engine_name(text_fallback_backend) if text_fallback_backend else None
 
@@ -269,8 +299,12 @@ def verify_and_retry_missing_blocks(
             block_id = blk_data["id"]
             reason = item["reason"]
 
-            # Выбор бэкенда: suspicious_output → fallback (если есть), иначе primary
-            if reason == "suspicious_output" and text_fallback_backend:
+            # Выбор бэкенда: suspicious_output или primary disabled → fallback
+            use_fallback = (
+                (reason == "suspicious_output" and text_fallback_backend)
+                or (primary_backend_disabled and text_fallback_backend)
+            )
+            if use_fallback:
                 retry_backend = text_fallback_backend
                 retry_engine = fallback_engine_name
                 method_prefix = "fallback"
@@ -289,12 +323,21 @@ def verify_and_retry_missing_blocks(
             if _is_lmstudio_backend(retry_backend) and idx > 0:
                 if consecutive_failures > 0:
                     backoff_delay = min(base_delay * (2 ** consecutive_failures), 120)
+                    # Проверяем deadline ПЕРЕД sleep — избегаем SoftTimeLimitExceeded
+                    if deadline is not None and time.time() + backoff_delay > deadline - _VERIFICATION_RESERVE:
+                        stopped_reason = f"deadline задачи (до sleep {backoff_delay}с)"
+                        logger.warning(f"Верификация прервана: {stopped_reason}")
+                        break
                     logger.info(
                         f"Backoff delay: {backoff_delay}с "
                         f"(consecutive_failures={consecutive_failures})"
                     )
                     time.sleep(backoff_delay)
                 else:
+                    if deadline is not None and time.time() + base_delay > deadline - _VERIFICATION_RESERVE:
+                        stopped_reason = "deadline задачи (до sleep base_delay)"
+                        logger.warning(f"Верификация прервана: {stopped_reason}")
+                        break
                     time.sleep(base_delay)
 
             # Промежуточная проверка доступности при множественных ошибках
@@ -362,6 +405,31 @@ def verify_and_retry_missing_blocks(
                                 continue
 
                     consecutive_failures += 1
+                    # Детектируем "time budget exhausted" — бесполезные retry
+                    if ocr_text and "budget exhausted" in ocr_text:
+                        consecutive_budget_exhausted += 1
+                        if (
+                            consecutive_budget_exhausted >= MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK
+                            and not primary_backend_disabled
+                        ):
+                            if text_fallback_backend:
+                                primary_backend_disabled = True
+                                consecutive_failures = 0
+                                consecutive_budget_exhausted = 0
+                                logger.warning(
+                                    f"Primary backend ({engine_name}) отключён после "
+                                    f"{MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK} 'budget exhausted' ошибок, "
+                                    f"переключение на fallback ({fallback_engine_name})"
+                                )
+                            else:
+                                stopped_reason = (
+                                    f"primary backend budget exhausted × {consecutive_budget_exhausted}, "
+                                    "fallback недоступен"
+                                )
+                                logger.warning(f"Верификация прервана: {stopped_reason}")
+                                break
+                    else:
+                        consecutive_budget_exhausted = 0
                     logger.warning(f"Блок {block_id} не распознан при retry: {ocr_text[:100] if ocr_text else 'пусто'}")
 
             except Exception as e:

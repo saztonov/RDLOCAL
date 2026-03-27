@@ -30,8 +30,11 @@ def count_blocks_from_data(blocks_data: Union[list, dict]) -> int:
 def calculate_dynamic_timeout(block_count: int) -> tuple[int, int]:
     """Рассчитать динамический таймаут на основе количества блоков.
 
-    Формула: base + (block_count * seconds_per_block)
+    Формула: base + (block_count * seconds_per_block) + verification_buffer
     Результат ограничен min_task_timeout и max_task_timeout.
+
+    verification_buffer: min(block_count * 5, verification_timeout_minutes * 60)
+    — резерв на верификацию пропущенных блоков.
 
     Args:
         block_count: Количество блоков в документе
@@ -39,9 +42,17 @@ def calculate_dynamic_timeout(block_count: int) -> tuple[int, int]:
     Returns:
         Tuple (soft_timeout, hard_timeout) в секундах
     """
-    soft_timeout = settings.dynamic_timeout_base + (
+    ocr_timeout = settings.dynamic_timeout_base + (
         block_count * settings.seconds_per_block
     )
+
+    # Резерв на верификацию: пропорционально блокам, но не больше verification_timeout
+    verification_buffer = min(
+        block_count * 5,
+        settings.verification_timeout_minutes * 60,
+    )
+
+    soft_timeout = ocr_timeout + verification_buffer
     soft_timeout = max(
         settings.min_task_timeout, min(soft_timeout, settings.max_task_timeout)
     )
@@ -52,7 +63,8 @@ def calculate_dynamic_timeout(block_count: int) -> tuple[int, int]:
     logger.info(
         f"Динамический таймаут: soft={soft_timeout}s, hard={hard_timeout}s "
         f"для {block_count} блоков "
-        f"(base={settings.dynamic_timeout_base}, per_block={settings.seconds_per_block})"
+        f"(base={settings.dynamic_timeout_base}, per_block={settings.seconds_per_block}, "
+        f"verification_buffer={verification_buffer}s)"
     )
 
     return soft_timeout, hard_timeout

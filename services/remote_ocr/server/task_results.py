@@ -68,6 +68,7 @@ def generate_results(
     ocr_backend=None,
     text_fallback_backend=None,
     on_verification_progress: Callable[[int, int], None] = None,
+    verification_deadline: float | None = None,
 ) -> str:
     """Генерация результатов OCR (annotation.json + HTML)"""
     from rd_core.models import Block, Document, Page, ShapeType
@@ -244,6 +245,7 @@ def generate_results(
                 text_fallback_backend=text_fallback_backend,
                 on_progress=on_verification_progress,
                 job_id=job.id,
+                deadline=verification_deadline,
             )
         except Exception as e:
             logger.warning(f"Ошибка верификации блоков: {e}", exc_info=True)

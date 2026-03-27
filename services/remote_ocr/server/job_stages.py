@@ -268,11 +268,17 @@ def generate_and_upload(ctx: JobContext) -> str:
         else:
             update_job_status(ctx.job_id, "processing", progress=progress, status_message=status_msg)
 
+    # Вычисляем deadline для верификации (= soft_timeout задачи)
+    from .timeout_utils import calculate_dynamic_timeout as _calc_timeout
+    _soft_timeout, _ = _calc_timeout(ctx.total_blocks)
+    _verification_deadline = ctx.start_time + _soft_timeout
+
     r2_prefix = generate_results(
         ctx.job, ctx.pdf_path, ctx.blocks, ctx.work_dir,
         ctx.backends.strip,
         text_fallback_backend=ctx.backends.text_fallback,
         on_verification_progress=on_verification_progress,
+        verification_deadline=_verification_deadline,
     )
 
     # Upload

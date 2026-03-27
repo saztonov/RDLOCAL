@@ -12,7 +12,7 @@ max_concurrent_jobs: 4
 worker_prefetch: 1
 # Перезапуск воркера после N задач (защита от утечек памяти)
 # Низкое значение = агрессивный recycling процессов для предотвращения memory carry-over
-worker_max_tasks: 5
+worker_max_tasks: 3
 # Soft таймаут задачи, секунды (предупреждение)
 task_soft_timeout: 3600
 # Hard таймаут задачи, секунды (принудительное завершение)
@@ -62,8 +62,8 @@ chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2
 # HTTP таймаут для Chandra запросов, секунды (LM Studio через ngrok)
-# Снижен с 300 до 90: LM Studio отвечает за <60s, 300s вызывал каскадные зависания
-chandra_http_timeout: 90
+# Снижен с 90 до 60: LM Studio отвечает за <60s, 90s × 3 retry = 270s каскадного зависания
+chandra_http_timeout: 60
 
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
