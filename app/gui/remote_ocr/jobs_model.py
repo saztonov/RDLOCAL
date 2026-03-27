@@ -19,6 +19,7 @@ def _get_status_text(status: str) -> str:
         "queued": "⏳ В очереди",
         "processing": "🔄 Обработка",
         "done": "✅ Готово",
+        "partial": "⚠️ Частично",
         "error": "❌ Ошибка",
         "paused": "⏸️ Пауза",
         "cancelled": "🚫 Отменено",

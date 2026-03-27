@@ -340,17 +340,29 @@ def finalize(ctx: JobContext) -> dict:
         non_retriable_count = sum(1 for b in ctx.blocks if is_non_retriable(b.ocr_text))
         suspicious_count = sum(1 for b in ctx.blocks if b.ocr_text and is_suspicious_output(b.ocr_text)[0])
 
-    if recognized == total_blocks:
-        status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
-    elif recognized > 0:
-        status_msg = f"⚠️ Частично: {recognized}/{total_blocks} блоков распознано"
-    else:
+    # Определяем финальный статус на основе coverage
+    coverage = recognized / total_blocks if total_blocks > 0 else 0
+    if recognized == 0:
+        final_status = "error"
         status_msg = f"❌ Ошибка: 0/{total_blocks} блоков распознано"
+    elif coverage < 0.9:
+        final_status = "partial"
+        status_msg = f"⚠️ Частично: {recognized}/{total_blocks} блоков распознано ({coverage:.0%})"
+    else:
+        final_status = "done"
+        status_msg = f"✅ Завершено: {recognized}/{total_blocks} блоков"
 
-    update_job_status(ctx.job_id, "done", progress=1.0, status_message=status_msg)
+    if final_status == "error":
+        update_job_status(
+            ctx.job_id, "error", progress=1.0,
+            status_message=status_msg,
+            error_message=f"0/{total_blocks} блоков распознано",
+        )
+    else:
+        update_job_status(ctx.job_id, final_status, progress=1.0, status_message=status_msg)
 
     logger.info(
-        f"Задача {ctx.job_id} завершена: {recognized}/{total_blocks} блоков распознано",
+        f"Задача {ctx.job_id} завершена: {recognized}/{total_blocks} блоков распознано → {final_status}",
         extra={
             "event": "task_completed",
             "job_id": ctx.job_id,
@@ -360,11 +372,13 @@ def finalize(ctx: JobContext) -> dict:
             "non_retriable_count": non_retriable_count,
             "suspicious_count": suspicious_count,
             "total_blocks": total_blocks,
+            "coverage": round(coverage, 3),
+            "final_status": final_status,
             "duration_ms": int((time.time() - ctx.start_time) * 1000),
         },
     )
 
-    return {"status": "done", "job_id": ctx.job_id}
+    return {"status": final_status, "job_id": ctx.job_id}
 
 
 # ── Error handler ─────────────────────────────────────────────────────

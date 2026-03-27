@@ -569,7 +569,7 @@ class JobsController(QObject):
     def mark_node_downloads_complete(self, node_id: str) -> None:
         """Пометить done-джобы для node как скачанные (вызывается из file_download)."""
         for job_id, job in self._jobs_cache.items():
-            if job.status == "done" and getattr(job, "node_id", None) == node_id:
+            if job.status in ("done", "partial") and getattr(job, "node_id", None) == node_id:
                 self._downloaded_jobs.add(job_id)
 
     def update_ocr_stats(self) -> None:
@@ -945,11 +945,11 @@ class JobsController(QObject):
         if has_active_for_node:
             return
 
-        # Ищем самый новый done-job, который ещё не скачан
+        # Ищем самый новый done/partial-job, который ещё не скачан
         latest_done = None
         for job in reversed(jobs):
             if (
-                job.status == "done"
+                job.status in ("done", "partial")
                 and getattr(job, "node_id", None) == current_node_id
                 and job.id not in self._downloaded_jobs
                 and job.id not in self._downloading_jobs
@@ -976,13 +976,17 @@ class JobsController(QObject):
             from app.gui.toast import show_toast
 
             doc_name = latest_done.task_name or latest_done.document_name or ""
+            if latest_done.status == "partial":
+                toast_msg = f"OCR частично завершён: {doc_name}"
+            else:
+                toast_msg = f"OCR завершён: {doc_name}"
             show_toast(
                 self.main_window,
-                f"OCR завершён: {doc_name}",
+                toast_msg,
                 duration=5000,
             )
             logger.info(
-                f"Задача {latest_done.id[:8]}... завершена "
+                f"Задача {latest_done.id[:8]}... завершена ({latest_done.status}) "
                 f"(панель скрыта), показано уведомление"
             )
 

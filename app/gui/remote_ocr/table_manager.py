@@ -162,11 +162,11 @@ class TableManagerMixin:
                     for j in jobs
                 )
                 if not has_active_for_node:
-                    # Ищем самый новый done-джоб, который ещё не скачан
+                    # Ищем самый новый done/partial-джоб, который ещё не скачан
                     latest_done = None
                     for job in reversed(jobs):
                         if (
-                            job.status == "done"
+                            job.status in ("done", "partial")
                             and getattr(job, "node_id", None) == current_node_id
                             and job.id not in self._downloaded_jobs
                         ):
@@ -177,13 +177,17 @@ class TableManagerMixin:
                             from app.gui.toast import show_toast
 
                             doc_name = latest_done.task_name or latest_done.document_name or ""
+                            if latest_done.status == "partial":
+                                toast_msg = f"OCR частично завершён: {doc_name}"
+                            else:
+                                toast_msg = f"OCR завершён: {doc_name}"
                             show_toast(
                                 self.main_window,
-                                f"OCR завершён: {doc_name}",
+                                toast_msg,
                                 duration=5000,
                             )
                             logger.info(
-                                f"Задача {latest_done.id[:8]}... завершена "
+                                f"Задача {latest_done.id[:8]}... завершена ({latest_done.status}) "
                                 f"(панель скрыта), показано уведомление"
                             )
                         self._auto_download_result(latest_done.id)
@@ -322,6 +326,7 @@ class TableManagerMixin:
             "queued": "⏳ В очереди",
             "processing": "🔄 Обработка",
             "done": "✅ Готово",
+            "partial": "⚠️ Частично",
             "error": "❌ Ошибка",
             "paused": "⏸️ Пауза",
             "cancelled": "🚫 Отменено",

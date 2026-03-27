@@ -162,7 +162,7 @@ def download_result_handler(
 
     job = require_job(job_id)
 
-    if job.status != "done":
+    if job.status not in ("done", "partial"):
         raise HTTPException(
             status_code=400, detail=f"Job not ready, status: {job.status}"
         )
