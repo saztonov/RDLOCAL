@@ -5,7 +5,7 @@
 ### Установка зависимостей
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Настройка окружения
@@ -17,7 +17,8 @@ pip install -r requirements.txt
 REMOTE_OCR_BASE_URL=http://localhost:8000
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_anon_key
-OPENROUTER_API_KEY=sk-or-...
+CHANDRA_BASE_URL=http://localhost:1234
+QWEN_BASE_URL=http://localhost:1234
 
 # R2 Storage (для промптов и результатов)
 R2_ACCOUNT_ID=your_account_id
@@ -107,8 +108,8 @@ job = client.create_job(
     pdf_path="document.pdf",
     selected_blocks=blocks,
     task_name="OCR Task",
-    engine="openrouter",
-    text_model="qwen/qwen3-vl-30b-a3b-instruct"
+    engine="chandra",
+    text_model="chandra-ocr-2"
 )
 print(f"Задача создана: {job.id}, статус: {job.status}")
 
@@ -132,7 +133,7 @@ draft = client.create_draft(
 )
 
 # Запуск черновика на OCR
-client.start_job(draft.id, engine="openrouter")
+client.start_job(draft.id, engine="chandra")
 
 # Управление задачей
 client.pause_job(job.id)
@@ -249,11 +250,10 @@ rd1/
 from rd_core.ocr import create_ocr_engine
 from PIL import Image
 
-# OpenRouter (VLM модели)
+# Chandra (LM Studio)
 engine = create_ocr_engine(
-    backend="openrouter",
-    api_key="sk-or-...",
-    model_name="qwen/qwen3-vl-30b-a3b-instruct"
+    backend="chandra",
+    base_url="http://host.docker.internal:1234"
 )
 
 image = Image.open("page.png")
@@ -263,18 +263,6 @@ text = engine.recognize(
         "system": "You are an OCR expert...",
         "user": "Extract text from this image."
     }
-)
-
-# Datalab (Marker API)
-engine = create_ocr_engine(
-    backend="datalab",
-    api_key="..."
-)
-
-# Chandra (LM Studio)
-engine = create_ocr_engine(
-    backend="chandra",
-    base_url="http://host.docker.internal:1234"
 )
 
 # Qwen (LM Studio, два режима)
@@ -565,8 +553,8 @@ def process_blocks(
 
 ### OCR не работает
 
-1. Проверьте `OPENROUTER_API_KEY` или `DATALAB_API_KEY`
-2. Проверьте баланс на OpenRouter
+1. Проверьте `CHANDRA_BASE_URL`
+2. Убедитесь что LM Studio запущен
 3. Увеличьте таймаут для больших изображений
 
 ### Celery worker не стартует

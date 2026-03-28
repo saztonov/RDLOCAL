@@ -31,7 +31,7 @@
 |-----------|------------|
 | GUI | PySide6 (Qt 6) |
 | PDF | PyMuPDF (fitz) |
-| OCR | OpenRouter API, Datalab API, LM Studio (Chandra, Qwen) |
+| OCR | LM Studio (Chandra, Qwen) |
 | Storage | Cloudflare R2 (S3-совместимое) |
 | Database | Supabase (PostgreSQL) |
 | Queue | Celery + Redis |
@@ -312,7 +312,7 @@ services/remote_ocr/server/
 ├── settings.py          # Конфигурация (config.yaml → env → default)
 ├── celery_app.py        # Конфигурация Celery
 ├── tasks.py             # Celery задача run_ocr_task
-├── rate_limiter.py      # Rate limiting для Datalab API
+├── rate_limiter.py      # Rate limiting для API
 ├── worker_pdf.py        # Работа с PDF
 │
 ├── routes/              # API endpoints
@@ -533,24 +533,6 @@ class OCRBackend(Protocol):
         """Поддерживает ли бэкенд прямую отправку PDF"""
 ```
 
-### OpenRouterBackend
-
-Использует OpenRouter API для доступа к VLM-моделям:
-
-```python
-class OpenRouterBackend:
-    DEFAULT_MODEL = "qwen/qwen3-vl-30b-a3b-instruct"
-```
-
-Особенности:
-- Автоматический выбор дешевейшего провайдера
-- Поддержка Gemini 3 (отправка PDF вместо PNG)
-- Auto-detect JSON mode по тексту промпта
-
-### DatalabOCRBackend
-
-Использует Datalab Marker API для сегментации и OCR. Async polling до готовности.
-
 ### ChandraBackend
 
 LM Studio через OpenAI-совместимый API:
@@ -576,13 +558,13 @@ class QwenBackend:
 
 ```python
 def create_ocr_engine(backend: str = "dummy", **kwargs) -> OCRBackend:
-    # Поддерживаемые бэкенды: openrouter, datalab, chandra, qwen, dummy
+    # Поддерживаемые бэкенды: chandra, qwen, dummy
 ```
 
 На сервере `backend_factory.py` создаёт тройку бэкендов на основе engine:
-- `strip_backend` — для TEXT блоков (chandra/qwen → datalab → openrouter)
-- `image_backend` — для IMAGE блоков (openrouter → dummy)
-- `stamp_backend` — для штампов (qwen stamp mode → openrouter → dummy)
+- `strip_backend` — для TEXT блоков (ChandraBackend)
+- `image_backend` — для IMAGE блоков (QwenBackend)
+- `stamp_backend` — для штампов (QwenBackend, shared instance)
 
 ---
 
@@ -609,7 +591,7 @@ Form fields:
   - document_id: str (SHA256 хеш PDF)
   - document_name: str
   - task_name: str
-  - engine: str (openrouter|datalab|chandra|qwen)
+  - engine: str (lmstudio|chandra)
   - text_model: str
   - table_model: str
   - image_model: str
@@ -730,7 +712,7 @@ DELETE /jobs/{job_id}        → {"ok": true, "deleted_job_id": "..."}
 | task_name | text | Название задачи |
 | status | text | draft\|queued\|processing\|done\|error\|paused |
 | progress | real | Прогресс 0..1 |
-| engine | text | openrouter\|datalab\|chandra\|qwen |
+| engine | text | lmstudio\|chandra |
 | r2_prefix | text | Префикс в R2 |
 | error_message | text | Сообщение об ошибке |
 | created_at | timestamptz | |
@@ -798,10 +780,6 @@ R2_SECRET_ACCESS_KEY=your_secret_key
 R2_BUCKET_NAME=rd1
 R2_PUBLIC_URL=https://pub-xxxxx.r2.dev
 
-# OCR API Keys
-OPENROUTER_API_KEY=sk-or-...
-DATALAB_API_KEY=...
-
 # Redis (для Celery)
 REDIS_URL=redis://redis:6379/0
 
@@ -823,7 +801,6 @@ services:
     environment:
       - SUPABASE_URL
       - SUPABASE_KEY
-      - OPENROUTER_API_KEY
       - REDIS_URL=redis://redis:6379/0
     depends_on: [redis]
 

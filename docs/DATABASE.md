@@ -124,7 +124,7 @@ CREATE TABLE jobs (
 | `task_name` | text | Название задачи (пользовательское) |
 | `status` | text | Статус: `draft`, `queued`, `processing`, `done`, `error`, `paused` |
 | `progress` | real | Прогресс выполнения (0.0 - 1.0) |
-| `engine` | text | OCR движок: `openrouter`, `datalab`, `chandra`, `qwen` |
+| `engine` | text | OCR движок: `lmstudio`, `chandra` |
 | `r2_prefix` | text | Префикс файлов в R2 (`ocr_jobs/{job_id}`) |
 | `error_message` | text | Сообщение об ошибке (если status=error) |
 | `created_at` | timestamptz | Дата создания |
@@ -238,9 +238,9 @@ CREATE TABLE job_settings (
 
 | Поле | Пример значения |
 |------|-----------------|
-| `text_model` | `qwen/qwen3-vl-30b-a3b-instruct` (OpenRouter) или `qwen3.5-9b` (LM Studio) |
-| `table_model` | `google/gemini-2.5-flash-preview-05-20` |
-| `image_model` | `openai/gpt-4o` |
+| `text_model` | `qwen3.5-9b` (LM Studio) |
+| `table_model` | `qwen3.5-9b` (LM Studio) |
+| `image_model` | `qwen3.5-9b` (LM Studio) |
 | `stamp_model` | `qwen3.5-9b` (LM Studio Qwen stamp mode) |
 
 ---

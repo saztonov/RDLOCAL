@@ -74,9 +74,9 @@ R2_SECRET_ACCESS_KEY=your_secret_key
 R2_BUCKET_NAME=rd1
 R2_PUBLIC_URL=https://pub-xxxxx.r2.dev
 
-# OCR API Keys
-OPENROUTER_API_KEY=sk-or-...
-DATALAB_API_KEY=...
+# OCR API Keys (облачные движки удалены, используется только LM Studio)
+# OPENROUTER_API_KEY=  # deprecated, не используется
+# DATALAB_API_KEY=     # deprecated, не используется
 
 # Опциональные
 REMOTE_OCR_API_KEY=        # Если задан — требуется X-API-Key
@@ -98,7 +98,7 @@ QWEN_BASE_URL=             # Fallback → CHANDRA_BASE_URL
 Ключевые секции:
 - **celery_worker**: max_concurrent_jobs, soft/hard timeouts, max_tasks
 - **ocr_threading**: max_global_ocr_requests, ocr_threads_per_job, timeout
-- **datalab_api**: rpm_limit, concurrent_requests, polling_interval
+- **datalab_api**: rpm_limit, concurrent_requests, polling_interval (legacy, не используется)
 - **chandra / qwen**: max_concurrent, retry_delay
 - **ocr_settings**: png_compress_level, max_batch_size, dpi, max_strip_height
 - **dynamic_timeout**: base, seconds_per_block, min, max
@@ -137,7 +137,7 @@ Form fields:
   document_id: string (SHA256 хеш PDF)
   document_name: string
   task_name: string
-  engine: string (openrouter|datalab|chandra|qwen)
+  engine: string (lmstudio|chandra)
   text_model: string
   table_model: string
   image_model: string
@@ -188,8 +188,8 @@ POST /jobs/{job_id}/start
 Content-Type: application/x-www-form-urlencoded
 
 Body:
-  engine=openrouter
-  text_model=qwen/qwen3-vl-30b
+  engine=lmstudio
+  text_model=qwen3.5-9b
   table_model=
   image_model=
 
@@ -236,7 +236,7 @@ Response 200:
   "task_name": "Task 1",
   "status": "done",
   "progress": 1.0,
-  "engine": "openrouter",
+  "engine": "lmstudio",
   "r2_prefix": "ocr_jobs/uuid",
   "error_message": null,
   "created_at": "...",
@@ -258,7 +258,7 @@ Response 200:
     "image": 7
   },
   "job_settings": {
-    "text_model": "qwen/qwen3-vl-30b",
+    "text_model": "qwen3.5-9b",
     "table_model": "",
     "image_model": ""
   },
@@ -416,31 +416,8 @@ finally:
 
 ## Rate Limiter
 
-### Datalab API Limiter
-
-```python
-# rate_limiter.py
-class DatalabRateLimiter:
-    """
-    Rate limiter для Datalab API:
-    - max_rpm: запросов в минуту
-    - max_concurrent: параллельных запросов
-    """
-
-    def acquire(self, timeout: float = 60.0) -> bool:
-        """Получить разрешение на запрос"""
-
-    def release(self):
-        """Освободить слот"""
-
-# Использование
-limiter = get_datalab_limiter()
-if limiter.acquire():
-    try:
-        result = datalab_api.recognize(image)
-    finally:
-        limiter.release()
-```
+> **Примечание:** Datalab API Limiter (`rate_limiter.py`) сохранён в коде как legacy-модуль, но не используется.
+> Все OCR-запросы теперь идут через LM Studio (Chandra/Qwen бэкенды).
 
 ---
 
@@ -562,12 +539,11 @@ services:
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - DATALAB_API_KEY=${DATALAB_API_KEY}
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
       - R2_BUCKET_NAME=${R2_BUCKET_NAME}
+      - CHANDRA_BASE_URL=${CHANDRA_BASE_URL}
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
@@ -582,12 +558,11 @@ services:
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_KEY=${SUPABASE_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - DATALAB_API_KEY=${DATALAB_API_KEY}
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
       - R2_BUCKET_NAME=${R2_BUCKET_NAME}
+      - CHANDRA_BASE_URL=${CHANDRA_BASE_URL}
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
@@ -733,7 +708,7 @@ services:
 
 Настраивается в `config.yaml`:
 - `celery_worker.max_concurrent_jobs` — параллельных задач
-- `datalab_api.concurrent_requests` — параллельных запросов к Datalab
+- `chandra.max_concurrent` / `qwen.max_concurrent` — параллельных запросов к LM Studio
 - `ocr_threading.max_global_ocr_requests` — глобальный OCR concurrency
 
 ### Redis Cluster
