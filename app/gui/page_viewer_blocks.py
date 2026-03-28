@@ -26,10 +26,16 @@ class BlockRenderingMixin:
     def _clear_block_items(self):
         """Очистить все QGraphicsRectItem блоков"""
         for item in self.block_items.values():
-            self.scene.removeItem(item)
+            try:
+                self.scene.removeItem(item)
+            except RuntimeError:
+                pass
         self.block_items.clear()
         for label in self.block_labels.values():
-            self.scene.removeItem(label)
+            try:
+                self.scene.removeItem(label)
+            except RuntimeError:
+                pass
         self.block_labels.clear()
         self._clear_resize_handles()
 

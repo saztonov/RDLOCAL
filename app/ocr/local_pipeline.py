@@ -111,6 +111,10 @@ def run_local_ocr(
                 return False
         return False
 
+    strip_backend = None
+    image_backend = None
+    stamp_backend = None
+
     try:
         # ── Parse blocks ─────────────────────────────────────────
         from rd_core.models import Block
@@ -280,8 +284,14 @@ def run_local_ocr(
             final_status = "done"
 
         # Собираем result_files
+        pdf_stem = pdf_path.stem
         result_files = {}
-        for name in ("annotation.json", "ocr_result.html", "document.md", "result.json"):
+        for name in (
+            "annotation.json",
+            f"{pdf_stem}_ocr.html",
+            f"{pdf_stem}_document.md",
+            f"{pdf_stem}_result.json",
+        ):
             path = output_dir / name
             if path.exists():
                 result_files[name] = str(path)
@@ -307,6 +317,14 @@ def run_local_ocr(
         )
 
     finally:
+        # Выгружаем модели из LM Studio
+        for backend in (image_backend, strip_backend):
+            try:
+                if backend and hasattr(backend, "unload_model"):
+                    backend.unload_model()
+            except Exception:
+                pass
+
         # Cleanup temp dir
         if work_dir.exists():
             try:
@@ -390,22 +408,24 @@ def _generate_local_results(
     with open(annotation_path, "w", encoding="utf-8") as f:
         json.dump(doc.to_dict(), f, ensure_ascii=False, indent=2)
 
+    pdf_stem = pdf_path.stem
+
     # HTML
-    html_path = output_dir / "ocr_result.html"
+    html_path = output_dir / f"{pdf_stem}_ocr.html"
     try:
         generate_html_from_pages(pages, str(html_path), doc_name=doc_name)
     except Exception as e:
         logger.warning(f"HTML generation error: {e}")
 
     # Markdown
-    md_path = output_dir / "document.md"
+    md_path = output_dir / f"{pdf_stem}_document.md"
     try:
         generate_md_from_pages(pages, str(md_path), doc_name=doc_name)
     except Exception as e:
         logger.warning(f"MD generation error: {e}")
 
     # result.json (merged format)
-    result_path = output_dir / "result.json"
+    result_path = output_dir / f"{pdf_stem}_result.json"
     try:
         from services.remote_ocr.server.ocr_result_merger import merge_ocr_results
 

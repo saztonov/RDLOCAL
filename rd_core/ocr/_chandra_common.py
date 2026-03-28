@@ -45,9 +45,9 @@ DEFAULT_BASE_URL = "http://localhost:1234"
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
 CHANDRA_MODEL_KEY = os.getenv("CHANDRA_MODEL_KEY", "chandra-ocr-2")
 CHANDRA_LOAD_CONFIG = {
-    "context_length": 36601,
+    "context_length": 57000,
     "flash_attention": True,
-    "eval_batch_size": 512,
+    "eval_batch_size": 2048,
     "offload_kv_cache_to_gpu": True,
 }
 
