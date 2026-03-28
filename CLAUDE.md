@@ -59,7 +59,7 @@ Desktop Client (PySide6)
 | `app/gui/project_tree/` | Tree widget (4 mixins + helpers) |
 | `app/gui/remote_ocr/` | OCR panel (5 mixins) |
 | `app/gui/reconciliation/` | R2 ↔ Supabase sync verification |
-| `app/ocr_client/` | Remote OCR HTTP client (6 modules) |
+| `app/ocr/` | Local OCR pipeline + multiprocessing runner |
 | `app/tree_client/` | Supabase tree API (6 mixins) |
 | `rd_core/` | Core logic: models, PDF utils, R2 storage, OCR engines |
 | `rd_core/ocr/` | OCR backends (Chandra, Qwen — LM Studio only). Protocol: `base.py` |

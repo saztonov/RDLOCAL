@@ -4,7 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
 from app.gui.utils import format_datetime_utc3
-from app.ocr_client.models import JobInfo
 
 COLUMNS = ["№", "Наименование", "Время начала", "Статус", "Прогресс", "Детали", "Действия"]
 
@@ -35,7 +34,7 @@ class JobsTableModel(QAbstractTableModel):
 
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)
-        self._jobs: list[JobInfo] = []
+        self._jobs: list = []
 
     # ------------------------------------------------------------------
     # QAbstractTableModel interface
@@ -109,7 +108,7 @@ class JobsTableModel(QAbstractTableModel):
     # Public API
     # ------------------------------------------------------------------
 
-    def update_jobs(self, jobs: list[JobInfo]) -> None:
+    def update_jobs(self, jobs: list) -> None:
         """Массовое обновление списка задач.
 
         Выполняет полный reset модели
@@ -125,7 +124,7 @@ class JobsTableModel(QAbstractTableModel):
             return self._jobs[row].id
         return None
 
-    def get_job(self, row: int) -> JobInfo | None:
+    def get_job(self, row: int) -> object | None:
         """Получить ``JobInfo`` по номеру строки."""
         if 0 <= row < len(self._jobs):
             return self._jobs[row]
