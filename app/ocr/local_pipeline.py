@@ -254,6 +254,13 @@ def run_local_ocr(
 
         _progress(0.9, "Распознавание завершено")
 
+        # ── Выгрузить Qwen перед верификацией (чтобы Chandra не грузилась поверх) ──
+        if image_backend and hasattr(image_backend, "unload_model"):
+            try:
+                image_backend.unload_model()
+            except Exception:
+                pass
+
         # ── Generate results ─────────────────────────────────────
         _progress(0.92, "Генерация результатов...")
 
