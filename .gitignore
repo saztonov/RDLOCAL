@@ -155,3 +155,4 @@ database/dumps/
 *.sql.gz
 *.dump
 nul
+.env.example
