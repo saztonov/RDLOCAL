@@ -38,18 +38,7 @@ QWEN_LOAD_CONFIG = {
 TRANSIENT_CODES = {404, 429, 500, 502, 503, 504}
 
 
-def needs_model_reload(loaded_instances: list, required_context: int) -> Tuple[bool, str]:
-    """Проверяет нужна ли перезагрузка модели из-за несовпадения context_length."""
-    if not loaded_instances:
-        return True, "модель не загружена"
-    for inst in loaded_instances:
-        inst_id = inst.get("id", "unknown")
-        ctx = inst.get("context_length")
-        if ctx is None:
-            return True, f"instance {inst_id}: context_length недоступен в API"
-        if ctx != required_context:
-            return True, f"instance {inst_id}: context_length={ctx}, требуется {required_context}"
-    return False, f"context_length={required_context} OK"
+from rd_core.ocr._lmstudio_helpers import needs_model_reload  # noqa: F401  — re-export
 
 
 def init_base_url(base_url: Optional[str]) -> str:

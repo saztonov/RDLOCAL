@@ -1,5 +1,4 @@
 """Тесты для PageViewer state machine."""
-import pytest
 
 from app.gui.page_viewer_state import DRAG_STATES, EDITING_STATES, ViewerState
 

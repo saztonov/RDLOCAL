@@ -120,7 +120,6 @@ def render_page_to_image(
         page = doc[page_index]
 
         # Адаптивный zoom для больших страниц (лимит ~100 млн пикселей для скорости)
-        rect = page.rect
         effective_zoom = _get_effective_render_zoom(page, zoom)
         if effective_zoom != zoom:
             logger.warning(

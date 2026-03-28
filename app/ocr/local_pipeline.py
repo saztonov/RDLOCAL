@@ -265,7 +265,6 @@ def run_local_ocr(
         # ── Compute stats ────────────────────────────────────────
         from services.remote_ocr.server.ocr_constants import (
             is_error as _is_error,
-            is_non_retriable as _is_non_retriable,
             is_success as _is_success,
         )
 

@@ -16,10 +16,10 @@ from typing import Optional
 
 from .debounced_updater import cleanup_updater, get_debounced_updater
 from .execution_lock import acquire_execution_lock, release_execution_lock
-from .job_context import JobBootstrapError, JobContext, JobSkipped, JobValidationError
+from .job_context import JobContext, JobSkipped, JobValidationError
 from .logging_config import get_logger
-from .lmstudio_lifecycle import acquire_chandra, acquire_lmstudio, release_chandra, release_lmstudio
-from .memory_utils import force_gc, log_memory, log_memory_delta
+from .lmstudio_lifecycle import acquire_chandra, release_chandra
+from .memory_utils import force_gc, log_memory_delta
 from .ocr_constants import is_error, is_non_retriable, is_success, is_suspicious_output
 from .settings import settings
 from .storage import get_job, register_ocr_results_to_node, update_job_status
@@ -45,7 +45,6 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
         JobSkipped: если задачу не нужно выполнять.
         JobValidationError: если задача невалидна.
     """
-    from .storage_models import Job
 
     job = get_job(job_id, with_files=True, with_settings=True)
     if not job:

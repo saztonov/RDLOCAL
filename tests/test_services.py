@@ -1,5 +1,4 @@
 """Тесты для app/services.py — service layer facade."""
-import pytest
 from unittest.mock import MagicMock, patch
 
 
@@ -92,7 +91,6 @@ class TestAnnotationRepository:
     @patch("app.services.save_annotation_to_db")
     def test_save_annotation(self, mock_save):
         mock_save.return_value = True
-        from app.services import save_annotation_to_db
 
         result = mock_save("doc_object", "node-123")
         assert result is True

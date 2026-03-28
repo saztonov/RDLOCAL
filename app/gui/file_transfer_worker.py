@@ -126,7 +126,6 @@ class FileTransferWorker(QThread):
             return
 
         self._completed = 0
-        total = len(self._tasks)
 
         # Параллельная обработка задач
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:

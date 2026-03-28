@@ -246,7 +246,7 @@ def _group_and_merge_strips(
             try:
                 crop = Image.open(crop_path)
                 crops.append(crop)
-            except Exception as e:
+            except Exception:
                 logger.error(
                     f"PASS1: crop load error {crop_path}",
                     extra={
@@ -265,7 +265,7 @@ def _group_and_merge_strips(
                 merged = merge_crops_vertically(crops, gap, block_ids=block_ids)
                 merged.save(strip_path, "PNG", compress_level=compress_level)
                 merged.close()
-            except Exception as e:
+            except Exception:
                 logger.error(
                     f"PASS1: strip merge error {strip_id}",
                     extra={

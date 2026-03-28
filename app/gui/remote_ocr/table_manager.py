@@ -287,35 +287,6 @@ class TableManagerMixin:
             f"status={job.status}, total_rows={self.jobs_table.rowCount()}"
         )
 
-    def _replace_job_in_table(self, old_job_id: str, new_job):
-        """Заменить временную задачу на реальную в таблице"""
-        row = self._find_row_by_job_id(old_job_id)
-        if row >= 0:
-            logger.info(
-                f"Найдена временная задача в строке {row}, заменяем на {new_job.id}"
-            )
-            self.jobs_table.setSortingEnabled(False)
-            self._update_row_cells(row, new_job, row + 1)
-            self.jobs_table.setSortingEnabled(True)
-            self._renumber_rows()
-            logger.info(f"Задача заменена: {old_job_id} -> {new_job.id}")
-        else:
-            logger.warning(
-                f"Временная задача {old_job_id} не найдена в таблице, "
-                f"добавляем как новую"
-            )
-            self._add_job_to_table(new_job, at_top=True)
-
-    def _remove_job_from_table(self, job_id: str):
-        """Удалить задачу из таблицы по ID"""
-        row = self._find_row_by_job_id(job_id)
-        if row >= 0:
-            self.jobs_table.setSortingEnabled(False)
-            self.jobs_table.removeRow(row)
-            self.jobs_table.setSortingEnabled(True)
-            self._renumber_rows()
-            logger.info(f"Задача {job_id} удалена из таблицы")
-
     # ── Вспомогательные методы ───────────────────────────────────────
 
     def _get_status_text(self, status: str) -> str:

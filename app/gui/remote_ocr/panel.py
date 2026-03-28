@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from app.gui.remote_ocr.cancel_delegate import CancelButtonDelegate
 from app.gui.remote_ocr.jobs_controller import JobsController
-from app.gui.remote_ocr.jobs_model import JOB_ID_ROLE, JobsTableModel
+from app.gui.remote_ocr.jobs_model import JobsTableModel
 
 if TYPE_CHECKING:
     from app.gui.main_window import MainWindow

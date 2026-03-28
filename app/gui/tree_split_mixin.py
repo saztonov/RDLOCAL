@@ -1,5 +1,4 @@
 """Миксин для разделения PDF документов в дереве проектов."""
-import json
 import logging
 import shutil
 from pathlib import Path
@@ -9,7 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.tree_client import TreeNode
-from app.tree_models import FileType
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +143,7 @@ class TreeSplitMixin:
 
         # 7. Загрузка в R2 + создание узлов
         try:
-            created_nodes = self._upload_split_parts(
+            self._upload_split_parts(
                 parts, ann_results, node, parent_node, r2
             )
         except Exception as e:

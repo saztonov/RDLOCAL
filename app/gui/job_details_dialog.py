@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -271,10 +270,6 @@ class JobDetailsDialog(QDialog):
         if len(r2_files) > 50:
             files_text += f"\n... и ещё {len(r2_files) - 50} файлов"
         QMessageBox.information(self, "Файлы на R2", files_text or "Нет файлов")
-
-    def _open_r2_url(self, url: str):
-        """Открыть URL в браузере"""
-        webbrowser.open(url)
 
     def _estimate_completion(self, created_at: str, progress: float) -> str:
         """Прогноз времени завершения (в UTC+3)"""

@@ -8,7 +8,6 @@ LocalOcrRunner — multiprocessing обёртка для OCR pipeline.
 """
 from __future__ import annotations
 
-import json
 import logging
 import multiprocessing
 import time
@@ -255,7 +254,6 @@ def _run_ocr_process(
     Выполняет OCR pipeline и отправляет результаты через Queue.
     Этот код работает в ОТДЕЛЬНОМ процессе — изолирует утечки памяти.
     """
-    import os
     import sys
 
     # Ensure project root in path for imports

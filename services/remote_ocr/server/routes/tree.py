@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..routes.common import check_api_key
-from ..storage_client import get_client
 from ..node_storage import (
     add_node_file,
     create_node,

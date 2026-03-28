@@ -36,8 +36,6 @@ def _extract_blocks_by_div_structure(
 
     found_count = 0
     for match in block_pattern.finditer(html_text):
-        block_type = match.group(1)
-        header = match.group(2)
         content = match.group(3).strip()
 
         # Извлекаем UUID из контента (маркер или URL)

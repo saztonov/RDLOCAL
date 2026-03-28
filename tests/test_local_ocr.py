@@ -1,13 +1,10 @@
 """Тесты для локального OCR pipeline и runner."""
 import multiprocessing
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from app.ocr.local_pipeline import LocalOcrResult, run_local_ocr
-from app.ocr.local_runner import LocalJob, LocalOcrRunner, _run_ocr_process
+from app.ocr.local_runner import LocalJob, LocalOcrRunner
 
 
 class TestLocalOcrResult:

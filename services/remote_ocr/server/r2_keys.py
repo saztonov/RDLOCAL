@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Optional
 
 from .logging_config import get_logger
 from .storage_models import Job

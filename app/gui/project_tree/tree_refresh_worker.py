@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import logging
 import queue
-import time
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -117,7 +116,6 @@ class TreeRefreshWorker(QThread):
 
     def _do_auto_check(self, known_roots: Dict[str, Optional[str]]) -> None:
         """Сравнить текущие корневые узлы с известными — вернуть diff."""
-        from app.tree_models import TreeNode
 
         try:
             fresh_roots = self._client.get_root_nodes()

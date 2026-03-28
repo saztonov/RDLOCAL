@@ -2,7 +2,6 @@
 
 import uuid
 
-import pytest
 
 from rd_core.models import Block, BlockSource, BlockType, ShapeType
 from rd_core.models.armor_id import ArmorID, generate_armor_id, levenshtein_ratio
@@ -43,7 +42,7 @@ class TestArmorID:
         bad_code = clean[:-1] + bad_char
         formatted = f"{bad_code[:4]}-{bad_code[4:8]}-{bad_code[8:]}"
         # Может вернуть None если checksum не совпал
-        result = ArmorID.decode(formatted)
+        ArmorID.decode(formatted)
         # Не гарантируем None (может случайно совпасть), но тест не падает
 
     def test_decode_wrong_length(self):

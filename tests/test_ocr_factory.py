@@ -1,7 +1,6 @@
 """Тесты для rd_core/ocr/factory.py — создание OCR бэкендов."""
 
 from rd_core.ocr import create_ocr_engine
-from rd_core.ocr.base import OCRBackend
 
 
 class TestCreateOCREngine:

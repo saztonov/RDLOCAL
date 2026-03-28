@@ -20,9 +20,9 @@ import redis
 from .celery_app import celery_app
 from .execution_lock import force_release_execution_lock
 from .logging_config import get_logger
-from .lmstudio_lifecycle import release_chandra, release_lmstudio
+from .lmstudio_lifecycle import release_chandra
 from .settings import settings
-from .storage import get_job, list_jobs, update_job_status
+from .storage import list_jobs, update_job_status
 
 logger = get_logger(__name__)
 

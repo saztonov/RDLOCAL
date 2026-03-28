@@ -1,6 +1,5 @@
 """Операции удаления файлов дерева проектов (R2 + БД)"""
 import logging
-import shutil
 
 from app.tree_client import NodeType, TreeNode
 

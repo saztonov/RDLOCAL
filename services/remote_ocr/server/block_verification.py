@@ -19,11 +19,6 @@ def _get_chandra_retry_delay() -> int:
     return settings.chandra_retry_delay
 
 
-def _is_chandra_backend(backend) -> bool:
-    """Проверить, является ли бэкенд Chandra (LM Studio). Обратная совместимость."""
-    return _is_lmstudio_backend(backend)
-
-
 def _is_lmstudio_backend(backend) -> bool:
     """Проверить, является ли бэкенд LM Studio (Chandra)."""
     return type(backend).__name__ in (

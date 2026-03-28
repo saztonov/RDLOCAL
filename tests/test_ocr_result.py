@@ -1,5 +1,4 @@
 """Тесты для rd_core.ocr_result — единого модуля OCR-статусов."""
-import pytest
 
 from rd_core.ocr_result import (
     ERROR_PREFIX,

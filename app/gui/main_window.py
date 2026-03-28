@@ -4,7 +4,6 @@
 """
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +18,6 @@ from app.gui.navigation_manager import NavigationManager
 from app.gui.panels_setup import PanelsSetupMixin
 from app.gui.remote_ocr.panel import RemoteOCRPanel
 from app.gui.undo_redo_mixin import UndoRedoMixin
-from rd_core.models import Document
-from rd_core.pdf_utils import PDFDocument
 
 # Импорт метаданных продукта
 try:
@@ -378,14 +375,6 @@ class MainWindow(
         self.remote_ocr_panel = RemoteOCRPanel(self, self)
         self.addDockWidget(Qt.RightDockWidgetArea, self.remote_ocr_panel)
         self.resizeDocks([self.remote_ocr_panel], [520], Qt.Horizontal)
-
-    def _toggle_remote_ocr_panel(self):
-        """Показать/скрыть панель Remote OCR"""
-        if self.remote_ocr_panel:
-            if self.remote_ocr_panel.isVisible():
-                self.remote_ocr_panel.hide()
-            else:
-                self.remote_ocr_panel.show()
 
     def _show_folder_settings(self):
         """Показать диалог настройки папок"""

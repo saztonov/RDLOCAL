@@ -156,20 +156,6 @@ class TreeLoadMixin:
 
     # === Автообновление (фоновое) ===
 
-    def _auto_refresh_tree(self):
-        """Автоматическое обновление дерева (через фоновый воркер)."""
-        if self._loading:
-            return
-
-        known_roots = {}
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            node = item.data(0, Qt.UserRole)
-            if isinstance(node, TreeNode):
-                known_roots[node.id] = node.updated_at
-
-        self._refresh_worker.request_auto_check(known_roots)
-
     def _on_auto_check_result(self, changes: dict):
         """Слот: результат фоновой проверки автообновления."""
         if changes.get("no_changes"):
@@ -224,19 +210,6 @@ class TreeLoadMixin:
         self._node_cache.update_node_fields(node_id, **fields)
 
         self._item_builder.update_item_display(item, node)
-
-    def _refresh_visible_items(self):
-        """Обновить отображение всех видимых элементов (иконки, текст)."""
-
-        def _update_recursive(item: QTreeWidgetItem):
-            node = item.data(0, Qt.UserRole)
-            if isinstance(node, TreeNode):
-                self._item_builder.update_item_display(item, node)
-            for i in range(item.childCount()):
-                _update_recursive(item.child(i))
-
-        for i in range(self.tree.topLevelItemCount()):
-            _update_recursive(self.tree.topLevelItem(i))
 
     def _refresh_siblings(self, parent_id: str):
         """Перезагрузить дочерние узлы одного родителя."""

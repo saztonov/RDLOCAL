@@ -57,7 +57,7 @@ class MenuSetupMixin:
         view_menu.addSeparator()
 
         # Подменю "Панели"
-        panels_menu = view_menu.addMenu("📋 Панели")
+        view_menu.addMenu("📋 Панели")
 
         # Меню "Настройки"
         settings_menu = menubar.addMenu("&Настройки")

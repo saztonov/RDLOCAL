@@ -70,7 +70,7 @@ def update_job_handler(
         extra={"event": "job_lifecycle", "action": "rename", "job_id": job_id, "task_name": task_name},
     )
 
-    job = require_job(job_id)
+    require_job(job_id)
 
     if not update_job_task_name(job_id, task_name):
         raise HTTPException(status_code=500, detail="Failed to update job")

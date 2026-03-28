@@ -7,14 +7,13 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from PySide6.QtCore import QObject, QSettings, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 if TYPE_CHECKING:
     from app.gui.main_window import MainWindow

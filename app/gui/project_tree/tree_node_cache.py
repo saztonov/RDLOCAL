@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import time
 import threading
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.tree_models import TreeNode
 

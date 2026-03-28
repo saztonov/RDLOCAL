@@ -13,7 +13,6 @@ R2Storage(), TreeClient(), AnnotationDBIO(). Это позволяет:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)

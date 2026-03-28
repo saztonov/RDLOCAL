@@ -8,7 +8,6 @@
 - Нормальный content (не затронут)
 - strip_untagged_reasoning safety net
 """
-import pytest
 
 from rd_core.ocr._chandra_common import (
     _normalize_chandra_response,
