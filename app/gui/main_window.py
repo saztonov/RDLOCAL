@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QProgressBar, QStatusBar
 from app.gui.block_handlers import BlockHandlersMixin
 from app.gui.blocks_tree import BlocksTreeManager
 from app.gui.file_operations import FileOperationsMixin
+from app.gui.main_window_state import MainWindowState
 from app.gui.menu_setup import MenuSetupMixin
 from app.gui.navigation_manager import NavigationManager
 from app.gui.panels_setup import PanelsSetupMixin
@@ -44,24 +45,8 @@ class MainWindow(
     def __init__(self):
         super().__init__()
 
-        # Данные приложения
-        self.pdf_document: Optional[PDFDocument] = None
-        self.annotation_document: Optional[Document] = None
-        self.current_page: int = 0
-        self.page_images: dict = {}
-        self._page_images_order: list = []  # LRU порядок страниц
-        self._page_images_max: int = 5  # Максимум страниц в кеше
-        self.page_zoom_states: dict = {}
-        self._current_pdf_path: Optional[str] = None
-        self._current_node_id: Optional[str] = None
-        self._current_node_locked: bool = False
-
-        # Undo/Redo стек
-        self.undo_stack: list = []  # [(page_num, blocks_copy), ...]
-        self.redo_stack: list = []
-
-        # Буфер обмена для блоков
-        self._blocks_clipboard: list = []
+        # Централизованный state container
+        self.state = MainWindowState()
 
         # Менеджеры (инициализируются после setup_ui)
         self.blocks_tree_manager = None
@@ -101,6 +86,108 @@ class MainWindow(
 
         # Загрузить настроенные горячие клавиши
         self._update_hotkeys_from_settings()
+
+    # ── Property-алиасы (обратная совместимость с mixins) ─────────────
+
+    @property
+    def pdf_document(self):
+        return self.state.pdf_document
+
+    @pdf_document.setter
+    def pdf_document(self, value):
+        self.state.pdf_document = value
+
+    @property
+    def annotation_document(self):
+        return self.state.annotation_document
+
+    @annotation_document.setter
+    def annotation_document(self, value):
+        self.state.annotation_document = value
+
+    @property
+    def current_page(self):
+        return self.state.current_page
+
+    @current_page.setter
+    def current_page(self, value):
+        self.state.current_page = value
+
+    @property
+    def page_images(self):
+        return self.state.page_images
+
+    @page_images.setter
+    def page_images(self, value):
+        self.state.page_images = value
+
+    @property
+    def _page_images_order(self):
+        return self.state._page_images_order
+
+    @_page_images_order.setter
+    def _page_images_order(self, value):
+        self.state._page_images_order = value
+
+    @property
+    def _page_images_max(self):
+        return self.state._page_images_max
+
+    @property
+    def page_zoom_states(self):
+        return self.state.page_zoom_states
+
+    @page_zoom_states.setter
+    def page_zoom_states(self, value):
+        self.state.page_zoom_states = value
+
+    @property
+    def _current_pdf_path(self):
+        return self.state.current_pdf_path
+
+    @_current_pdf_path.setter
+    def _current_pdf_path(self, value):
+        self.state.current_pdf_path = value
+
+    @property
+    def _current_node_id(self):
+        return self.state.current_node_id
+
+    @_current_node_id.setter
+    def _current_node_id(self, value):
+        self.state.current_node_id = value
+
+    @property
+    def _current_node_locked(self):
+        return self.state.current_node_locked
+
+    @_current_node_locked.setter
+    def _current_node_locked(self, value):
+        self.state.current_node_locked = value
+
+    @property
+    def undo_stack(self):
+        return self.state.undo_stack
+
+    @undo_stack.setter
+    def undo_stack(self, value):
+        self.state.undo_stack = value
+
+    @property
+    def redo_stack(self):
+        return self.state.redo_stack
+
+    @redo_stack.setter
+    def redo_stack(self, value):
+        self.state.redo_stack = value
+
+    @property
+    def _blocks_clipboard(self):
+        return self.state.blocks_clipboard
+
+    @_blocks_clipboard.setter
+    def _blocks_clipboard(self, value):
+        self.state.blocks_clipboard = value
 
     def _render_current_page(self, update_tree: bool = True):
         """Отрендерить текущую страницу"""

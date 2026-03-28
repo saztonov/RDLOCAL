@@ -185,9 +185,9 @@ def _do_unload_model(engine: str) -> None:
         return
 
     try:
-        import requests
+        import httpx
 
-        resp = requests.get(f"{base_url}/api/v1/models", timeout=10)
+        resp = httpx.get(f"{base_url}/api/v1/models", timeout=10.0)
         if resp.status_code != 200:
             return
 
@@ -204,10 +204,10 @@ def _do_unload_model(engine: str) -> None:
         for m in resp.json().get("models", []):
             if model_key_lower in m.get("key", "").lower():
                 for inst in m.get("loaded_instances", []):
-                    requests.post(
+                    httpx.post(
                         f"{base_url}/api/v1/models/unload",
                         json={"instance_id": inst["id"]},
-                        timeout=30,
+                        timeout=30.0,
                     )
                     logger.info(
                         f"{engine}: модель выгружена после grace period: {inst['id']}",

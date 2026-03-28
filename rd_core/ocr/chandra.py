@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Optional
 
-import requests
+import httpx
 from PIL import Image
 
 from rd_core.ocr._chandra_common import (
@@ -308,13 +308,13 @@ class ChandraBackend:
                         headers={"Content-Type": "application/json"},
                         json=payload, timeout=self._http_timeout,
                     )
-                except requests.exceptions.ConnectionError as e:
+                except httpx.ConnectError as e:
                     last_error = f"ConnectionError: {e}"
                     logger.warning(f"Chandra connection error (attempt {attempt}): {e}")
                     if attempt < self._MAX_APP_RETRIES:
                         continue
                     return make_error(f"Chandra: {last_error} после {self._MAX_APP_RETRIES} попыток")
-                except requests.exceptions.Timeout:
+                except httpx.TimeoutException:
                     last_error = "Timeout"
                     logger.warning(f"Chandra timeout (attempt {attempt})")
                     if attempt < self._MAX_APP_RETRIES:

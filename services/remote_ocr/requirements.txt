@@ -7,7 +7,6 @@ httpx>=0.28.1,<1
 # rd_core зависимости
 PyMuPDF>=1.27.2,<2
 Pillow>=12.1.1,<13
-requests>=2.32.5,<3
 
 # R2 Storage (async + sync)
 # Версии зафиксированы для совместимости aioboto3 + boto3
