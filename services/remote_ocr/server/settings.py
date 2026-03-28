@@ -94,8 +94,9 @@ class Settings:
     supabase_url: str = _env("SUPABASE_URL")
     supabase_key: str = _env("SUPABASE_KEY")
 
-    # ===== CELERY WORKER =====
+    # ===== ЗАДАЧИ =====
     max_concurrent_jobs: int = _cfg("max_concurrent_jobs", "MAX_CONCURRENT_JOBS", int)
+    # Legacy (Celery) — будут удалены при полном переходе на локальный OCR
     worker_prefetch: int = _cfg("worker_prefetch", "WORKER_PREFETCH", int)
     worker_max_tasks: int = _cfg("worker_max_tasks", "WORKER_MAX_TASKS", int)
     task_soft_timeout: int = _cfg("task_soft_timeout", "TASK_SOFT_TIMEOUT", int)
@@ -138,7 +139,7 @@ class Settings:
     min_task_timeout: int = _cfg("min_task_timeout", "MIN_TASK_TIMEOUT", int)
     max_task_timeout: int = _cfg("max_task_timeout", "MAX_TASK_TIMEOUT", int)
 
-    # ===== ОЧЕРЕДЬ =====
+    # ===== LEGACY (Celery queue) — будут удалены при полном переходе на локальный OCR =====
     poll_interval: float = _cfg("poll_interval", "POLL_INTERVAL", float)
     poll_max_interval: float = _cfg("poll_max_interval", "POLL_MAX_INTERVAL", float)
     max_queue_size: int = _cfg("max_queue_size", "MAX_QUEUE_SIZE", int)

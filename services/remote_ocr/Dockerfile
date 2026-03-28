@@ -19,6 +19,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY rd_core /app/rd_core
 COPY services /app/services
 
+# Non-root user для безопасности
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser \
+    && mkdir -p /data && chown -R appuser:appuser /app /data
+USER appuser
+
 EXPOSE 8000
 
 # CMD задаётся в docker-compose (web или worker)

@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.spec
+CoreStructure.exe
+
+# Environment
+.env
+.env.local
+
+# Documentation (not needed in Docker)
+docs/
+*.md
+!services/remote_ocr/requirements.txt
+
+# Tests (not needed in Docker)
+tests/
+
+# Desktop client (not needed in server Docker)
+app/
+
+# Claude/editor config
+.claude/
+.cursorrules
+.pre-commit-config.yaml
+
+# Database exports
+database/
