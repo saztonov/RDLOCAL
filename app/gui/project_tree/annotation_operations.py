@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.annotation_db import AnnotationDBIO
-from app.gui.folder_settings_dialog import get_projects_dir
 from app.tree_client import NodeType, TreeNode
 from rd_core.annotation_canonicalizer import (
     canonicalize_annotation_document,
@@ -70,25 +69,20 @@ class AnnotationOperations:
             logger.error(f"Copy annotation failed: {e}")
             QMessageBox.critical(self._widget, "Ошибка", f"Ошибка копирования: {e}")
 
-    def _get_cache_pdf_path(self, node: TreeNode) -> Optional[Path]:
-        """Вернуть стабильный путь к PDF в локальном кеше проекта."""
-        projects_dir = get_projects_dir()
-        r2_key = node.attributes.get("r2_key", "")
-        if not projects_dir or not r2_key:
-            return None
-
-        rel_path = r2_key[len("tree_docs/") :] if r2_key.startswith("tree_docs/") else r2_key
-        return Path(projects_dir) / "cache" / rel_path
-
     def _get_target_pdf_context(
         self, node: TreeNode
     ) -> tuple[Optional[str], Optional[list[tuple[int, int]]], Optional[str]]:
-        """Получить путь и реальные preview-размеры целевого PDF."""
+        """Получить путь и реальные preview-размеры целевого PDF.
+
+        1. Если документ открыт — использовать текущий pdf_document.
+        2. Иначе — скачать в temp-файл, прочитать размеры, удалить.
+        """
         main_window = self._widget.window()
         current_node_id = getattr(main_window, "_current_node_id", None)
         current_pdf_path = getattr(main_window, "_current_pdf_path", "")
         current_pdf_document = getattr(main_window, "pdf_document", None)
 
+        # Если документ открыт в редакторе — быстрый путь
         if (
             current_node_id == node.id
             and current_pdf_path
@@ -109,29 +103,17 @@ class AnnotationOperations:
                     e,
                 )
 
-        cache_pdf_path = self._get_cache_pdf_path(node)
-        if cache_pdf_path and cache_pdf_path.exists():
-            pdf_document = PDFDocument(str(cache_pdf_path))
-            try:
-                if not pdf_document.open():
-                    return None, None, f"Не удалось открыть PDF: {cache_pdf_path.name}"
-                return str(cache_pdf_path), get_pdf_preview_page_sizes(pdf_document), None
-            finally:
-                pdf_document.close()
-
+        # Скачиваем в краткоживущий temp-файл
         r2_key = node.attributes.get("r2_key", "")
         if not r2_key:
             return None, None, "У документа нет PDF в R2."
-
-        if not cache_pdf_path:
-            return None, None, "Не настроена папка проектов для доступа к кешу PDF."
 
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 tmp_path = tmp.name
 
-            if not R2Storage().download_file(r2_key, tmp_path):
+            if not R2Storage().download_file(r2_key, tmp_path, use_cache=False):
                 return None, None, "Не удалось скачать целевой PDF для проверки."
 
             pdf_document = PDFDocument(tmp_path)
@@ -142,7 +124,7 @@ class AnnotationOperations:
             finally:
                 pdf_document.close()
 
-            return str(cache_pdf_path), page_sizes, None
+            return tmp_path, page_sizes, None
         except Exception as e:
             logger.error("Failed to prepare target PDF context for %s: %s", node.id, e)
             return None, None, f"Не удалось подготовить PDF для проверки: {e}"

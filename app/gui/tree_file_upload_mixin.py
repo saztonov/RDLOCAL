@@ -75,9 +75,6 @@ class TreeFileUploadMixin:
             )
             return
 
-        # Копируем файл в локальный кэш ДО создания узла (чтобы открытие было мгновенным)
-        self._copy_to_cache(task.local_path, task.r2_key)
-
         try:
             doc_node = self.client.add_document(
                 parent_id=task.parent_node_id,
@@ -110,7 +107,7 @@ class TreeFileUploadMixin:
 
             logger.info(f"Document added: {doc_node.id} with r2_key={task.r2_key}")
             # Сигнал с node_id и r2_key для открытия
-            self.file_uploaded_r2.emit(doc_node.id, task.r2_key)
+            self.file_uploaded_r2.emit(doc_node.id, task.r2_key, task.local_path)
 
         except Exception as e:
             logger.exception(f"Failed to add document: {e}")

@@ -31,6 +31,7 @@ class TransferTask:
     filename: str = ""
     parent_node_id: str = ""  # Для upload - ID родительской папки
     timeout: int = 60  # Таймаут скачивания в секундах
+    use_cache: bool = True  # Использовать R2DiskCache при скачивании
 
 
 class FileTransferWorker(QThread):
@@ -73,7 +74,12 @@ class FileTransferWorker(QThread):
                     from concurrent.futures import TimeoutError as _TE
 
                     with _TPE(max_workers=1) as mini:
-                        fut = mini.submit(r2.download_file, task.r2_key, task.local_path)
+                        fut = mini.submit(
+                            r2.download_file,
+                            task.r2_key,
+                            task.local_path,
+                            use_cache=task.use_cache,
+                        )
                         try:
                             success = fut.result(timeout=task.timeout)
                             error = "" if success else "Ошибка скачивания из R2"
@@ -82,7 +88,9 @@ class FileTransferWorker(QThread):
                             error = f"Таймаут скачивания ({task.timeout}с)"
                             logger.warning(f"Download timeout ({task.timeout}s): {task.r2_key}")
                 else:
-                    success = r2.download_file(task.r2_key, task.local_path)
+                    success = r2.download_file(
+                        task.r2_key, task.local_path, use_cache=task.use_cache
+                    )
                     error = "" if success else "Ошибка скачивания из R2"
 
             # Обновляем счётчик завершённых задач

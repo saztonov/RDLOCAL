@@ -348,6 +348,16 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         # Сохранить изменения предыдущего файла
         self._flush_pending_save()
 
+        # Удалить temp-сессию предыдущего tree-документа
+        old_origin = getattr(self, "_current_document_origin", "local")
+        old_temp_dir = getattr(self, "_current_temp_dir", None)
+        if old_origin == "tree_temp" and old_temp_dir:
+            from app.gui.temp_session import get_temp_session_manager
+
+            get_temp_session_manager().cleanup(old_temp_dir)
+            self._current_temp_dir = None
+            self._current_document_origin = "local"
+
         if self.pdf_document:
             self.pdf_document.close()
 
@@ -368,9 +378,13 @@ class FileOperationsMixin(FileAutoSaveMixin, FileDownloadMixin):
         self._current_pdf_path = pdf_path
         self._current_r2_key = r2_key
 
-        # Переключить логи в папку PDF
+        # Переключить логи: для tree-документов НЕ в temp (логи потеряются при cleanup)
         from app.logging_manager import get_logging_manager
-        get_logging_manager().switch_to_pdf_folder(pdf_path)
+
+        if getattr(self, "_current_document_origin", "local") != "tree_temp":
+            get_logging_manager().switch_to_pdf_folder(pdf_path)
+        else:
+            get_logging_manager().switch_to_projects_folder()
 
         # Пробуем загрузить существующую разметку
         if not self._load_annotation_if_exists(pdf_path, r2_key):

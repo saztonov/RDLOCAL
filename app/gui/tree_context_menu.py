@@ -38,10 +38,6 @@ class TreeContextMenuMixin:
                 action.setData(("move_down", node))
 
                 if node.is_document:
-                    # Открыть папку с файлами
-                    action = menu.addAction("📂 Открыть папку")
-                    action.setData(("open_folder", node))
-
                     # Блокировка/разблокировка
                     menu.addSeparator()
                     if node.is_locked:
@@ -162,9 +158,6 @@ class TreeContextMenuMixin:
         elif action == "paste_annotation":
             node = data[1]
             self._paste_annotation(node)
-        elif action == "open_folder":
-            node = data[1]
-            self._open_document_folder(node)
         elif action == "upload_annotation":
             node = data[1]
             self._upload_annotation_dialog(node)

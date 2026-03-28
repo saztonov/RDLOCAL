@@ -1,17 +1,19 @@
-"""Скачивание документов из R2"""
+"""Скачивание документов из R2 во временные сессии"""
 import logging
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QProgressDialog
 
 from app.gui.file_transfer_worker import FileTransferWorker, TransferTask, TransferType
+from app.gui.temp_session import get_temp_session_manager
 
 logger = logging.getLogger(__name__)
 
 
 class FileDownloadMixin:
-    """Миксин для скачивания документов из R2"""
+    """Миксин для скачивания документов из R2 во временные сессии"""
 
     _active_downloads: set = None
 
@@ -36,14 +38,48 @@ class FileDownloadMixin:
 
         self._current_node_locked = False
 
-    def _on_tree_file_uploaded_r2(self, node_id: str, r2_key: str):
-        """Открыть загруженный файл из R2 в редакторе"""
-        self._on_tree_document_selected(node_id, r2_key)
+    def _on_tree_file_uploaded_r2(self, node_id: str, r2_key: str, local_path: str = ""):
+        """Открыть загруженный файл из R2 в редакторе.
+
+        Если local_path передан, создаём temp-сессию с копией файла
+        (без повторного скачивания из R2).
+        """
+        if local_path and Path(local_path).exists():
+            self._open_uploaded_file_via_temp(node_id, r2_key, local_path)
+        else:
+            self._on_tree_document_selected(node_id, r2_key)
+
+    def _open_uploaded_file_via_temp(self, node_id: str, r2_key: str, local_path: str):
+        """Открыть только что загруженный файл без re-download из R2."""
+        tsm = get_temp_session_manager()
+        workspace = tsm.create_workspace(node_id)
+        pdf_path = tsm.get_pdf_path(workspace, r2_key)
+
+        try:
+            shutil.copy2(local_path, pdf_path)
+        except Exception as e:
+            logger.error(f"Failed to seed temp workspace: {e}")
+            tsm.cleanup(workspace)
+            self._on_tree_document_selected(node_id, r2_key)
+            return
+
+        self._current_r2_key = r2_key
+        self._current_node_id = node_id
+        self._current_temp_dir = str(workspace)
+        self._current_document_origin = "tree_temp"
+        self._update_lock_status(node_id)
+        if hasattr(self, "page_viewer"):
+            self.page_viewer.read_only = self._current_node_locked
+        if hasattr(self, "move_block_up_btn"):
+            self.move_block_up_btn.setEnabled(not self._current_node_locked)
+        if hasattr(self, "move_block_down_btn"):
+            self.move_block_down_btn.setEnabled(not self._current_node_locked)
+        self._open_pdf_file(str(pdf_path), r2_key=r2_key)
+        if node_id and hasattr(self, "project_tree_widget"):
+            self.project_tree_widget.highlight_document(node_id)
 
     def _on_tree_document_selected(self, node_id: str, r2_key: str):
-        """Открыть документ из дерева (асинхронное скачивание из R2)"""
-        from app.gui.folder_settings_dialog import get_projects_dir
-
+        """Открыть документ из дерева (асинхронное скачивание из R2 во temp)"""
         if not r2_key:
             return
 
@@ -56,29 +92,33 @@ class FileDownloadMixin:
             logger.debug(f"Download already in progress: {r2_key}")
             return
 
-        projects_dir = get_projects_dir()
-        if not projects_dir:
-            QMessageBox.warning(self, "Ошибка", "Папка проектов не задана в настройках")
-            return
+        # Если этот же документ уже открыт в текущей temp-сессии — переиспользуем
+        if (
+            getattr(self, "_current_node_id", None) == node_id
+            and getattr(self, "_current_temp_dir", None)
+            and getattr(self, "_current_document_origin", None) == "tree_temp"
+        ):
+            temp_dir = Path(self._current_temp_dir)
+            pdf_path = temp_dir / Path(r2_key).name
+            if pdf_path.exists():
+                logger.debug(f"Reusing existing temp session for node {node_id}")
+                return
 
-        # Формируем локальный путь
-        if r2_key.startswith("tree_docs/"):
-            rel_path = r2_key[len("tree_docs/") :]
-        else:
-            rel_path = r2_key
+        # Создаём новую temp-сессию
+        tsm = get_temp_session_manager()
+        workspace = tsm.create_workspace(node_id)
+        pdf_path = tsm.get_pdf_path(workspace, r2_key)
+        local_path = str(pdf_path)
 
-        local_path = Path(projects_dir) / "cache" / rel_path
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        # Собираем список файлов для скачивания
+        tasks = self._build_download_tasks(node_id, r2_key, local_path)
 
-        # Всегда собираем список файлов для скачивания (включая OCR результаты)
-        tasks = self._build_download_tasks(
-            node_id, r2_key, str(local_path), projects_dir
-        )
-
-        # Если нет файлов для скачивания - открываем PDF сразу
+        # Если нет файлов для скачивания (не должно быть с temp, но на всякий)
         if not tasks:
             self._current_r2_key = r2_key
             self._current_node_id = node_id
+            self._current_temp_dir = str(workspace)
+            self._current_document_origin = "tree_temp"
             self._update_lock_status(node_id)
             if hasattr(self, "page_viewer"):
                 self.page_viewer.read_only = self._current_node_locked
@@ -86,7 +126,7 @@ class FileDownloadMixin:
                 self.move_block_up_btn.setEnabled(not self._current_node_locked)
             if hasattr(self, "move_block_down_btn"):
                 self.move_block_down_btn.setEnabled(not self._current_node_locked)
-            self._open_pdf_file(str(local_path), r2_key=r2_key)
+            self._open_pdf_file(local_path, r2_key=r2_key)
             if node_id and hasattr(self, "project_tree_widget"):
                 self.project_tree_widget.highlight_document(node_id)
             return
@@ -97,7 +137,8 @@ class FileDownloadMixin:
         # Сохраняем данные для открытия после завершения загрузки
         self._pending_download_node_id = node_id
         self._pending_download_r2_key = r2_key
-        self._pending_download_local_path = str(local_path)
+        self._pending_download_local_path = local_path
+        self._pending_download_temp_dir = str(workspace)
         self._download_errors = []
 
         # Показываем модальное окно загрузки
@@ -133,34 +174,30 @@ class FileDownloadMixin:
         self._download_worker.start()
 
     def _build_download_tasks(
-        self, node_id: str, r2_key: str, local_path: str, projects_dir: str
+        self, node_id: str, r2_key: str, local_path: str
     ) -> list:
-        """Собрать список задач для скачивания (PDF + аннотации + OCR результаты).
+        """Собрать список задач для скачивания (PDF + OCR результаты).
 
-        Скачиваемые файлы:
-        - PDF документ
-        - Аннотации (_annotation.json)
-        - OCR результаты (_ocr.html, _result.json, _document.md)
-
-        Кропы НЕ скачиваются для экономии места.
+        Все файлы скачиваются в temp-папку (parent от local_path).
+        use_cache=False для tree-документов — не используем R2DiskCache.
         """
         from app.tree_client import FileType, TreeClient
 
         tasks = []
+        temp_dir = Path(local_path).parent
 
-        # Основной PDF - только если не существует локально
-        if not Path(local_path).exists():
-            tasks.append(
-                TransferTask(
-                    transfer_type=TransferType.DOWNLOAD,
-                    local_path=local_path,
-                    r2_key=r2_key,
-                    node_id=node_id,
-                )
+        # Основной PDF — всегда скачиваем (temp-папка новая)
+        tasks.append(
+            TransferTask(
+                transfer_type=TransferType.DOWNLOAD,
+                local_path=local_path,
+                r2_key=r2_key,
+                node_id=node_id,
+                use_cache=False,
             )
+        )
 
         # Типы файлов для скачивания (без кропов и аннотаций)
-        # Аннотация хранится в Supabase (таблица annotations), не в node_files
         download_file_types = {
             FileType.OCR_HTML,
             FileType.RESULT_JSON,
@@ -176,17 +213,13 @@ class FileDownloadMixin:
             r2 = R2Storage()
 
             for nf in node_files:
-                # Пропускаем PDF и кропы
                 if nf.file_type == FileType.PDF:
                     continue
                 if nf.file_type in (FileType.CROP, FileType.CROPS_FOLDER):
                     continue
-
-                # Скачиваем только нужные типы файлов
                 if nf.file_type not in download_file_types:
                     continue
 
-                # Проверяем существование файла в R2 (быстрый HEAD запрос)
                 try:
                     if not r2.exists(nf.r2_key):
                         logger.warning(f"File not found in R2, skipping: {nf.r2_key}")
@@ -194,14 +227,7 @@ class FileDownloadMixin:
                 except Exception as e:
                     logger.warning(f"R2 exists check failed for {nf.r2_key}: {e}")
 
-                # Формируем локальный путь для файла
-                if nf.r2_key.startswith("tree_docs/"):
-                    rel = nf.r2_key[len("tree_docs/") :]
-                else:
-                    rel = nf.r2_key
-
-                file_local_path = Path(projects_dir) / "cache" / rel
-                file_local_path.parent.mkdir(parents=True, exist_ok=True)
+                file_local_path = temp_dir / Path(nf.r2_key).name
 
                 tasks.append(
                     TransferTask(
@@ -209,7 +235,8 @@ class FileDownloadMixin:
                         local_path=str(file_local_path),
                         r2_key=nf.r2_key,
                         node_id=node_id,
-                        timeout=15,  # OCR файлы маленькие — 15с достаточно
+                        timeout=15,
+                        use_cache=False,
                     )
                 )
                 logger.debug(f"Added download task: {nf.file_type.value} -> {file_local_path}")
@@ -261,15 +288,18 @@ class FileDownloadMixin:
         if self._active_downloads and hasattr(self, "_pending_download_r2_key"):
             self._active_downloads.discard(self._pending_download_r2_key)
 
-        # При отмене — не открываем PDF
+        pending_temp_dir = getattr(self, "_pending_download_temp_dir", None)
+
+        # При отмене — не открываем PDF, удаляем temp
         if was_canceled:
             logger.info("Download was canceled, not opening PDF")
+            if pending_temp_dir:
+                get_temp_session_manager().cleanup(pending_temp_dir)
             self._download_worker = None
             return
 
         # Проверяем ошибки
         if hasattr(self, "_download_errors") and self._download_errors:
-            # Показываем ошибки только для основного PDF
             main_pdf_error = None
             for err in self._download_errors:
                 if (
@@ -283,10 +313,11 @@ class FileDownloadMixin:
                 QMessageBox.critical(
                     self, "Ошибка", f"Не удалось скачать PDF:\n{main_pdf_error}"
                 )
+                if pending_temp_dir:
+                    get_temp_session_manager().cleanup(pending_temp_dir)
                 self._download_worker = None
                 return
             else:
-                # Ошибки только для доп. файлов - логируем, но продолжаем
                 logger.warning(
                     f"Some files failed to download: {self._download_errors}"
                 )
@@ -298,12 +329,13 @@ class FileDownloadMixin:
         ):
             self._current_r2_key = self._pending_download_r2_key
             self._current_node_id = self._pending_download_node_id
+            self._current_temp_dir = pending_temp_dir
+            self._current_document_origin = "tree_temp"
+
             # Проверяем блокировку документа
             self._update_lock_status(self._pending_download_node_id)
-            # Устанавливаем режим read_only в page_viewer
             if hasattr(self, "page_viewer"):
                 self.page_viewer.read_only = self._current_node_locked
-            # Отключаем кнопки перемещения блоков для заблокированных документов
             if hasattr(self, "move_block_up_btn"):
                 self.move_block_up_btn.setEnabled(not self._current_node_locked)
             if hasattr(self, "move_block_down_btn"):
@@ -317,5 +349,9 @@ class FileDownloadMixin:
                 self.project_tree_widget.highlight_document(
                     self._pending_download_node_id
                 )
+        else:
+            # PDF не скачался — cleanup
+            if pending_temp_dir:
+                get_temp_session_manager().cleanup(pending_temp_dir)
 
         self._download_worker = None

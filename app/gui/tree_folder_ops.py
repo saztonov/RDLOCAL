@@ -1,7 +1,7 @@
 """Операции с папками документов"""
 import logging
-import subprocess
-import sys
+import shutil
+import tempfile
 from pathlib import Path
 
 from PySide6.QtWidgets import QMessageBox
@@ -12,72 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class TreeFolderOperationsMixin:
-    """Миксин для операций с папками документов"""
-
-    def _open_document_folder(self, node: TreeNode):
-        """Открыть папку документа в проводнике (скачать с R2 если нет локально)"""
-        from app.gui.folder_settings_dialog import get_projects_dir
-        from rd_core.r2_storage import R2Storage
-
-        r2_key = node.attributes.get("r2_key", "")
-        if not r2_key:
-            QMessageBox.warning(self, "Ошибка", "R2 ключ файла не найден")
-            return
-
-        projects_dir = get_projects_dir()
-        if not projects_dir:
-            QMessageBox.warning(self, "Ошибка", "Папка проектов не задана в настройках")
-            return
-
-        # Определяем локальную папку (parent от PDF файла)
-        if r2_key.startswith("tree_docs/"):
-            rel_path = r2_key[len("tree_docs/") :]
-        else:
-            rel_path = r2_key
-
-        local_file = Path(projects_dir) / "cache" / rel_path
-        local_folder = local_file.parent
-        local_folder.mkdir(parents=True, exist_ok=True)
-
-        # Скачиваем только PDF (без кропов)
-        # Аннотация хранится в Supabase (таблица annotations), не в R2
-        self.status_label.setText("Скачивание файлов с R2...")
-        try:
-            r2 = R2Storage()
-
-            # Список файлов для скачивания: только PDF
-            files_to_download = [
-                (r2_key, local_file),  # PDF
-            ]
-
-            downloaded = 0
-            for remote_key, local_path in files_to_download:
-                if not local_path.exists():
-                    if r2.exists(remote_key):
-                        if r2.download_file(remote_key, str(local_path)):
-                            downloaded += 1
-
-            self.status_label.setText(f"Скачано файлов: {downloaded}")
-            logger.info(f"Downloaded {downloaded} files for document: {r2_key}")
-
-        except Exception as e:
-            logger.error(f"Failed to download files from R2: {e}")
-            QMessageBox.critical(self, "Ошибка", f"Не удалось скачать файлы:\n{e}")
-            return
-
-        # Открываем папку в проводнике
-        try:
-            if sys.platform == "win32":
-                subprocess.run(["explorer", str(local_folder)], check=False)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", str(local_folder)], check=False)
-            else:
-                subprocess.run(["xdg-open", str(local_folder)], check=False)
-
-            self.status_label.setText(f"📂 {local_folder.name}")
-        except Exception as e:
-            logger.error(f"Failed to open folder: {e}")
-            QMessageBox.warning(self, "Ошибка", f"Не удалось открыть папку:\n{e}")
+    """Миксин для операций с документами (удаление штампов, авторазметка)"""
 
     def _remove_stamps_from_document(self, node: TreeNode):
         """Удалить рамки и QR-коды из PDF документа (обработать и заменить оригинал)"""
@@ -98,9 +33,6 @@ class TreeFolderOperationsMixin:
         if reply != QMessageBox.Yes:
             return
 
-        import shutil
-
-        from app.gui.folder_settings_dialog import get_projects_dir
         from rd_core.pdf_stamp_remover import remove_stamps_from_pdf
         from rd_core.r2_storage import R2Storage
 
@@ -117,55 +49,40 @@ class TreeFolderOperationsMixin:
             )
             return
 
-        projects_dir = get_projects_dir()
-        if not projects_dir:
-            QMessageBox.warning(self, "Ошибка", "Папка проектов не задана в настройках")
-            return
-
-        if r2_key.startswith("tree_docs/"):
-            rel_path = r2_key[len("tree_docs/") :]
-        else:
-            rel_path = r2_key
-
-        local_path = Path(projects_dir) / "cache" / rel_path
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        # Работаем в одноразовой temp-папке
+        work_dir = Path(tempfile.mkdtemp(prefix="rd_stamps_"))
+        local_path = work_dir / Path(r2_key).name
 
         # Закрываем файл если открыт в редакторе
         self._close_if_open(r2_key)
 
-        # Скачиваем если нет локально
-        if not local_path.exists():
-            if not r2.download_file(r2_key, str(local_path)):
+        try:
+            # Скачиваем PDF
+            if not r2.download_file(r2_key, str(local_path), use_cache=False):
                 QMessageBox.critical(
                     self, "Ошибка", f"Не удалось скачать файл из R2:\n{r2_key}"
                 )
                 return
 
-        # Обработка во временный файл (оригинал не трогаем до успешной загрузки в R2)
-        output_path = local_path.parent / f"{local_path.stem}_clean{local_path.suffix}"
-        success, result = remove_stamps_from_pdf(str(local_path), str(output_path))
+            # Обработка во временный файл
+            output_path = work_dir / f"{local_path.stem}_clean{local_path.suffix}"
+            success, result = remove_stamps_from_pdf(str(local_path), str(output_path))
 
-        if not success:
-            output_path.unlink(missing_ok=True)
-            QMessageBox.critical(
-                self, "Ошибка", f"Не удалось обработать файл:\n{result}"
-            )
-            return
+            if not success:
+                QMessageBox.critical(
+                    self, "Ошибка", f"Не удалось обработать файл:\n{result}"
+                )
+                return
 
-        try:
             # Загрузить очищенный PDF в R2 по тому же r2_key (перезапись оригинала)
             if not r2.upload_file(str(output_path), r2_key):
-                output_path.unlink(missing_ok=True)
                 QMessageBox.critical(
                     self, "Ошибка", "Не удалось загрузить обработанный файл в R2"
                 )
                 return
 
-            # Заменить локальный файл очищенной версией
-            shutil.move(str(output_path), str(local_path))
-
             # Обновить file_size в атрибутах узла
-            new_size = local_path.stat().st_size
+            new_size = output_path.stat().st_size
             attrs = node.attributes.copy()
             attrs["file_size"] = new_size
             self.client.update_node(node.id, attributes=attrs)
@@ -183,9 +100,6 @@ class TreeFolderOperationsMixin:
             except Exception as e:
                 logger.warning(f"Failed to update node_file size: {e}")
 
-            # Аннотации не трогаем — координаты остаются валидными
-            # (геометрия страниц не меняется при удалении штампов)
-
             logger.info(f"Stamps removed from document {node.id}, r2_key={r2_key}")
             QMessageBox.information(
                 self,
@@ -196,10 +110,12 @@ class TreeFolderOperationsMixin:
 
         except Exception as e:
             logger.exception(f"Error replacing cleaned document: {e}")
-            output_path.unlink(missing_ok=True)
             QMessageBox.critical(
                 self, "Ошибка", f"Не удалось заменить документ:\n{e}"
             )
+        finally:
+            # Всегда удаляем temp-папку
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def _auto_markup_entire_file(self, node: TreeNode):
         """Делегировать авторазметку на MainWindow"""

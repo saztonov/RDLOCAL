@@ -166,6 +166,22 @@ class MainWindow(
         self.state.current_node_locked = value
 
     @property
+    def _current_temp_dir(self):
+        return self.state.current_temp_workspace
+
+    @_current_temp_dir.setter
+    def _current_temp_dir(self, value):
+        self.state.current_temp_workspace = value
+
+    @property
+    def _current_document_origin(self):
+        return self.state.current_document_origin
+
+    @_current_document_origin.setter
+    def _current_document_origin(self, value):
+        self.state.current_document_origin = value
+
+    @property
     def undo_stack(self):
         return self.state.undo_stack
 
@@ -252,16 +268,19 @@ class MainWindow(
 
     def _clear_interface(self):
         """Очистить интерфейс при отсутствии файлов"""
+        # Flush аннотации в Supabase до закрытия
+        self._flush_pending_save()
+
+        # Переключить логи ДО удаления temp
+        from app.logging_manager import get_logging_manager
+
+        get_logging_manager().switch_to_projects_folder()
+
         if self.pdf_document:
             self.pdf_document.close()
         self.pdf_document = None
         self.annotation_document = None
         self._current_pdf_path = None
-
-        # Вернуть логи в папку проектов или дефолтную
-        from app.logging_manager import get_logging_manager
-
-        get_logging_manager().switch_to_projects_folder()
 
         self.page_images.clear()
         self._page_images_order.clear()
@@ -277,6 +296,20 @@ class MainWindow(
             self.ocr_preview.clear()
         if hasattr(self, "ocr_preview_inline") and self.ocr_preview_inline:
             self.ocr_preview_inline.clear()
+
+        # Удалить temp-сессию tree-документа
+        if self._current_document_origin == "tree_temp" and self._current_temp_dir:
+            from app.gui.temp_session import get_temp_session_manager
+
+            get_temp_session_manager().cleanup(self._current_temp_dir)
+
+        # Сброс temp-state
+        self._current_temp_dir = None
+        self._current_document_origin = "local"
+        self._current_r2_key = None
+        self._current_node_id = None
+        self._current_node_locked = False
+
         self._update_ui()
 
     def _save_settings(self):
@@ -311,6 +344,13 @@ class MainWindow(
 
         self._flush_pending_save()
         self._save_settings()
+
+        # Удалить temp-сессию если есть
+        if self._current_document_origin == "tree_temp" and self._current_temp_dir:
+            from app.gui.temp_session import get_temp_session_manager
+
+            get_temp_session_manager().cleanup(self._current_temp_dir)
+
         event.accept()
 
     def _setup_panels_menu(self):

@@ -43,11 +43,8 @@ class TreeRenameMixin:
             ),
         ]
 
-        # Переименовываем файлы
+        # Переименовываем файлы в R2
         for old_key, new_key in related_files:
-            # ВСЕГДА переименовываем в локальном кэше (даже если файла нет в R2)
-            self._rename_cache_file(old_key, new_key)
-
             # Переименовываем в R2 если файл там существует
             if r2.exists(old_key):
                 try:
@@ -150,7 +147,6 @@ class TreeRenameMixin:
                                     name=new_name_clean,
                                     attributes=node.attributes,
                                 )
-                                self._rename_cache_file(old_r2_key, new_r2_key)
                                 self._update_node_file_r2_key(
                                     node.id, old_r2_key, new_r2_key
                                 )
@@ -168,9 +164,6 @@ class TreeRenameMixin:
                                     name=new_name_clean,
                                     attributes=node.attributes,
                                 )
-
-                                # Переименовываем PDF в локальном кэше
-                                self._rename_cache_file(old_r2_key, new_r2_key)
 
                                 # Обновляем запись PDF в node_files
                                 self._update_node_file_r2_key(

@@ -28,6 +28,10 @@ class MainWindowState:
     current_node_id: Optional[str] = None
     current_node_locked: bool = False
 
+    # ── Temp session (tree-документы) ────────────────────────────────
+    current_temp_workspace: Optional[str] = None
+    current_document_origin: str = "local"  # "local" | "tree_temp"
+
     # ── Page cache (LRU) ─────────────────────────────────────────────
     page_images: dict = field(default_factory=dict)
     _page_images_order: list = field(default_factory=list)
@@ -69,6 +73,8 @@ class MainWindowState:
         self.current_pdf_path = None
         self.current_node_id = None
         self.current_node_locked = False
+        self.current_temp_workspace = None
+        self.current_document_origin = "local"
         self.page_images.clear()
         self._page_images_order.clear()
         self.page_zoom_states.clear()

@@ -55,24 +55,13 @@ class TreeSplitMixin:
             )
             return
 
-        # 2. Скачивание PDF из R2
-        from app.gui.folder_settings_dialog import get_projects_dir
+        # 2. Скачивание PDF из R2 в одноразовую temp-папку
+        import tempfile
+
         from rd_core.r2_storage import R2Storage
 
-        projects_dir = get_projects_dir()
-        if not projects_dir:
-            QMessageBox.warning(
-                self, "Ошибка", "Папка проектов не задана в настройках"
-            )
-            return
-
-        if r2_key.startswith("tree_docs/"):
-            rel_path = r2_key[len("tree_docs/"):]
-        else:
-            rel_path = r2_key
-
-        local_path = Path(projects_dir) / "cache" / rel_path
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix="rd_split_"))
+        local_path = work_dir / Path(r2_key).name
 
         try:
             r2 = R2Storage()
@@ -80,17 +69,18 @@ class TreeSplitMixin:
             QMessageBox.critical(
                 self, "Ошибка R2", f"Не удалось подключиться к R2:\n{e}"
             )
+            shutil.rmtree(work_dir, ignore_errors=True)
             return
 
-        if not local_path.exists():
-            self.status_label.setText("Скачивание PDF из R2...")
-            QApplication.processEvents()
-            if not r2.download_file(r2_key, str(local_path)):
-                QMessageBox.critical(
-                    self, "Ошибка",
-                    f"Не удалось скачать файл из R2:\n{r2_key}",
-                )
-                return
+        self.status_label.setText("Скачивание PDF из R2...")
+        QApplication.processEvents()
+        if not r2.download_file(r2_key, str(local_path), use_cache=False):
+            QMessageBox.critical(
+                self, "Ошибка",
+                f"Не удалось скачать файл из R2:\n{r2_key}",
+            )
+            shutil.rmtree(work_dir, ignore_errors=True)
+            return
 
         # 3. Определение количества страниц
         try:
@@ -166,8 +156,9 @@ class TreeSplitMixin:
             )
             return
         finally:
-            # Очистка временных файлов
+            # Очистка временных файлов (split output + work_dir)
             shutil.rmtree(str(output_dir), ignore_errors=True)
+            shutil.rmtree(str(work_dir), ignore_errors=True)
 
         # 8. Результат
         if all_broken_links or all_broken_groups:

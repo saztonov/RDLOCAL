@@ -87,7 +87,7 @@ class DownloadMixin:
                     # Проверяем без кэша (свежие данные с сервера)
                     if r2.exists(remote_key, use_cache=False):
                         # Скачиваем без дискового кэша (сервер мог обновить файл)
-                        r2.download_file(remote_key, str(local_path), use_cache=False)
+                        r2.download_file(remote_key, str(local_path))
                         logger.info(f"Скачан: {local_path}")
                     else:
                         logger.warning(f"Файл не найден: {remote_key}")

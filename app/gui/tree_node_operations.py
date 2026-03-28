@@ -146,40 +146,15 @@ class TreeNodeOperationsMixin(
         if not r2_key:
             return
 
-        from app.gui.folder_settings_dialog import get_projects_dir
-
-        projects_dir = get_projects_dir()
-        if not projects_dir:
-            return
-
-        # Формируем локальный путь из r2_key
-        if r2_key.startswith("tree_docs/"):
-            rel_path = r2_key[len("tree_docs/") :]
-        else:
-            rel_path = r2_key
-
-        cache_path = Path(projects_dir) / "cache" / rel_path
-
-        # Получаем главное окно
         main_window = self.window()
-        if (
-            not hasattr(main_window, "_current_pdf_path")
-            or not main_window._current_pdf_path
-        ):
+        current_r2_key = getattr(main_window, "_current_r2_key", None)
+        if not current_r2_key:
             return
 
-        # Сравниваем пути
-        try:
-            current_path = Path(main_window._current_pdf_path).resolve()
-            target_path = cache_path.resolve()
-
-            if current_path == target_path:
-                # Закрываем файл
-                if hasattr(main_window, "_clear_interface"):
-                    main_window._clear_interface()
-                    logger.info(f"Closed file in editor: {cache_path}")
-        except Exception as e:
-            logger.error(f"Error checking open file: {e}")
+        if current_r2_key == r2_key:
+            if hasattr(main_window, "_clear_interface"):
+                main_window._clear_interface()
+                logger.info(f"Closed file in editor: {r2_key}")
 
     def _set_status(self, node: TreeNode, status: NodeStatus):
         """Установить статус узла"""
