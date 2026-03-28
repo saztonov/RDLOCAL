@@ -51,5 +51,5 @@ def get_ocr_defaults() -> Dict[str, str]:
         "stamp_model": config.get(
             "default_stamp_model", "google/gemini-3.1-flash-lite-preview"
         ),
-        "engine": config.get("default_engine", "datalab"),
+        "engine": config.get("default_engine", "lmstudio"),
     }

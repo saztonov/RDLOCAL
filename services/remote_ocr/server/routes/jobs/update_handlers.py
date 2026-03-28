@@ -155,7 +155,7 @@ async def restart_job_handler(
 
 def start_job_handler(
     job_id: str,
-    engine: str = Form("datalab"),
+    engine: str = Form("lmstudio"),
     text_model: str = Form(""),
     table_model: str = Form(""),
     image_model: str = Form(""),
@@ -164,6 +164,13 @@ def start_job_handler(
 ) -> dict:
     """Запустить черновик на распознавание"""
     check_api_key(x_api_key)
+
+    if engine not in ("lmstudio", "chandra"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported engine '{engine}'. Only 'lmstudio' is supported (legacy alias: 'chandra').",
+        )
+
     _logger.info(
         f"Запуск черновика: {job_id}",
         extra={

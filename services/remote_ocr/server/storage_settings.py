@@ -24,15 +24,14 @@ def get_category_prompt(
 
     code = category_code or "default"
 
-    # openrouter / datalab / chandra / default
     if code == "stamp":
         return {
-            "system": settings.openrouter_stamp_system_prompt,
-            "user": settings.openrouter_stamp_user_prompt,
+            "system": settings.stamp_system_prompt,
+            "user": settings.stamp_user_prompt,
         }
     return {
-        "system": settings.openrouter_image_system_prompt,
-        "user": settings.openrouter_image_user_prompt,
+        "system": settings.image_system_prompt,
+        "user": settings.image_user_prompt,
     }
 
 

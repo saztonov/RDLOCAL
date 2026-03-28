@@ -22,7 +22,7 @@ class JobCreateMixin:
         selected_blocks: List[Block],
         client_id: str,
         task_name: str = "",
-        engine: str = "datalab",
+        engine: str = "lmstudio",
         text_model: Optional[str] = None,
         table_model: Optional[str] = None,
         image_model: Optional[str] = None,

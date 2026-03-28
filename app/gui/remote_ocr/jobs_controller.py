@@ -257,9 +257,7 @@ class JobsController(QObject):
             QMessageBox.warning(mw, "Ошибка", "Клиент не инициализирован")
             return
 
-        engine = dialog.ocr_backend if dialog.ocr_backend in (
-            "datalab", "chandra"
-        ) else "datalab"
+        engine = "lmstudio"
 
         self._pending_output_dir = dialog.output_dir
 

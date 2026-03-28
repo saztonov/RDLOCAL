@@ -39,7 +39,7 @@ def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
 
     Args:
         ocr_text: OCR результат (HTML строка)
-        engine: имя OCR движка ('chandra', 'datalab', 'openrouter')
+        engine: имя OCR движка ('lmstudio', 'chandra')
 
     Returns:
         (cleaned_text, metadata) где metadata содержит:

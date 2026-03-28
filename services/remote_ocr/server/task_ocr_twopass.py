@@ -33,7 +33,7 @@ def run_two_pass_ocr(
     image_backend,
     stamp_backend,
     start_mem: float,
-    engine: str = "openrouter",
+    engine: str = "lmstudio",
     soft_timeout_at: float = None,
 ):
     """Двухпроходный алгоритм OCR (экономия памяти)"""
@@ -132,11 +132,31 @@ def run_two_pass_ocr(
         # Сброс asyncio-привязанного rate limiter перед новым event loop
         reset_async_limiter()
 
-        # Для LM Studio бэкендов: ограничение параллельности (Max Concurrent Predictions)
-        if engine == "chandra":
-            max_concurrent = getattr(settings, f"{engine}_max_concurrent", 2)
-        else:
-            max_concurrent = None
+        # Для LM Studio бэкендов: ограничение параллельности
+        max_concurrent = settings.chandra_max_concurrent
+
+        # Callback для смены модели между strip и image фазами
+        def _swap_to_qwen():
+            """Выгрузить chandra, загрузить qwen (если тот же LM Studio инстанс)."""
+            qwen_url = settings.qwen_base_url or settings.chandra_base_url
+            if qwen_url == settings.chandra_base_url:
+                # Тот же инстанс — нужна смена модели
+                logger.info("Смена модели: chandra → qwen (тот же LM Studio инстанс)")
+                try:
+                    strip_backend.unload_model()
+                except Exception as e:
+                    logger.warning(f"Ошибка выгрузки chandra: {e}")
+                try:
+                    image_backend.preload()
+                except Exception as e:
+                    logger.warning(f"Ошибка загрузки qwen: {e}")
+            else:
+                # Разные инстансы — просто preload qwen
+                logger.info("Preload qwen (отдельный LM Studio инстанс)")
+                try:
+                    image_backend.preload()
+                except Exception as e:
+                    logger.warning(f"Ошибка загрузки qwen: {e}")
 
         logger.info(
             f"PASS2: запуск async OCR (max_concurrent={max_concurrent or settings.ocr_threads_per_job})",
@@ -165,6 +185,7 @@ def run_two_pass_ocr(
                 checkpoint=checkpoint if USE_CHECKPOINT else None,
                 work_dir=work_dir if USE_CHECKPOINT else None,
                 deadline=soft_timeout_at,
+                before_image_phase=_swap_to_qwen,
             )
         )
 

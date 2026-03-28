@@ -25,7 +25,7 @@ task_retry_delay: 60
 # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
 # Максимальное время выполнения одной задачи в часах
 job_max_runtime_hours: 2
-# Увеличенный лимит для LM Studio движков (Chandra через ngrok)
+# Увеличенный лимит для LM Studio движков (Chandra/Qwen через ngrok)
 job_max_runtime_hours_lmstudio: 4
 # Максимальное количество попыток (защита от бесконечного зацикливания)
 job_max_retries: 3
@@ -38,32 +38,20 @@ ocr_threads_per_job: 2
 # Таймаут одного OCR запроса, секунды
 ocr_request_timeout: 480
 
-# ===== DATALAB API =====
-# Максимум запросов в минуту к Datalab
-datalab_max_rpm: 180
-# Параллельных запросов к Datalab
-datalab_max_concurrent: 5
-# Интервал между проверками статуса задачи в Datalab, секунды
-datalab_poll_interval: 3
-# Максимум попыток проверки статуса (90 x 3сек = ~4.5 мин)
-datalab_poll_max_attempts: 90
-# Количество повторов при ошибке Datalab API
-datalab_max_retries: 3
-# Дополнительные фичи Datalab (comma-separated: table_row_bboxes, chart_understanding, etc.)
-datalab_extras: "table_row_bboxes"
-# Порог качества для retry (0-5, ниже порога = повторный запрос с skip_cache)
-datalab_quality_threshold: 2.0
-
-# ===== CHANDRA (LM Studio) =====
+# ===== CHANDRA (LM Studio — TEXT/TABLE) =====
 # Параллельных запросов к Chandra PER TASK
 # При N воркерах LM Studio нужно Max Concurrent Predictions >= chandra_max_concurrent * N
-# Пример: 2 воркера × 2 = 4 одновременных запроса к LM Studio
 chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2
 # HTTP таймаут для Chandra запросов, секунды (LM Studio через ngrok)
-# Снижен с 90 до 60: LM Studio отвечает за <60s, 90s × 3 retry = 270s каскадного зависания
 chandra_http_timeout: 60
+
+# ===== QWEN (LM Studio — IMAGE/STAMP) =====
+# Параллельных запросов к Qwen PER TASK
+qwen_max_concurrent: 2
+# HTTP таймаут для Qwen запросов, секунды
+qwen_http_timeout: 90
 
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
@@ -103,20 +91,24 @@ max_queue_size: 100
 default_task_priority: 5
 
 # ===== МОДЕЛИ OCR ПО УМОЛЧАНИЮ =====
-# Движок по умолчанию: datalab | chandra
-default_engine: "datalab"
-# Модель для распознавания изображений (OpenRouter)
-default_image_model: "google/gemini-3.1-flash-lite-preview"
-# Модель для распознавания штампов (OpenRouter)
-default_stamp_model: "google/gemini-3.1-flash-lite-preview"
+# Движок: lmstudio (единственный поддерживаемый)
+default_engine: "lmstudio"
+# Модель для TEXT/TABLE блоков (Chandra, LM Studio)
+default_text_model: "chandra-ocr-2"
+# Модель для TABLE блоков (alias для text)
+default_table_model: "chandra-ocr-2"
+# Модель для IMAGE блоков (Qwen, LM Studio)
+default_image_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
+# Модель для STAMP блоков (Qwen, LM Studio)
+default_stamp_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 
 # =====================================================
-# ПРОМПТЫ ДЛЯ OCR
+# ПРОМПТЫ ДЛЯ OCR (IMAGE/STAMP)
 # =====================================================
 # Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}, {OPERATOR_HINT}, {PDFPLUMBER_TEXT}
 
-# -- OpenRouter / Gemini: IMAGE blocks (default category) --
-openrouter_image_system_prompt: |
+# -- IMAGE blocks (default category) --
+image_system_prompt: |
   You extract evidence from one image tile of a Russian construction document.
   Your goal is stable machine-readable JSON for indexing and OCR support.
 
@@ -160,7 +152,7 @@ openrouter_image_system_prompt: |
   - clean_ocr_text: only confirmed local text belonging to this tile. Prefer the image. Use raw_pdfplumber_text only to repair obvious OCR confusions for text clearly visible in this tile.
   - key_entities: up to 25 unique visible marks, positions, dimensions, elevations, Ø/DN values, and codes.
 
-openrouter_image_user_prompt: |
+image_user_prompt: |
   <context>
   DOC_NAME: {DOC_NAME}
   PAGE_NUM: {PAGE_NUM}
@@ -184,8 +176,8 @@ openrouter_image_user_prompt: |
 
   Return exactly one JSON object matching the system schema.
 
-# -- OpenRouter / Gemini: STAMP blocks --
-openrouter_stamp_system_prompt: |
+# -- STAMP blocks --
+stamp_system_prompt: |
   You extract fields from one title block / construction stamp from Russian project documentation.
   Accuracy of structured fields is more important than prose.
 
@@ -222,7 +214,7 @@ openrouter_stamp_system_prompt: |
   - signatures: include only visible rows.
   - revisions: include only visible revision entries.
 
-openrouter_stamp_user_prompt: |
+stamp_user_prompt: |
   <context>
   DOC_NAME: {DOC_NAME}
   PAGE_NUM: {PAGE_NUM}
@@ -244,4 +236,3 @@ openrouter_stamp_user_prompt: |
   5) If a field is cropped, hidden, or ambiguous, return null.
 
   Return exactly one JSON object matching the system schema.
-

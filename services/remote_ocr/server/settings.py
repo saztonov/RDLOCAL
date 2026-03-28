@@ -88,10 +88,8 @@ class Settings:
     # ===== СЕКРЕТЫ (только .env) =====
     data_dir: str = _env("REMOTE_OCR_DATA_DIR", "/data")
     api_key: str = _env("REMOTE_OCR_API_KEY")
-    openrouter_api_key: str = _env("OPENROUTER_API_KEY")
-    openrouter_base_url: str = _env("OPENROUTER_BASE_URL", "https://openrouter.ai")
-    datalab_api_key: str = _env("DATALAB_API_KEY")
     chandra_base_url: str = _env("CHANDRA_BASE_URL")
+    qwen_base_url: str = _env("QWEN_BASE_URL")
     redis_url: str = _env("REDIS_URL", "redis://redis:6379/0")
     supabase_url: str = _env("SUPABASE_URL")
     supabase_key: str = _env("SUPABASE_KEY")
@@ -115,19 +113,14 @@ class Settings:
     ocr_threads_per_job: int = _cfg("ocr_threads_per_job", "OCR_THREADS_PER_JOB", int)
     ocr_request_timeout: int = _cfg("ocr_request_timeout", "OCR_REQUEST_TIMEOUT", int)
 
-    # ===== DATALAB API =====
-    datalab_max_rpm: int = _cfg("datalab_max_rpm", "DATALAB_MAX_RPM", int)
-    datalab_max_concurrent: int = _cfg("datalab_max_concurrent", "DATALAB_MAX_CONCURRENT", int)
-    datalab_poll_interval: int = _cfg("datalab_poll_interval", "DATALAB_POLL_INTERVAL", int)
-    datalab_poll_max_attempts: int = _cfg("datalab_poll_max_attempts", "DATALAB_POLL_MAX_ATTEMPTS", int)
-    datalab_max_retries: int = _cfg("datalab_max_retries", "DATALAB_MAX_RETRIES", int)
-    datalab_extras: str = _cfg("datalab_extras", "DATALAB_EXTRAS")
-    datalab_quality_threshold: float = _cfg("datalab_quality_threshold", "DATALAB_QUALITY_THRESHOLD", float)
-
-    # ===== CHANDRA (LM Studio) =====
+    # ===== CHANDRA (LM Studio — TEXT/TABLE) =====
     chandra_max_concurrent: int = _cfg("chandra_max_concurrent", "CHANDRA_MAX_CONCURRENT", int)
     chandra_retry_delay: int = _cfg("chandra_retry_delay", "CHANDRA_RETRY_DELAY", int)
     chandra_http_timeout: int = _cfg("chandra_http_timeout", "CHANDRA_HTTP_TIMEOUT", int)
+
+    # ===== QWEN (LM Studio — IMAGE/STAMP) =====
+    qwen_max_concurrent: int = _cfg("qwen_max_concurrent", "QWEN_MAX_CONCURRENT", int)
+    qwen_http_timeout: int = _cfg("qwen_http_timeout", "QWEN_HTTP_TIMEOUT", int)
 
     # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
     max_retry_blocks: int = _cfg("max_retry_blocks", "MAX_RETRY_BLOCKS", int)
@@ -153,14 +146,16 @@ class Settings:
 
     # ===== МОДЕЛИ ПО УМОЛЧАНИЮ =====
     default_engine: str = _cfg("default_engine", "DEFAULT_ENGINE")
+    default_text_model: str = _cfg("default_text_model", "DEFAULT_TEXT_MODEL")
+    default_table_model: str = _cfg("default_table_model", "DEFAULT_TABLE_MODEL")
     default_image_model: str = _cfg("default_image_model", "DEFAULT_IMAGE_MODEL")
     default_stamp_model: str = _cfg("default_stamp_model", "DEFAULT_STAMP_MODEL")
 
-    # ===== ПРОМПТЫ ДЛЯ OCR =====
-    openrouter_image_system_prompt: str = _cfg("openrouter_image_system_prompt", "OPENROUTER_IMAGE_SYSTEM_PROMPT")
-    openrouter_image_user_prompt: str = _cfg("openrouter_image_user_prompt", "OPENROUTER_IMAGE_USER_PROMPT")
-    openrouter_stamp_system_prompt: str = _cfg("openrouter_stamp_system_prompt", "OPENROUTER_STAMP_SYSTEM_PROMPT")
-    openrouter_stamp_user_prompt: str = _cfg("openrouter_stamp_user_prompt", "OPENROUTER_STAMP_USER_PROMPT")
+    # ===== ПРОМПТЫ ДЛЯ OCR (IMAGE/STAMP) =====
+    image_system_prompt: str = _cfg("image_system_prompt", "IMAGE_SYSTEM_PROMPT")
+    image_user_prompt: str = _cfg("image_user_prompt", "IMAGE_USER_PROMPT")
+    stamp_system_prompt: str = _cfg("stamp_system_prompt", "STAMP_SYSTEM_PROMPT")
+    stamp_user_prompt: str = _cfg("stamp_user_prompt", "STAMP_USER_PROMPT")
 
 
 # Lazy singleton: Settings создаётся при первом обращении

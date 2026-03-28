@@ -34,7 +34,7 @@ async def create_job_handler(
     document_name: str = Form(...),
     client_id: str = Form(...),
     task_name: str = Form(""),
-    engine: str = Form("datalab"),
+    engine: str = Form("lmstudio"),
     text_model: str = Form(""),
     table_model: str = Form(""),
     image_model: str = Form(""),
@@ -50,6 +50,12 @@ async def create_job_handler(
     Если node_id указан - файлы берутся из tree_docs/{node_id}/, не дублируем.
     """
     check_api_key(x_api_key)
+
+    if engine not in ("lmstudio", "chandra"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported engine '{engine}'. Only 'lmstudio' is supported (legacy alias: 'chandra').",
+        )
 
     blocks_json = (await blocks_file.read()).decode("utf-8")
     _logger.info(

@@ -87,7 +87,7 @@ def generate_results(
         )
 
     # Фильтрация image-артефактов из TEXT блоков (mixed-text Chandra output)
-    engine = job.engine or "datalab"
+    engine = job.engine or "lmstudio"
     for block in blocks:
         if block.block_type == BlockType.TEXT and block.ocr_text:
             block.ocr_text, fmeta = filter_mixed_text_output(block.ocr_text, engine)

@@ -11,36 +11,26 @@ def create_ocr_engine(backend: str = "dummy", **kwargs) -> OCRBackend:
     Фабрика для создания OCR движка
 
     Args:
-        backend: тип движка ('openrouter', 'datalab' или 'dummy')
+        backend: тип движка ('chandra', 'qwen' или 'dummy')
         **kwargs: дополнительные параметры для движка
 
     Returns:
         Экземпляр OCR движка
     """
-    model_name = kwargs.get("model_name", "")
-    mode = kwargs.get("mode", "")
-
-    if backend == "openrouter":
-        from rd_core.ocr.openrouter import OpenRouterBackend
-
-        logger.info("Создан OCR бэкенд", extra={
-            "event": "ocr_backend_created", "backend": "openrouter", "model_name": model_name,
-        })
-        return OpenRouterBackend(**kwargs)
-    elif backend == "datalab":
-        from rd_core.ocr.datalab import DatalabOCRBackend
-
-        logger.info("Создан OCR бэкенд", extra={
-            "event": "ocr_backend_created", "backend": "datalab",
-        })
-        return DatalabOCRBackend(**kwargs)
-    elif backend == "chandra":
+    if backend == "chandra":
         from rd_core.ocr.chandra import ChandraBackend
 
         logger.info("Создан OCR бэкенд", extra={
             "event": "ocr_backend_created", "backend": "chandra",
         })
         return ChandraBackend(**kwargs)
+    elif backend == "qwen":
+        from rd_core.ocr.qwen import QwenBackend
+
+        logger.info("Создан OCR бэкенд", extra={
+            "event": "ocr_backend_created", "backend": "qwen",
+        })
+        return QwenBackend(**kwargs)
     elif backend == "dummy":
         from rd_core.ocr.dummy import DummyOCRBackend
 

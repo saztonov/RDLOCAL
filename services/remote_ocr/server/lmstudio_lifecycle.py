@@ -145,7 +145,7 @@ def check_and_unload_models() -> None:
     """
     import time
 
-    for engine in ("chandra",):
+    for engine in ("chandra", "qwen"):
         try:
             client = _get_redis_client()
             pending_ts = client.get(_pending_unload_key(engine))
@@ -178,6 +178,8 @@ def _do_unload_model(engine: str) -> None:
     base_url = None
     if engine == "chandra":
         base_url = getattr(settings, "chandra_base_url", None)
+    elif engine == "qwen":
+        base_url = getattr(settings, "qwen_base_url", None) or getattr(settings, "chandra_base_url", None)
 
     if not base_url:
         return
@@ -193,6 +195,9 @@ def _do_unload_model(engine: str) -> None:
         if engine == "chandra":
             from rd_core.ocr._chandra_common import CHANDRA_MODEL_KEY
             model_key_lower = CHANDRA_MODEL_KEY.lower()
+        elif engine == "qwen":
+            from rd_core.ocr._qwen_common import QWEN_MODEL_KEY
+            model_key_lower = QWEN_MODEL_KEY.lower()
         else:
             model_key_lower = engine
 
@@ -223,3 +228,13 @@ def acquire_chandra(job_id: str) -> int:
 def release_chandra(job_id: str) -> int:
     """Обратная совместимость: release для Chandra."""
     return release_lmstudio("chandra", job_id)
+
+
+def acquire_qwen(job_id: str) -> int:
+    """Обратная совместимость: acquire для Qwen."""
+    return acquire_lmstudio("qwen", job_id)
+
+
+def release_qwen(job_id: str) -> int:
+    """Обратная совместимость: release для Qwen."""
+    return release_lmstudio("qwen", job_id)

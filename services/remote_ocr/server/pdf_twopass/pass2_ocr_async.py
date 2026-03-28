@@ -68,6 +68,7 @@ async def pass2_ocr_from_manifest_async(
     checkpoint: Optional[OCRCheckpoint] = None,
     work_dir: Optional[Path] = None,
     deadline: Optional[float] = None,
+    before_image_phase: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     PASS 2 ASYNC: Асинхронный OCR с загрузкой кропов с диска.
@@ -208,15 +209,18 @@ async def pass2_ocr_from_manifest_async(
                     logger.warning(f"PASS2 ASYNC: ошибка в on_progress callback: {exc}")
 
     # --- Обработка strips ---
-    # Retry для всех бэкендов: LM Studio (ngrok instability) и cloud (transient 429/5xx)
-    _is_lmstudio = type(strip_backend).__name__ in (
-        "ChandraBackend",
+    # Retry: LM Studio (ngrok instability)
+    _is_lmstudio_strip = type(strip_backend).__name__ in (
+        "ChandraBackend", "QwenBackend",
     )
-    _STRIP_MAX_RETRIES = 2 if _is_lmstudio else 1
-    _STRIP_RETRY_DELAYS = [30, 60] if _is_lmstudio else [5]
-    # Retry для IMAGE блоков (одинаковая логика)
-    _IMAGE_MAX_RETRIES = 2 if _is_lmstudio else 1
-    _IMAGE_RETRY_DELAYS = [30, 60] if _is_lmstudio else [10]
+    _STRIP_MAX_RETRIES = 2 if _is_lmstudio_strip else 1
+    _STRIP_RETRY_DELAYS = [30, 60] if _is_lmstudio_strip else [5]
+    # Retry для IMAGE блоков
+    _is_lmstudio_image = type(image_backend).__name__ in (
+        "ChandraBackend", "QwenBackend",
+    )
+    _IMAGE_MAX_RETRIES = 2 if _is_lmstudio_image else 1
+    _IMAGE_RETRY_DELAYS = [30, 60] if _is_lmstudio_image else [10]
 
     # Резерв времени для upload/finalize (секунды)
     _DEADLINE_RESERVE = 120
@@ -395,8 +399,8 @@ async def pass2_ocr_from_manifest_async(
         if not block:
             return None
 
-        block_code = getattr(block, "code", None)
-        backend = stamp_backend if block_code == "stamp" else image_backend
+        category_code = getattr(block, "category_code", None)
+        backend = stamp_backend if category_code == "stamp" else image_backend
 
         use_pdf = (
             entry.pdf_crop_path
@@ -611,6 +615,11 @@ async def pass2_ocr_from_manifest_async(
 
     log_memory_delta("PASS2 ASYNC после strips", start_mem)
 
+    # Смена модели между фазами (если тот же LM Studio инстанс)
+    if before_image_phase:
+        logger.info("PASS2 ASYNC: выполняем before_image_phase (смена модели)")
+        await asyncio.to_thread(before_image_phase)
+
     # === ОБРАБОТКА IMAGE БЛОКОВ (bounded queue) ===
     logger.info(
         f"PASS2 ASYNC: обработка {len(manifest.image_blocks)} image blocks "
@@ -708,6 +717,7 @@ def pass2_ocr_from_manifest_sync_wrapper(
     check_paused: Optional[Callable[[], bool]] = None,
     checkpoint: Optional[OCRCheckpoint] = None,
     work_dir: Optional[Path] = None,
+    before_image_phase: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Синхронная обёртка для async pass2_ocr.
@@ -726,5 +736,6 @@ def pass2_ocr_from_manifest_sync_wrapper(
             check_paused=check_paused,
             checkpoint=checkpoint,
             work_dir=work_dir,
+            before_image_phase=before_image_phase,
         )
     )

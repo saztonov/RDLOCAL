@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI):
                 "task_soft_timeout": settings.task_soft_timeout,
                 "task_hard_timeout": settings.task_hard_timeout,
                 "max_queue_size": settings.max_queue_size,
-                "has_openrouter_key": bool(settings.openrouter_api_key),
-                "has_datalab_key": bool(settings.datalab_api_key),
+                "chandra_base_url": bool(settings.chandra_base_url),
+                "qwen_base_url": bool(settings.qwen_base_url),
             },
         },
     )
@@ -173,22 +173,16 @@ async def readiness() -> JSONResponse:
     except Exception:
         _logger.warning("Readiness: Supabase check failed", exc_info=True)
 
-    # Config: хотя бы один OCR ключ
-    checks["config"] = bool(settings.openrouter_api_key or settings.datalab_api_key)
+    # Config: chandra_base_url обязателен
+    checks["config"] = bool(settings.chandra_base_url)
 
     # Provider health (информационное, НЕ влияет на ready)
     providers: dict = {}
-    if settings.datalab_api_key:
-        try:
-            import httpx
 
-            resp = httpx.get("https://www.datalab.to/api/v1/status", timeout=5)
-            providers["datalab"] = {"configured": True, "reachable": resp.status_code == 200}
-        except Exception:
-            providers["datalab"] = {"configured": True, "reachable": False}
-
-    for engine_name in ("chandra",):
+    for engine_name in ("chandra", "qwen"):
         url = getattr(settings, f"{engine_name}_base_url", None)
+        if not url and engine_name == "qwen":
+            url = settings.chandra_base_url
         if url:
             try:
                 import httpx
