@@ -51,6 +51,391 @@
       }
     ]
   },
+  "auth.custom_oauth_providers": {
+    "schema": "auth",
+    "name": "custom_oauth_providers",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "comment": null,
+        "default": "gen_random_uuid()",
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "provider_type",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "identifier",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "name",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "client_id",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "client_secret",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "acceptable_client_ids",
+        "comment": null,
+        "default": "'{}'::text[]",
+        "data_type": "text[]",
+        "is_nullable": false
+      },
+      {
+        "name": "scopes",
+        "comment": null,
+        "default": "'{}'::text[]",
+        "data_type": "text[]",
+        "is_nullable": false
+      },
+      {
+        "name": "pkce_enabled",
+        "comment": null,
+        "default": "true",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "attribute_mapping",
+        "comment": null,
+        "default": "'{}'::jsonb",
+        "data_type": "jsonb",
+        "is_nullable": false
+      },
+      {
+        "name": "authorization_params",
+        "comment": null,
+        "default": "'{}'::jsonb",
+        "data_type": "jsonb",
+        "is_nullable": false
+      },
+      {
+        "name": "enabled",
+        "comment": null,
+        "default": "true",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "email_optional",
+        "comment": null,
+        "default": "false",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "issuer",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "discovery_url",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "skip_nonce_check",
+        "comment": null,
+        "default": "false",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "cached_discovery",
+        "comment": null,
+        "default": null,
+        "data_type": "jsonb",
+        "is_nullable": true
+      },
+      {
+        "name": "discovery_cached_at",
+        "comment": null,
+        "default": null,
+        "data_type": "timestamp with time zone",
+        "is_nullable": true
+      },
+      {
+        "name": "authorization_url",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "token_url",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "userinfo_url",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "jwks_uri",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": true
+      },
+      {
+        "name": "created_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      },
+      {
+        "name": "updated_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      }
+    ],
+    "constraints": [
+      {
+        "name": "custom_oauth_providers_authorization_url_https",
+        "type": "CHECK",
+        "column": "authorization_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_authorization_url_length",
+        "type": "CHECK",
+        "column": "authorization_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_client_id_length",
+        "type": "CHECK",
+        "column": "client_id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_discovery_url_length",
+        "type": "CHECK",
+        "column": "discovery_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_identifier_format",
+        "type": "CHECK",
+        "column": "identifier",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_identifier_key",
+        "type": "UNIQUE",
+        "column": "identifier",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_issuer_length",
+        "type": "CHECK",
+        "column": "issuer",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_jwks_uri_https",
+        "type": "CHECK",
+        "column": "jwks_uri",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_jwks_uri_length",
+        "type": "CHECK",
+        "column": "jwks_uri",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_name_length",
+        "type": "CHECK",
+        "column": "name",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oauth2_requires_endpoints",
+        "type": "CHECK",
+        "column": "authorization_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oauth2_requires_endpoints",
+        "type": "CHECK",
+        "column": "provider_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oauth2_requires_endpoints",
+        "type": "CHECK",
+        "column": "token_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oauth2_requires_endpoints",
+        "type": "CHECK",
+        "column": "userinfo_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_discovery_url_https",
+        "type": "CHECK",
+        "column": "discovery_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_discovery_url_https",
+        "type": "CHECK",
+        "column": "provider_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_issuer_https",
+        "type": "CHECK",
+        "column": "issuer",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_issuer_https",
+        "type": "CHECK",
+        "column": "provider_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_requires_issuer",
+        "type": "CHECK",
+        "column": "issuer",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_oidc_requires_issuer",
+        "type": "CHECK",
+        "column": "provider_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_pkey",
+        "type": "PRIMARY KEY",
+        "column": "id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_provider_type_check",
+        "type": "CHECK",
+        "column": "provider_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_token_url_https",
+        "type": "CHECK",
+        "column": "token_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_token_url_length",
+        "type": "CHECK",
+        "column": "token_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_userinfo_url_https",
+        "type": "CHECK",
+        "column": "userinfo_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "custom_oauth_providers_userinfo_url_length",
+        "type": "CHECK",
+        "column": "userinfo_url",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      }
+    ]
+  },
   "auth.flow_state": {
     "schema": "auth",
     "name": "flow_state",
@@ -2136,6 +2521,204 @@
       }
     ]
   },
+  "auth.webauthn_challenges": {
+    "schema": "auth",
+    "name": "webauthn_challenges",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "comment": null,
+        "default": "gen_random_uuid()",
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "user_id",
+        "comment": null,
+        "default": null,
+        "data_type": "uuid",
+        "is_nullable": true
+      },
+      {
+        "name": "challenge_type",
+        "comment": null,
+        "default": null,
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "session_data",
+        "comment": null,
+        "default": null,
+        "data_type": "jsonb",
+        "is_nullable": false
+      },
+      {
+        "name": "created_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      },
+      {
+        "name": "expires_at",
+        "comment": null,
+        "default": null,
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      }
+    ],
+    "constraints": [
+      {
+        "name": "webauthn_challenges_challenge_type_check",
+        "type": "CHECK",
+        "column": "challenge_type",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "webauthn_challenges_pkey",
+        "type": "PRIMARY KEY",
+        "column": "id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "webauthn_challenges_user_id_fkey",
+        "type": "FOREIGN KEY",
+        "column": "user_id",
+        "foreign_table": "users",
+        "foreign_column": "id",
+        "foreign_table_schema": "auth"
+      }
+    ]
+  },
+  "auth.webauthn_credentials": {
+    "schema": "auth",
+    "name": "webauthn_credentials",
+    "comment": null,
+    "columns": [
+      {
+        "name": "id",
+        "comment": null,
+        "default": "gen_random_uuid()",
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "user_id",
+        "comment": null,
+        "default": null,
+        "data_type": "uuid",
+        "is_nullable": false
+      },
+      {
+        "name": "credential_id",
+        "comment": null,
+        "default": null,
+        "data_type": "bytea",
+        "is_nullable": false
+      },
+      {
+        "name": "public_key",
+        "comment": null,
+        "default": null,
+        "data_type": "bytea",
+        "is_nullable": false
+      },
+      {
+        "name": "attestation_type",
+        "comment": null,
+        "default": "''::text",
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "aaguid",
+        "comment": null,
+        "default": null,
+        "data_type": "uuid",
+        "is_nullable": true
+      },
+      {
+        "name": "sign_count",
+        "comment": null,
+        "default": "0",
+        "data_type": "bigint",
+        "is_nullable": false
+      },
+      {
+        "name": "transports",
+        "comment": null,
+        "default": "'[]'::jsonb",
+        "data_type": "jsonb",
+        "is_nullable": false
+      },
+      {
+        "name": "backup_eligible",
+        "comment": null,
+        "default": "false",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "backed_up",
+        "comment": null,
+        "default": "false",
+        "data_type": "boolean",
+        "is_nullable": false
+      },
+      {
+        "name": "friendly_name",
+        "comment": null,
+        "default": "''::text",
+        "data_type": "text",
+        "is_nullable": false
+      },
+      {
+        "name": "created_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      },
+      {
+        "name": "updated_at",
+        "comment": null,
+        "default": "now()",
+        "data_type": "timestamp with time zone",
+        "is_nullable": false
+      },
+      {
+        "name": "last_used_at",
+        "comment": null,
+        "default": null,
+        "data_type": "timestamp with time zone",
+        "is_nullable": true
+      }
+    ],
+    "constraints": [
+      {
+        "name": "webauthn_credentials_pkey",
+        "type": "PRIMARY KEY",
+        "column": "id",
+        "foreign_table": null,
+        "foreign_column": null,
+        "foreign_table_schema": null
+      },
+      {
+        "name": "webauthn_credentials_user_id_fkey",
+        "type": "FOREIGN KEY",
+        "column": "user_id",
+        "foreign_table": "users",
+        "foreign_column": "id",
+        "foreign_table_schema": "auth"
+      }
+    ]
+  },
   "public.annotations": {
     "schema": "public",
     "name": "annotations",
@@ -2157,7 +2740,7 @@
       },
       {
         "name": "data",
-        "comment": "Полная структура аннотации в формате v2 (pages, blocks)",
+        "comment": "Полная структура аннотации с OCR данными: pages[].blocks[].{ocr_text, ocr_html, ocr_json, ocr_meta, crop_url, stamp_data}",
         "default": "'{}'::jsonb",
         "data_type": "jsonb",
         "is_nullable": false
@@ -2595,7 +3178,7 @@
       },
       {
         "name": "file_type",
-        "comment": "Тип файла: pdf, annotation, result_md, result_zip, crop, image, ocr_html, result_json, crops_folder, qa_manifest, blocks_index",
+        "comment": "Тип файла: pdf, result_md, crop, ocr_html, crops_folder, qa_manifest. Legacy (не создаются): annotation, result_json, blocks_index",
         "default": null,
         "data_type": "text",
         "is_nullable": false

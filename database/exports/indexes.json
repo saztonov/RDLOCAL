@@ -7,6 +7,46 @@
     "is_primary": false,
     "sql": "CREATE INDEX audit_logs_instance_id_idx ON auth.audit_log_entries USING btree (instance_id)"
   },
+  "auth.custom_oauth_providers.custom_oauth_providers_created_at_idx": {
+    "schema": "auth",
+    "name": "custom_oauth_providers_created_at_idx",
+    "table_name": "custom_oauth_providers",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX custom_oauth_providers_created_at_idx ON auth.custom_oauth_providers USING btree (created_at)"
+  },
+  "auth.custom_oauth_providers.custom_oauth_providers_enabled_idx": {
+    "schema": "auth",
+    "name": "custom_oauth_providers_enabled_idx",
+    "table_name": "custom_oauth_providers",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX custom_oauth_providers_enabled_idx ON auth.custom_oauth_providers USING btree (enabled)"
+  },
+  "auth.custom_oauth_providers.custom_oauth_providers_identifier_idx": {
+    "schema": "auth",
+    "name": "custom_oauth_providers_identifier_idx",
+    "table_name": "custom_oauth_providers",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX custom_oauth_providers_identifier_idx ON auth.custom_oauth_providers USING btree (identifier)"
+  },
+  "auth.custom_oauth_providers.custom_oauth_providers_identifier_key": {
+    "schema": "auth",
+    "name": "custom_oauth_providers_identifier_key",
+    "table_name": "custom_oauth_providers",
+    "is_unique": true,
+    "is_primary": false,
+    "sql": "CREATE UNIQUE INDEX custom_oauth_providers_identifier_key ON auth.custom_oauth_providers USING btree (identifier)"
+  },
+  "auth.custom_oauth_providers.custom_oauth_providers_provider_type_idx": {
+    "schema": "auth",
+    "name": "custom_oauth_providers_provider_type_idx",
+    "table_name": "custom_oauth_providers",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX custom_oauth_providers_provider_type_idx ON auth.custom_oauth_providers USING btree (provider_type)"
+  },
   "auth.flow_state.flow_state_created_at_idx": {
     "schema": "auth",
     "name": "flow_state_created_at_idx",
@@ -438,6 +478,38 @@
     "is_unique": true,
     "is_primary": false,
     "sql": "CREATE UNIQUE INDEX users_phone_key ON auth.users USING btree (phone)"
+  },
+  "auth.webauthn_challenges.webauthn_challenges_expires_at_idx": {
+    "schema": "auth",
+    "name": "webauthn_challenges_expires_at_idx",
+    "table_name": "webauthn_challenges",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX webauthn_challenges_expires_at_idx ON auth.webauthn_challenges USING btree (expires_at)"
+  },
+  "auth.webauthn_challenges.webauthn_challenges_user_id_idx": {
+    "schema": "auth",
+    "name": "webauthn_challenges_user_id_idx",
+    "table_name": "webauthn_challenges",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX webauthn_challenges_user_id_idx ON auth.webauthn_challenges USING btree (user_id)"
+  },
+  "auth.webauthn_credentials.webauthn_credentials_credential_id_key": {
+    "schema": "auth",
+    "name": "webauthn_credentials_credential_id_key",
+    "table_name": "webauthn_credentials",
+    "is_unique": true,
+    "is_primary": false,
+    "sql": "CREATE UNIQUE INDEX webauthn_credentials_credential_id_key ON auth.webauthn_credentials USING btree (credential_id)"
+  },
+  "auth.webauthn_credentials.webauthn_credentials_user_id_idx": {
+    "schema": "auth",
+    "name": "webauthn_credentials_user_id_idx",
+    "table_name": "webauthn_credentials",
+    "is_unique": false,
+    "is_primary": false,
+    "sql": "CREATE INDEX webauthn_credentials_user_id_idx ON auth.webauthn_credentials USING btree (user_id)"
   },
   "public.annotations.annotations_node_id_unique": {
     "schema": "public",

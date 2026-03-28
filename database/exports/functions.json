@@ -111,19 +111,19 @@
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.gen_random_uuid()\n RETURNS uuid\n LANGUAGE c\n PARALLEL SAFE\nAS '$libdir/pgcrypto', $function$pg_random_uuid$function$\n"
   },
-  "extensions.gen_salt(text, integer)": {
-    "schema": "extensions",
-    "name": "gen_salt",
-    "arguments": "text, integer",
-    "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION extensions.gen_salt(text, integer)\n RETURNS text\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_gen_salt_rounds$function$\n"
-  },
   "extensions.gen_salt(text)": {
     "schema": "extensions",
     "name": "gen_salt",
     "arguments": "text",
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.gen_salt(text)\n RETURNS text\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_gen_salt$function$\n"
+  },
+  "extensions.gen_salt(text, integer)": {
+    "schema": "extensions",
+    "name": "gen_salt",
+    "arguments": "text, integer",
+    "comment": null,
+    "sql": "CREATE OR REPLACE FUNCTION extensions.gen_salt(text, integer)\n RETURNS text\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_gen_salt_rounds$function$\n"
   },
   "extensions.grant_pg_cron_access()": {
     "schema": "extensions",
@@ -146,19 +146,19 @@
     "comment": "Grants access to pg_net",
     "sql": "CREATE OR REPLACE FUNCTION extensions.grant_pg_net_access()\n RETURNS event_trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF EXISTS (\n    SELECT 1\n    FROM pg_event_trigger_ddl_commands() AS ev\n    JOIN pg_extension AS ext\n    ON ev.objid = ext.oid\n    WHERE ext.extname = 'pg_net'\n  )\n  THEN\n    IF NOT EXISTS (\n      SELECT 1\n      FROM pg_roles\n      WHERE rolname = 'supabase_functions_admin'\n    )\n    THEN\n      CREATE USER supabase_functions_admin NOINHERIT CREATEROLE LOGIN NOREPLICATION;\n    END IF;\n\n    GRANT USAGE ON SCHEMA net TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n\n    IF EXISTS (\n      SELECT FROM pg_extension\n      WHERE extname = 'pg_net'\n      -- all versions in use on existing projects as of 2025-02-20\n      -- version 0.12.0 onwards don't need these applied\n      AND extversion IN ('0.2', '0.6', '0.7', '0.7.1', '0.8', '0.10.0', '0.11.0')\n    ) THEN\n      ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;\n      ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;\n\n      ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;\n      ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;\n\n      REVOKE ALL ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;\n      REVOKE ALL ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;\n\n      GRANT EXECUTE ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n      GRANT EXECUTE ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n    END IF;\n  END IF;\nEND;\n$function$\n"
   },
-  "extensions.hmac(bytea, bytea, text)": {
-    "schema": "extensions",
-    "name": "hmac",
-    "arguments": "bytea, bytea, text",
-    "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_hmac$function$\n"
-  },
   "extensions.hmac(text, text, text)": {
     "schema": "extensions",
     "name": "hmac",
     "arguments": "text, text, text",
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_hmac$function$\n"
+  },
+  "extensions.hmac(bytea, bytea, text)": {
+    "schema": "extensions",
+    "name": "hmac",
+    "arguments": "bytea, bytea, text",
+    "comment": null,
+    "sql": "CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_hmac$function$\n"
   },
   "extensions.pg_stat_statements(showtext boolean, OUT userid oid, OUT dbid oid, OUT toplevel boolean, OUT queryid bigint, OUT query text, OUT plans bigint, OUT total_plan_time double precision, OUT min_plan_time double precision, OUT max_plan_time double precision, OUT mean_plan_time double precision, OUT stddev_plan_time double precision, OUT calls bigint, OUT total_exec_time double precision, OUT min_exec_time double precision, OUT max_exec_time double precision, OUT mean_exec_time double precision, OUT stddev_exec_time double precision, OUT rows bigint, OUT shared_blks_hit bigint, OUT shared_blks_read bigint, OUT shared_blks_dirtied bigint, OUT shared_blks_written bigint, OUT local_blks_hit bigint, OUT local_blks_read bigint, OUT local_blks_dirtied bigint, OUT local_blks_written bigint, OUT temp_blks_read bigint, OUT temp_blks_written bigint, OUT shared_blk_read_time double precision, OUT shared_blk_write_time double precision, OUT local_blk_read_time double precision, OUT local_blk_write_time double precision, OUT temp_blk_read_time double precision, OUT temp_blk_write_time double precision, OUT wal_records bigint, OUT wal_fpi bigint, OUT wal_bytes numeric, OUT jit_functions bigint, OUT jit_generation_time double precision, OUT jit_inlining_count bigint, OUT jit_inlining_time double precision, OUT jit_optimization_count bigint, OUT jit_optimization_time double precision, OUT jit_emission_count bigint, OUT jit_emission_time double precision, OUT jit_deform_count bigint, OUT jit_deform_time double precision, OUT stats_since timestamp with time zone, OUT minmax_stats_since timestamp with time zone)": {
     "schema": "extensions",
@@ -195,13 +195,6 @@
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_key_id(bytea)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_key_id_w$function$\n"
   },
-  "extensions.pgp_pub_decrypt(bytea, bytea, text)": {
-    "schema": "extensions",
-    "name": "pgp_pub_decrypt",
-    "arguments": "bytea, bytea, text",
-    "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
-  },
   "extensions.pgp_pub_decrypt(bytea, bytea)": {
     "schema": "extensions",
     "name": "pgp_pub_decrypt",
@@ -209,12 +202,26 @@
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
   },
+  "extensions.pgp_pub_decrypt(bytea, bytea, text)": {
+    "schema": "extensions",
+    "name": "pgp_pub_decrypt",
+    "arguments": "bytea, bytea, text",
+    "comment": null,
+    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
+  },
   "extensions.pgp_pub_decrypt(bytea, bytea, text, text)": {
     "schema": "extensions",
     "name": "pgp_pub_decrypt",
     "arguments": "bytea, bytea, text, text",
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
+  },
+  "extensions.pgp_pub_decrypt_bytea(bytea, bytea)": {
+    "schema": "extensions",
+    "name": "pgp_pub_decrypt_bytea",
+    "arguments": "bytea, bytea",
+    "comment": null,
+    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
   },
   "extensions.pgp_pub_decrypt_bytea(bytea, bytea, text)": {
     "schema": "extensions",
@@ -230,13 +237,6 @@
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea, text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
   },
-  "extensions.pgp_pub_decrypt_bytea(bytea, bytea)": {
-    "schema": "extensions",
-    "name": "pgp_pub_decrypt_bytea",
-    "arguments": "bytea, bytea",
-    "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
-  },
   "extensions.pgp_pub_encrypt(text, bytea, text)": {
     "schema": "extensions",
     "name": "pgp_pub_encrypt",
@@ -251,19 +251,19 @@
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$\n"
   },
-  "extensions.pgp_pub_encrypt_bytea(bytea, bytea)": {
-    "schema": "extensions",
-    "name": "pgp_pub_encrypt_bytea",
-    "arguments": "bytea, bytea",
-    "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$\n"
-  },
   "extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)": {
     "schema": "extensions",
     "name": "pgp_pub_encrypt_bytea",
     "arguments": "bytea, bytea, text",
     "comment": null,
     "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$\n"
+  },
+  "extensions.pgp_pub_encrypt_bytea(bytea, bytea)": {
+    "schema": "extensions",
+    "name": "pgp_pub_encrypt_bytea",
+    "arguments": "bytea, bytea",
+    "comment": null,
+    "sql": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$\n"
   },
   "extensions.pgp_sym_decrypt(bytea, text, text)": {
     "schema": "extensions",
@@ -501,7 +501,7 @@
     "name": "recalculate_all_pdf_statuses",
     "arguments": "",
     "comment": "Пересчитывает статусы всех PDF документов на основе данных node_files",
-    "sql": "CREATE OR REPLACE FUNCTION public.recalculate_all_pdf_statuses()\n RETURNS TABLE(node_id uuid, old_status text, new_status text, status_message text)\n LANGUAGE plpgsql\nAS $function$\r\nDECLARE\r\n    doc RECORD;\r\n    v_status TEXT;\r\n    v_message TEXT;\r\n    v_has_ann_r2 BOOLEAN;\r\n    v_has_ocr_r2 BOOLEAN;\r\n    v_has_res_r2 BOOLEAN;\r\n    v_has_ann_db BOOLEAN;\r\n    v_has_ocr_db BOOLEAN;\r\n    v_has_res_db BOOLEAN;\r\n    v_r2_key TEXT;\r\n    v_ann_key TEXT;\r\n    v_ocr_key TEXT;\r\n    v_res_key TEXT;\r\nBEGIN\r\n    -- Обходим все документы\r\n    FOR doc IN \r\n        SELECT id, attributes->>'r2_key' as r2_key, pdf_status\r\n        FROM tree_nodes \r\n        WHERE node_type = 'document'\r\n    LOOP\r\n        v_r2_key := doc.r2_key;\r\n        \r\n        IF v_r2_key IS NULL OR v_r2_key = '' THEN\r\n            v_status := 'unknown';\r\n            v_message := 'Нет R2 ключа';\r\n        ELSE\r\n            -- Формируем ключи для связанных файлов\r\n            v_ann_key := regexp_replace(v_r2_key, '\\.pdf$', '_annotation.json', 'i');\r\n            v_ocr_key := regexp_replace(v_r2_key, '\\.pdf$', '_ocr.html', 'i');\r\n            v_res_key := regexp_replace(v_r2_key, '\\.pdf$', '_result.json', 'i');\r\n            \r\n            -- Проверяем наличие в node_files\r\n            SELECT \r\n                bool_or(file_type = 'annotation') AS has_ann,\r\n                bool_or(file_type = 'ocr_html') AS has_ocr,\r\n                bool_or(file_type = 'result_json') AS has_res\r\n            INTO v_has_ann_db, v_has_ocr_db, v_has_res_db\r\n            FROM node_files\r\n            WHERE node_id = doc.id;\r\n            \r\n            -- Определяем статус на основе наличия файлов в БД\r\n            IF v_has_ann_db AND v_has_ocr_db AND v_has_res_db THEN\r\n                v_status := 'complete';\r\n                v_message := 'Все файлы на месте';\r\n            ELSIF NOT v_has_ann_db THEN\r\n                v_status := 'missing_blocks';\r\n                v_message := 'Отсутствует annotation.json';\r\n            ELSE\r\n                v_status := 'missing_files';\r\n                v_message := '';\r\n                IF NOT v_has_ocr_db THEN\r\n                    v_message := v_message || 'ocr.html не в Supabase; ';\r\n                END IF;\r\n                IF NOT v_has_res_db THEN\r\n                    v_message := v_message || 'result.json не в Supabase; ';\r\n                END IF;\r\n            END IF;\r\n        END IF;\r\n        \r\n        -- Обновляем статус\r\n        UPDATE tree_nodes\r\n        SET \r\n            pdf_status = v_status,\r\n            pdf_status_message = v_message,\r\n            pdf_status_updated_at = NOW()\r\n        WHERE id = doc.id;\r\n        \r\n        -- Возвращаем результат\r\n        node_id := doc.id;\r\n        old_status := doc.pdf_status;\r\n        new_status := v_status;\r\n        status_message := v_message;\r\n        RETURN NEXT;\r\n    END LOOP;\r\nEND;\r\n$function$\n"
+    "sql": "CREATE OR REPLACE FUNCTION public.recalculate_all_pdf_statuses()\n RETURNS TABLE(node_id uuid, old_status text, new_status text, status_message text)\n LANGUAGE plpgsql\nAS $function$\r\nDECLARE\r\n    doc RECORD;\r\n    v_status TEXT;\r\n    v_message TEXT;\r\n    v_has_annotation BOOLEAN;\r\n    v_has_ocr_db BOOLEAN;\r\n    v_r2_key TEXT;\r\nBEGIN\r\n    FOR doc IN\r\n        SELECT id, attributes->>'r2_key' as r2_key, pdf_status\r\n        FROM tree_nodes\r\n        WHERE node_type = 'document'\r\n    LOOP\r\n        v_r2_key := doc.r2_key;\r\n\r\n        IF v_r2_key IS NULL OR v_r2_key = '' THEN\r\n            v_status := 'unknown';\r\n            v_message := 'Нет R2 ключа';\r\n        ELSE\r\n            -- Проверяем наличие аннотации в таблице annotations\r\n            SELECT EXISTS(\r\n                SELECT 1 FROM annotations WHERE annotations.node_id = doc.id\r\n            ) INTO v_has_annotation;\r\n\r\n            -- Проверяем наличие ocr_html в node_files\r\n            SELECT\r\n                COALESCE(bool_or(file_type = 'ocr_html'), FALSE) AS has_ocr\r\n            INTO v_has_ocr_db\r\n            FROM node_files\r\n            WHERE node_files.node_id = doc.id;\r\n\r\n            -- Определяем статус\r\n            IF v_has_annotation AND v_has_ocr_db THEN\r\n                v_status := 'complete';\r\n                v_message := 'Аннотация и OCR на месте';\r\n            ELSIF NOT v_has_annotation THEN\r\n                v_status := 'missing_blocks';\r\n                v_message := 'Нет аннотации в базе данных';\r\n            ELSE\r\n                v_status := 'missing_files';\r\n                v_message := '';\r\n                IF NOT v_has_ocr_db THEN\r\n                    v_message := v_message || 'ocr.html не зарегистрирован; ';\r\n                END IF;\r\n            END IF;\r\n        END IF;\r\n\r\n        -- Обновляем статус\r\n        UPDATE tree_nodes\r\n        SET\r\n            pdf_status = v_status,\r\n            pdf_status_message = v_message,\r\n            pdf_status_updated_at = NOW()\r\n        WHERE id = doc.id;\r\n\r\n        -- Возвращаем результат\r\n        node_id := doc.id;\r\n        old_status := doc.pdf_status;\r\n        new_status := v_status;\r\n        status_message := v_message;\r\n        RETURN NEXT;\r\n    END LOOP;\r\nEND;\r\n$function$\n"
   },
   "public.set_app_setting(setting_key text, setting_value text)": {
     "schema": "public",
@@ -578,7 +578,7 @@
     "name": "cast",
     "arguments": "val text, type_ regtype",
     "comment": null,
-    "sql": "CREATE OR REPLACE FUNCTION realtime.\"cast\"(val text, type_ regtype)\n RETURNS jsonb\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\n    declare\n      res jsonb;\n    begin\n      execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;\n      return res;\n    end\n    $function$\n"
+    "sql": "CREATE OR REPLACE FUNCTION realtime.\"cast\"(val text, type_ regtype)\n RETURNS jsonb\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\ndeclare\n  res jsonb;\nbegin\n  if type_::text = 'bytea' then\n    return to_jsonb(val);\n  end if;\n  execute format('select to_jsonb(%L::'|| type_::text || ')', val) into res;\n  return res;\nend\n$function$\n"
   },
   "realtime.check_equality_op(op realtime.equality_op, type_ regtype, val_1 text, val_2 text)": {
     "schema": "realtime",

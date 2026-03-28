@@ -1,5 +1,5 @@
 -- Database Schema SQL Export
--- Generated: 2026-02-21T15:20:01.932413
+-- Generated: 2026-03-29T01:29:45.761875
 -- Database: postgres
 -- Host: aws-1-eu-north-1.pooler.supabase.com
 
@@ -18,6 +18,36 @@ CREATE TABLE IF NOT EXISTS auth.audit_log_entries (
     CONSTRAINT audit_log_entries_pkey PRIMARY KEY (id)
 );
 COMMENT ON TABLE auth.audit_log_entries IS 'Auth: Audit trail for user actions.';
+
+-- Table: auth.custom_oauth_providers
+CREATE TABLE IF NOT EXISTS auth.custom_oauth_providers (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    provider_type text NOT NULL,
+    identifier text NOT NULL,
+    name text NOT NULL,
+    client_id text NOT NULL,
+    client_secret text NOT NULL,
+    acceptable_client_ids text[] NOT NULL DEFAULT '{}'::text[],
+    scopes text[] NOT NULL DEFAULT '{}'::text[],
+    pkce_enabled boolean NOT NULL DEFAULT true,
+    attribute_mapping jsonb NOT NULL DEFAULT '{}'::jsonb,
+    authorization_params jsonb NOT NULL DEFAULT '{}'::jsonb,
+    enabled boolean NOT NULL DEFAULT true,
+    email_optional boolean NOT NULL DEFAULT false,
+    issuer text,
+    discovery_url text,
+    skip_nonce_check boolean NOT NULL DEFAULT false,
+    cached_discovery jsonb,
+    discovery_cached_at timestamp with time zone,
+    authorization_url text,
+    token_url text,
+    userinfo_url text,
+    jwks_uri text,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT custom_oauth_providers_identifier_key UNIQUE (identifier),
+    CONSTRAINT custom_oauth_providers_pkey PRIMARY KEY (id)
+);
 
 -- Table: auth.flow_state
 -- Description: Stores metadata for all OAuth/SSO login flows
@@ -369,6 +399,38 @@ CREATE TABLE IF NOT EXISTS auth.users (
 COMMENT ON TABLE auth.users IS 'Auth: Stores user login data within a secure schema.';
 COMMENT ON COLUMN auth.users.is_sso_user IS 'Auth: Set this column to true when the account comes from SSO. These accounts can have duplicate emails.';
 
+-- Table: auth.webauthn_challenges
+CREATE TABLE IF NOT EXISTS auth.webauthn_challenges (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    user_id uuid,
+    challenge_type text NOT NULL,
+    session_data jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT webauthn_challenges_pkey PRIMARY KEY (id),
+    CONSTRAINT webauthn_challenges_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+
+-- Table: auth.webauthn_credentials
+CREATE TABLE IF NOT EXISTS auth.webauthn_credentials (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    user_id uuid NOT NULL,
+    credential_id bytea NOT NULL,
+    public_key bytea NOT NULL,
+    attestation_type text NOT NULL DEFAULT ''::text,
+    aaguid uuid,
+    sign_count bigint NOT NULL DEFAULT 0,
+    transports jsonb NOT NULL DEFAULT '[]'::jsonb,
+    backup_eligible boolean NOT NULL DEFAULT false,
+    backed_up boolean NOT NULL DEFAULT false,
+    friendly_name text NOT NULL DEFAULT ''::text,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    last_used_at timestamp with time zone,
+    CONSTRAINT webauthn_credentials_pkey PRIMARY KEY (id),
+    CONSTRAINT webauthn_credentials_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+
 -- Table: public.annotations
 -- Description: Хранение аннотаций (обводок/блоков) документов
 CREATE TABLE IF NOT EXISTS public.annotations (
@@ -384,36 +446,8 @@ CREATE TABLE IF NOT EXISTS public.annotations (
 );
 COMMENT ON TABLE public.annotations IS 'Хранение аннотаций (обводок/блоков) документов';
 COMMENT ON COLUMN public.annotations.node_id IS 'Ссылка на документ в tree_nodes (1:1)';
-COMMENT ON COLUMN public.annotations.data IS 'Полная структура аннотации в формате v2 (pages, blocks)';
+COMMENT ON COLUMN public.annotations.data IS 'Полная структура аннотации с OCR данными: pages[].blocks[].{ocr_text, ocr_html, ocr_json, ocr_meta, crop_url, stamp_data}';
 COMMENT ON COLUMN public.annotations.format_version IS 'Версия формата аннотации (текущая: 2)';
-
--- Table: public.image_categories
--- Description: Категории изображений с промптами для OCR
-CREATE TABLE IF NOT EXISTS public.image_categories (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    name text NOT NULL,
-    code text NOT NULL,
-    description text,
-    system_prompt text NOT NULL DEFAULT ''::text,
-    user_prompt text NOT NULL DEFAULT ''::text,
-    is_default boolean DEFAULT false,
-    sort_order integer DEFAULT 0,
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
-    CONSTRAINT image_categories_code_key UNIQUE (code),
-    CONSTRAINT image_categories_pkey PRIMARY KEY (id)
-);
-COMMENT ON TABLE public.image_categories IS 'Категории изображений с промптами для OCR';
-COMMENT ON COLUMN public.image_categories.id IS 'Уникальный идентификатор категории';
-COMMENT ON COLUMN public.image_categories.name IS 'Отображаемое название категории';
-COMMENT ON COLUMN public.image_categories.code IS 'Уникальный код категории (slug)';
-COMMENT ON COLUMN public.image_categories.description IS 'Описание категории для пользователя';
-COMMENT ON COLUMN public.image_categories.system_prompt IS 'System/Role промпт для модели';
-COMMENT ON COLUMN public.image_categories.user_prompt IS 'User Input промпт для модели';
-COMMENT ON COLUMN public.image_categories.is_default IS 'Категория по умолчанию для всех новых IMAGE блоков';
-COMMENT ON COLUMN public.image_categories.sort_order IS 'Порядок сортировки в списке';
-COMMENT ON COLUMN public.image_categories.created_at IS 'Дата и время создания категории';
-COMMENT ON COLUMN public.image_categories.updated_at IS 'Дата и время последнего обновления';
 
 -- Table: public.job_files
 -- Description: Файлы связанные с OCR задачами
@@ -539,7 +573,7 @@ CREATE TABLE IF NOT EXISTS public.node_files (
 COMMENT ON TABLE public.node_files IS 'Все файлы привязанные к узлам дерева (PDF, аннотации, markdown, кропы)';
 COMMENT ON COLUMN public.node_files.id IS 'Уникальный идентификатор файла';
 COMMENT ON COLUMN public.node_files.node_id IS 'Ссылка на узел дерева';
-COMMENT ON COLUMN public.node_files.file_type IS 'Тип файла: pdf, annotation, result_md, result_zip, crop, image, ocr_html, result_json, crops_folder, qa_manifest, blocks_index';
+COMMENT ON COLUMN public.node_files.file_type IS 'Тип файла: pdf, result_md, crop, ocr_html, crops_folder, qa_manifest. Legacy (не создаются): annotation, result_json, blocks_index';
 COMMENT ON COLUMN public.node_files.r2_key IS 'Ключ объекта в R2 storage';
 COMMENT ON COLUMN public.node_files.file_name IS 'Имя файла для отображения';
 COMMENT ON COLUMN public.node_files.file_size IS 'Размер файла в байтах';
@@ -1142,19 +1176,19 @@ AS '$libdir/pgcrypto', $function$pg_random_uuid$function$
 
 
 -- Function: extensions.gen_salt
-CREATE OR REPLACE FUNCTION extensions.gen_salt(text, integer)
- RETURNS text
- LANGUAGE c
- PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pg_gen_salt_rounds$function$
-
-
--- Function: extensions.gen_salt
 CREATE OR REPLACE FUNCTION extensions.gen_salt(text)
  RETURNS text
  LANGUAGE c
  PARALLEL SAFE STRICT
 AS '$libdir/pgcrypto', $function$pg_gen_salt$function$
+
+
+-- Function: extensions.gen_salt
+CREATE OR REPLACE FUNCTION extensions.gen_salt(text, integer)
+ RETURNS text
+ LANGUAGE c
+ PARALLEL SAFE STRICT
+AS '$libdir/pgcrypto', $function$pg_gen_salt_rounds$function$
 
 
 -- Function: extensions.grant_pg_cron_access
@@ -1301,7 +1335,7 @@ $function$
 
 
 -- Function: extensions.hmac
-CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)
+CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)
  RETURNS bytea
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1309,7 +1343,7 @@ AS '$libdir/pgcrypto', $function$pg_hmac$function$
 
 
 -- Function: extensions.hmac
-CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)
+CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)
  RETURNS bytea
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1357,7 +1391,7 @@ AS '$libdir/pgcrypto', $function$pgp_key_id_w$function$
 
 
 -- Function: extensions.pgp_pub_decrypt
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text)
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea)
  RETURNS text
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1365,7 +1399,7 @@ AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$
 
 
 -- Function: extensions.pgp_pub_decrypt
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea)
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text)
  RETURNS text
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1381,6 +1415,14 @@ AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$
 
 
 -- Function: extensions.pgp_pub_decrypt_bytea
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea)
+ RETURNS bytea
+ LANGUAGE c
+ IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$
+
+
+-- Function: extensions.pgp_pub_decrypt_bytea
 CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea, text)
  RETURNS bytea
  LANGUAGE c
@@ -1390,14 +1432,6 @@ AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$
 
 -- Function: extensions.pgp_pub_decrypt_bytea
 CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea, text, text)
- RETURNS bytea
- LANGUAGE c
- IMMUTABLE PARALLEL SAFE STRICT
-AS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$
-
-
--- Function: extensions.pgp_pub_decrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea)
  RETURNS bytea
  LANGUAGE c
  IMMUTABLE PARALLEL SAFE STRICT
@@ -1421,7 +1455,7 @@ AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$
 
 
 -- Function: extensions.pgp_pub_encrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)
  RETURNS bytea
  LANGUAGE c
  PARALLEL SAFE STRICT
@@ -1429,7 +1463,7 @@ AS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$
 
 
 -- Function: extensions.pgp_pub_encrypt_bytea
-CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)
+CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)
  RETURNS bytea
  LANGUAGE c
  PARALLEL SAFE STRICT
@@ -1943,70 +1977,57 @@ DECLARE
     doc RECORD;
     v_status TEXT;
     v_message TEXT;
-    v_has_ann_r2 BOOLEAN;
-    v_has_ocr_r2 BOOLEAN;
-    v_has_res_r2 BOOLEAN;
-    v_has_ann_db BOOLEAN;
+    v_has_annotation BOOLEAN;
     v_has_ocr_db BOOLEAN;
-    v_has_res_db BOOLEAN;
     v_r2_key TEXT;
-    v_ann_key TEXT;
-    v_ocr_key TEXT;
-    v_res_key TEXT;
 BEGIN
-    -- Обходим все документы
-    FOR doc IN 
+    FOR doc IN
         SELECT id, attributes->>'r2_key' as r2_key, pdf_status
-        FROM tree_nodes 
+        FROM tree_nodes
         WHERE node_type = 'document'
     LOOP
         v_r2_key := doc.r2_key;
-        
+
         IF v_r2_key IS NULL OR v_r2_key = '' THEN
             v_status := 'unknown';
             v_message := 'Нет R2 ключа';
         ELSE
-            -- Формируем ключи для связанных файлов
-            v_ann_key := regexp_replace(v_r2_key, '\.pdf$', '_annotation.json', 'i');
-            v_ocr_key := regexp_replace(v_r2_key, '\.pdf$', '_ocr.html', 'i');
-            v_res_key := regexp_replace(v_r2_key, '\.pdf$', '_result.json', 'i');
-            
-            -- Проверяем наличие в node_files
-            SELECT 
-                bool_or(file_type = 'annotation') AS has_ann,
-                bool_or(file_type = 'ocr_html') AS has_ocr,
-                bool_or(file_type = 'result_json') AS has_res
-            INTO v_has_ann_db, v_has_ocr_db, v_has_res_db
+            -- Проверяем наличие аннотации в таблице annotations
+            SELECT EXISTS(
+                SELECT 1 FROM annotations WHERE annotations.node_id = doc.id
+            ) INTO v_has_annotation;
+
+            -- Проверяем наличие ocr_html в node_files
+            SELECT
+                COALESCE(bool_or(file_type = 'ocr_html'), FALSE) AS has_ocr
+            INTO v_has_ocr_db
             FROM node_files
-            WHERE node_id = doc.id;
-            
-            -- Определяем статус на основе наличия файлов в БД
-            IF v_has_ann_db AND v_has_ocr_db AND v_has_res_db THEN
+            WHERE node_files.node_id = doc.id;
+
+            -- Определяем статус
+            IF v_has_annotation AND v_has_ocr_db THEN
                 v_status := 'complete';
-                v_message := 'Все файлы на месте';
-            ELSIF NOT v_has_ann_db THEN
+                v_message := 'Аннотация и OCR на месте';
+            ELSIF NOT v_has_annotation THEN
                 v_status := 'missing_blocks';
-                v_message := 'Отсутствует annotation.json';
+                v_message := 'Нет аннотации в базе данных';
             ELSE
                 v_status := 'missing_files';
                 v_message := '';
                 IF NOT v_has_ocr_db THEN
-                    v_message := v_message || 'ocr.html не в Supabase; ';
-                END IF;
-                IF NOT v_has_res_db THEN
-                    v_message := v_message || 'result.json не в Supabase; ';
+                    v_message := v_message || 'ocr.html не зарегистрирован; ';
                 END IF;
             END IF;
         END IF;
-        
+
         -- Обновляем статус
         UPDATE tree_nodes
-        SET 
+        SET
             pdf_status = v_status,
             pdf_status_message = v_message,
             pdf_status_updated_at = NOW()
         WHERE id = doc.id;
-        
+
         -- Возвращаем результат
         node_id := doc.id;
         old_status := doc.pdf_status;
@@ -2077,18 +2098,6 @@ BEGIN
     END IF;
 
     RETURN NULL;
-END;
-$function$
-
-
--- Function: public.update_image_categories_updated_at
-CREATE OR REPLACE FUNCTION public.update_image_categories_updated_at()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
-BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
 END;
 $function$
 
@@ -2607,13 +2616,16 @@ CREATE OR REPLACE FUNCTION realtime."cast"(val text, type_ regtype)
  LANGUAGE plpgsql
  IMMUTABLE
 AS $function$
-    declare
-      res jsonb;
-    begin
-      execute format('select to_jsonb(%L::'|| type_::text || ')', val)  into res;
-      return res;
-    end
-    $function$
+declare
+  res jsonb;
+begin
+  if type_::text = 'bytea' then
+    return to_jsonb(val);
+  end if;
+  execute format('select to_jsonb(%L::'|| type_::text || ')', val) into res;
+  return res;
+end
+$function$
 
 
 -- Function: realtime.check_equality_op
@@ -4009,9 +4021,6 @@ $function$
 -- TRIGGERS
 -- ============================================
 
--- Trigger: trigger_image_categories_updated_at on public.image_categories
-CREATE TRIGGER trigger_image_categories_updated_at BEFORE UPDATE ON public.image_categories FOR EACH ROW EXECUTE FUNCTION update_image_categories_updated_at()
-
 -- Trigger: update_job_settings_updated_at on public.job_settings
 CREATE TRIGGER update_job_settings_updated_at BEFORE UPDATE ON public.job_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()
 
@@ -4061,6 +4070,21 @@ CREATE TRIGGER update_objects_updated_at BEFORE UPDATE ON storage.objects FOR EA
 
 -- Index on auth.audit_log_entries
 CREATE INDEX audit_logs_instance_id_idx ON auth.audit_log_entries USING btree (instance_id);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_created_at_idx ON auth.custom_oauth_providers USING btree (created_at);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_enabled_idx ON auth.custom_oauth_providers USING btree (enabled);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_identifier_idx ON auth.custom_oauth_providers USING btree (identifier);
+
+-- Index on auth.custom_oauth_providers
+CREATE UNIQUE INDEX custom_oauth_providers_identifier_key ON auth.custom_oauth_providers USING btree (identifier);
+
+-- Index on auth.custom_oauth_providers
+CREATE INDEX custom_oauth_providers_provider_type_idx ON auth.custom_oauth_providers USING btree (provider_type);
 
 -- Index on auth.flow_state
 CREATE INDEX flow_state_created_at_idx ON auth.flow_state USING btree (created_at DESC);
@@ -4224,20 +4248,23 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 -- Index on auth.users
 CREATE UNIQUE INDEX users_phone_key ON auth.users USING btree (phone);
 
+-- Index on auth.webauthn_challenges
+CREATE INDEX webauthn_challenges_expires_at_idx ON auth.webauthn_challenges USING btree (expires_at);
+
+-- Index on auth.webauthn_challenges
+CREATE INDEX webauthn_challenges_user_id_idx ON auth.webauthn_challenges USING btree (user_id);
+
+-- Index on auth.webauthn_credentials
+CREATE UNIQUE INDEX webauthn_credentials_credential_id_key ON auth.webauthn_credentials USING btree (credential_id);
+
+-- Index on auth.webauthn_credentials
+CREATE INDEX webauthn_credentials_user_id_idx ON auth.webauthn_credentials USING btree (user_id);
+
 -- Index on public.annotations
 CREATE UNIQUE INDEX annotations_node_id_unique ON public.annotations USING btree (node_id);
 
 -- Index on public.annotations
 CREATE INDEX idx_annotations_node_id ON public.annotations USING btree (node_id);
-
--- Index on public.image_categories
-CREATE INDEX idx_image_categories_code ON public.image_categories USING btree (code);
-
--- Index on public.image_categories
-CREATE INDEX idx_image_categories_is_default ON public.image_categories USING btree (is_default) WHERE (is_default = true);
-
--- Index on public.image_categories
-CREATE UNIQUE INDEX image_categories_code_key ON public.image_categories USING btree (code);
 
 -- Index on public.job_files
 CREATE INDEX idx_job_files_block_id ON public.job_files USING btree (((metadata ->> 'block_id'::text))) WHERE (file_type = 'crop'::text);
