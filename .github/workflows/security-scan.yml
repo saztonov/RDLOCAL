@@ -69,7 +69,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -e ".[build]"
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov mypy
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
+
+      - name: Run mypy (rd_core)
+        run: python -m mypy rd_core/

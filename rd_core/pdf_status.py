@@ -186,7 +186,7 @@ def calculate_pdf_status(
 
 
 def update_pdf_status_in_db(
-    client, node_id: str, status: PDFStatus, message: str = None
+    client, node_id: str, status: PDFStatus, message: str | None = None
 ):
     """Update PDF status via the existing TreeClient-like interface."""
     try:

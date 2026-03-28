@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 def generate_md_from_pages(
     pages: List,
     output_path: str,
-    doc_name: str = None,
-    project_name: str = None,
+    doc_name: str | None = None,
+    project_name: str | None = None,
 ) -> str:
     """
     Генерация компактного Markdown файла (_document.md) из OCR результатов.

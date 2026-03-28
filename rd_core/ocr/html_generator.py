@@ -69,7 +69,7 @@ def _markdown_tables_to_html(text: str) -> str:
     """Конвертировать markdown таблицы в HTML, остальной текст — в <p>."""
     lines = text.strip().split('\n')
     html_parts = []
-    table_lines = []
+    table_lines: list[str] = []
     in_table = False
 
     for line in lines:
@@ -247,7 +247,7 @@ def _format_inherited_stamp_html(inherited_data: Dict) -> str:
 
 
 def generate_html_from_pages(
-    pages: List, output_path: str, doc_name: str = None, project_name: str = None
+    pages: List, output_path: str, doc_name: str | None = None, project_name: str | None = None
 ) -> str:
     """
     Генерация итогового HTML файла (ocr.html) из OCR результатов.

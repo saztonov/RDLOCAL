@@ -26,7 +26,7 @@ def table_to_markdown(table_html: str) -> str:
 
     # Парсим все строки с учетом colspan/rowspan
     parsed_rows = []
-    rowspan_tracker = {}  # {col_index: (remaining_rows, text)}
+    rowspan_tracker: dict[int, tuple[int, str]] = {}  # {col_index: (remaining_rows, text)}
 
     for row_html in rows:
         # Находим все ячейки с их тегами

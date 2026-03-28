@@ -145,7 +145,7 @@ def image_to_base64(image: Image.Image, max_size: int = 1500) -> str:
     if image.width > max_size or image.height > max_size:
         ratio = min(max_size / image.width, max_size / image.height)
         new_size = (int(image.width * ratio), int(image.height * ratio))
-        image = image.resize(new_size, Image.LANCZOS)
+        image = image.resize(new_size, getattr(Image, 'LANCZOS', Image.Resampling.LANCZOS))
 
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)

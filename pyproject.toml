@@ -56,6 +56,17 @@ include = ["app*", "rd_core*", "services*"]
 [tool.setuptools.package-data]
 "services.remote_ocr.server" = ["config.yaml"]
 
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = false
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["rd_core.r2_utils", "rd_core.r2_upload", "rd_core.r2_download"]
+# R2 mixins обращаются к self.s3_client/bucket_name из главного класса
+disable_error_code = ["attr-defined"]
+
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"

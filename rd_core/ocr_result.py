@@ -44,12 +44,12 @@ def make_non_retriable(msg: str) -> str:
 
 def is_error(text: Optional[str]) -> bool:
     """Текст содержит маркер повторяемой ошибки (retry possible)."""
-    return bool(text) and text.startswith(ERROR_PREFIX)
+    return text is not None and text.startswith(ERROR_PREFIX)
 
 
 def is_non_retriable(text: Optional[str]) -> bool:
     """Текст содержит маркер неповторяемой ошибки (don't retry)."""
-    return bool(text) and text.startswith(NON_RETRIABLE_PREFIX)
+    return text is not None and text.startswith(NON_RETRIABLE_PREFIX)
 
 
 def is_any_error(text: Optional[str]) -> bool:

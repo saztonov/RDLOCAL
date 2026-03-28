@@ -131,7 +131,7 @@ class R2UploadMixin:
         return (success_count, error_count)
 
     def upload_text(
-        self, content: str, remote_key: str, content_type: str = None
+        self, content: str, remote_key: str, content_type: str | None = None
     ) -> bool:
         """
         Загрузить текстовый контент в R2

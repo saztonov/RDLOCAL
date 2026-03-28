@@ -83,7 +83,7 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
     """
     system_prompt = CHANDRA_DEFAULT_SYSTEM
 
-    messages = []
+    messages: list[dict[str, object]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({

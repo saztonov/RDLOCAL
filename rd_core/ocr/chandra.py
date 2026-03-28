@@ -260,7 +260,7 @@ class ChandraBackend:
         self,
         image: Optional[Image.Image],
         prompt: Optional[dict] = None,
-        json_mode: bool = None,
+        json_mode: bool | None = None,
         pdf_file_path: Optional[str] = None,
     ) -> str:
         if image is None:
