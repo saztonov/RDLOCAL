@@ -167,7 +167,7 @@ node_type v2: `folder` | `document` (legacy types in attributes.legacy_node_type
 | Module | Purpose |
 |--------|---------|
 | `debounced_updater.py` | Reduce Supabase calls (-90%) |
-| `rate_limiter.py` | Token bucket for Datalab API |
+| `rate_limiter.py` | Token bucket rate limiting |
 | `memory_utils.py` | Memory monitoring (psutil) |
 | `queue_checker.py` | Backpressure mechanism |
 | `timeout_utils.py` | Dynamic timeout calculation |
