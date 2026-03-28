@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import HTTPException, Query
 
 from services.remote_ocr.server.logging_config import get_logger
+from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
 from services.remote_ocr.server.routes.common import (
     get_file_icon,
     get_r2_storage,
@@ -21,6 +22,36 @@ from services.remote_ocr.server.storage import (
 )
 
 _logger = get_logger(__name__)
+
+
+def _extract_blocks_list(data: dict | list) -> list:
+    """Извлечь плоский список блоков из annotation data.
+
+    Поддерживает два формата:
+    - Плоский список блоков (legacy)
+    - Document-структура с pages[].blocks[]
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and "pages" in data:
+        blocks: list = []
+        for page in data.get("pages", []):
+            blocks.extend(page.get("blocks", []))
+        return blocks
+    return []
+
+
+def _compute_block_stats(blocks: list) -> dict:
+    """Подсчитать статистику блоков по типам."""
+    text_count = sum(1 for b in blocks if b.get("block_type") == "text")
+    image_count = sum(1 for b in blocks if b.get("block_type") == "image")
+    stamp_count = sum(1 for b in blocks if b.get("block_type") == "stamp")
+    return {
+        "total": len(blocks),
+        "text": text_count,
+        "image": image_count,
+        "stamp": stamp_count,
+    }
 
 
 def _job_to_list_item(j) -> dict:
@@ -90,26 +121,30 @@ def get_job_details_handler(
 
     result = job_to_dict(job)
 
-    blocks_file = get_job_file_by_type(job_id, "blocks")
-    if blocks_file:
+    # Загрузка block_stats: Supabase (node-backed) → R2 (legacy)
+    block_stats_loaded = False
+    if job.node_id:
         try:
-            r2 = get_r2_storage()
-            blocks_text = r2.download_text(blocks_file.r2_key)
-            if blocks_text:
-                blocks = json.loads(blocks_text)
-
-                text_count = sum(1 for b in blocks if b.get("block_type") == "text")
-                image_count = sum(1 for b in blocks if b.get("block_type") == "image")
-                stamp_count = sum(1 for b in blocks if b.get("block_type") == "stamp")
-
-                result["block_stats"] = {
-                    "total": len(blocks),
-                    "text": text_count,
-                    "image": image_count,
-                    "stamp": stamp_count,
-                }
+            ann_data = _load_annotation_from_db(job.node_id)
+            if ann_data is not None:
+                blocks = _extract_blocks_list(ann_data)
+                result["block_stats"] = _compute_block_stats(blocks)
+                block_stats_loaded = True
         except Exception as e:
-            _logger.warning(f"Failed to load blocks from R2: {e}")
+            _logger.warning(f"Failed to load blocks from Supabase for node {job.node_id}: {e}")
+
+    if not block_stats_loaded:
+        blocks_file = get_job_file_by_type(job_id, "blocks")
+        if blocks_file:
+            try:
+                r2 = get_r2_storage()
+                blocks_text = r2.download_text(blocks_file.r2_key)
+                if blocks_text:
+                    blocks_data = json.loads(blocks_text)
+                    blocks = _extract_blocks_list(blocks_data)
+                    result["block_stats"] = _compute_block_stats(blocks)
+            except Exception as e:
+                _logger.warning(f"Failed to load blocks from R2: {e}")
 
     if job.settings:
         result["job_settings"] = {

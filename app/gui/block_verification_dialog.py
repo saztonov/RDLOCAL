@@ -1,4 +1,4 @@
-"""Диалог верификации блоков - сравнение annotation.json, ocr.html, result.json"""
+"""Диалог верификации блоков - сравнение annotation, ocr.html, document.md"""
 
 import logging
 from typing import Optional
@@ -76,8 +76,8 @@ class BlockVerificationDialog(QDialog):
         layout.addWidget(self.ocr_group)
         self.ocr_group.hide()
 
-        # Группа: Result JSON
-        self.result_group = QGroupBox("📋 Result.json")
+        # Группа: Annotation OCR (результаты в Supabase)
+        self.result_group = QGroupBox("📋 Аннотация (OCR-результаты)")
         result_layout = QVBoxLayout(self.result_group)
         self.result_label = QLabel()
         self.result_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -182,8 +182,10 @@ class BlockVerificationDialog(QDialog):
         )
         self.ocr_group.show()
 
-        # Result JSON stats
-        self.result_label.setText(f"<b>Найдено блоков:</b> {len(r.result_blocks)}")
+        # Annotation OCR stats (блоки с OCR-результатами в Supabase)
+        self.result_label.setText(
+            f"<b>Блоков с OCR-результатами:</b> {len(r.result_blocks)}"
+        )
         self.result_group.show()
 
         # Document MD stats
@@ -203,7 +205,7 @@ class BlockVerificationDialog(QDialog):
             )
         else:
             missing_ocr = len(r.missing_in_ocr_html)
-            missing_res = len(r.missing_in_result)
+            missing_res = len(r.missing_in_annotation)
             missing_md = len(r.missing_in_document_md)
             error_count = len(r.error_blocks)
             suspicious_count = len(r.suspicious_blocks)
@@ -215,7 +217,7 @@ class BlockVerificationDialog(QDialog):
             if missing_ocr:
                 verdict_lines.append(f"<b>Отсутствует в ocr.html:</b> {missing_ocr}<br>")
             if missing_res:
-                verdict_lines.append(f"<b>Отсутствует в result.json:</b> {missing_res}<br>")
+                verdict_lines.append(f"<b>Нет OCR в аннотации:</b> {missing_res}<br>")
             if missing_md:
                 verdict_lines.append(f"<b>Отсутствует в document.md:</b> {missing_md}<br>")
             if error_count:
@@ -233,11 +235,11 @@ class BlockVerificationDialog(QDialog):
                 for b in r.missing_in_ocr_html:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
 
-            if r.missing_in_result:
+            if r.missing_in_annotation:
                 if lines:
                     lines.append("")
-                lines.append("=== Отсутствуют в result.json ===")
-                for b in r.missing_in_result:
+                lines.append("=== Нет OCR-результата в аннотации ===")
+                for b in r.missing_in_annotation:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
 
             if r.missing_in_document_md:
@@ -297,8 +299,8 @@ class BlockVerificationDialog(QDialog):
             "=== OCR.html ===",
             f"Найдено блоков: {len(r.ocr_html_blocks)}",
             "",
-            "=== Result.json ===",
-            f"Найдено блоков: {len(r.result_blocks)}",
+            "=== Аннотация (OCR-результаты) ===",
+            f"Блоков с OCR-результатами: {len(r.result_blocks)}",
             "",
             "=== Document.md ===",
             f"Найдено блоков: {len(r.document_md_blocks)}",
@@ -317,10 +319,10 @@ class BlockVerificationDialog(QDialog):
                 for b in r.missing_in_ocr_html:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
 
-            if r.missing_in_result:
+            if r.missing_in_annotation:
                 lines.append("")
-                lines.append("Отсутствуют в result.json:")
-                for b in r.missing_in_result:
+                lines.append("Нет OCR-результата в аннотации:")
+                for b in r.missing_in_annotation:
                     lines.append(f"  Стр. {b.page_index + 1}: {b.id} ({b.block_type})")
 
             if r.missing_in_document_md:

@@ -12,7 +12,6 @@ logger = get_logger(__name__)
 
 
 def get_category_prompt(
-    category_id: Optional[str] = None,
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:

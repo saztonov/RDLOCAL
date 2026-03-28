@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .logging_config import get_logger
 from .r2_keys import resolve_r2_prefix
-from .storage import Job, add_job_file, delete_job_files
+from .storage import Job, add_job_file
 from .task_helpers import get_r2_storage
 
 logger = get_logger(__name__)
@@ -80,19 +80,6 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
     # Формат: (local_path, r2_key, content_type, file_type, filename, size, metadata)
     files_to_upload = []
 
-    # annotation.json -> сохраняем только в job_files для скачивания клиентом
-    # Аннотация как node-level файл больше НЕ загружается в R2 (хранится в Supabase)
-    annotation_path = work_dir / "annotation.json"
-    if annotation_path.exists():
-        delete_job_files(job.id, ["blocks"])
-        # Загружаем в R2 только как часть job результатов (для скачивания клиентом)
-        annotation_filename = f"{doc_stem}_annotation.json"
-        r2_key = f"{r2_prefix}/{annotation_filename}"
-        files_to_upload.append((
-            str(annotation_path), r2_key, None,
-            "annotation", annotation_filename, annotation_path.stat().st_size, None
-        ))
-
     # ocr_result.html -> {doc_stem}_ocr.html
     html_path = work_dir / "ocr_result.html"
     if html_path.exists():
@@ -101,16 +88,6 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
         files_to_upload.append((
             str(html_path), r2_key, None,
             "ocr_html", html_filename, html_path.stat().st_size, None
-        ))
-
-    # result.json -> {doc_stem}_result.json
-    result_path = work_dir / "result.json"
-    if result_path.exists():
-        result_filename = f"{doc_stem}_result.json"
-        r2_key = f"{r2_prefix}/{result_filename}"
-        files_to_upload.append((
-            str(result_path), r2_key, None,
-            "result", result_filename, result_path.stat().st_size, None
         ))
 
     # document.md -> {doc_stem}_document.md
@@ -124,16 +101,6 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
         ))
     else:
         logger.warning(f"document.md не найден для загрузки в R2: {md_path}")
-
-    # _blocks.json -> {doc_stem}_blocks.json (индекс IMAGE блоков с URL кропов)
-    blocks_json_path = work_dir / "_blocks.json"
-    if blocks_json_path.exists():
-        blocks_filename = f"{doc_stem}_blocks.json"
-        r2_key = f"{r2_prefix}/{blocks_filename}"
-        files_to_upload.append((
-            str(blocks_json_path), r2_key, None,
-            "blocks_index", blocks_filename, blocks_json_path.stat().st_size, None
-        ))
 
     # crops/ (проверяем оба варианта: crops и crops_final)
     # Исключаем блоки-штампы (category_code='stamp')

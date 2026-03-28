@@ -1,7 +1,6 @@
 """Обработка результатов OCR"""
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import Qt
 
@@ -46,25 +45,17 @@ class ResultHandlerMixin:
         logger.info(f"Refreshed document in tree: {node_id}")
 
     def _reload_annotation_from_result(self, extract_dir: str):
-        """Обновить ocr_text в блоках из результата OCR"""
+        """Обновить ocr_text в блоках из результата OCR (загрузка из Supabase)"""
         try:
-            pdf_path = getattr(self.main_window, "_current_pdf_path", None)
-            if not pdf_path:
+            from app.annotation_db import AnnotationDBIO
+
+            node_id = getattr(self.main_window, "_current_node_id", None)
+            if not node_id:
                 return
 
-            pdf_stem = Path(pdf_path).stem
-            ann_path = Path(extract_dir) / f"{pdf_stem}_annotation.json"
-
-            if not ann_path.exists():
-                logger.warning(f"Файл аннотации не найден: {ann_path}")
-                return
-
-            from rd_core.annotation_io import AnnotationIO
-
-            loaded_doc, result = AnnotationIO.load_and_migrate(str(ann_path))
-
-            if not result.success or not loaded_doc:
-                logger.warning(f"Не удалось загрузить OCR результат: {result.errors}")
+            loaded_doc = AnnotationDBIO.load_from_db(node_id)
+            if not loaded_doc:
+                logger.warning(f"Не удалось загрузить аннотацию из Supabase: {node_id}")
                 return
 
             current_doc = self.main_window.annotation_document
@@ -100,9 +91,9 @@ class ResultHandlerMixin:
             if updated_count > 0:
                 self.main_window._auto_save_annotation()
 
-            # Перезагружаем OCR result file для preview
-            if hasattr(self.main_window, "_load_ocr_result_file"):
-                self.main_window._load_ocr_result_file()
+            # Перезагружаем OCR preview данные
+            if hasattr(self.main_window, "_load_ocr_preview_data"):
+                self.main_window._load_ocr_preview_data()
 
             # Обновляем OCR preview для текущего выбранного блока
             for preview_attr in ("ocr_preview", "ocr_preview_inline"):

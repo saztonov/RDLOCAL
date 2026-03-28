@@ -1,6 +1,5 @@
 """Фоновый worker для верификации блоков"""
 
-import json
 import logging
 import re
 from pathlib import PurePosixPath
@@ -43,7 +42,6 @@ class VerificationWorker(QThread):
         pdf_parent = str(pdf_path.parent)
 
         ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
-        res_r2_key = f"{pdf_parent}/{pdf_stem}_result.json"
         md_r2_key = f"{pdf_parent}/{pdf_stem}_document.md"
 
         # 1. Загружаем и парсим аннотацию из Supabase
@@ -108,18 +106,20 @@ class VerificationWorker(QThread):
         # Индекс блоков для контентной проверки
         all_blocks_by_id = {b.id: b for b in result.ann_blocks}
 
-        # 3. Загружаем и парсим result.json + контентная проверка
-        self.progress.emit("Загрузка result.json...")
-        res_content = r2.download_text(res_r2_key)
-        if res_content:
+        # 3. Контентная проверка OCR по аннотации из Supabase
+        self.progress.emit("Проверка OCR-результатов из аннотации...")
+        if ann_data:
             from rd_core.ocr_result import is_any_error, is_suspicious_output
 
-            res_data = json.loads(res_content)
-            for page in res_data.get("pages", []):
+            for page in ann_data.get("pages", []):
                 for block in page.get("blocks", []):
                     block_id = block.get("id", "")
                     if block_id:
-                        result.result_blocks.add(block_id)
+                        # Блок с OCR-результатом считается найденным
+                        ocr_text = block.get("ocr_text", "")
+                        ocr_html_text = block.get("ocr_html", "")
+                        if ocr_text or ocr_html_text:
+                            result.result_blocks.add(block_id)
 
                     # Контентная проверка OCR-результата
                     ocr_text = block.get("ocr_text", "")
@@ -129,8 +129,10 @@ class VerificationWorker(QThread):
                             result.error_blocks.append(block_info)
                             result.error_reasons[block_id] = ocr_text
                         elif ocr_text:
-                            ocr_html = block.get("ocr_html", "")
-                            suspicious, reason = is_suspicious_output(ocr_text, ocr_html)
+                            ocr_html_text = block.get("ocr_html", "")
+                            suspicious, reason = is_suspicious_output(
+                                ocr_text, ocr_html_text
+                            )
                             if suspicious:
                                 result.suspicious_blocks.append(block_info)
                                 result.suspicious_reasons[block_id] = reason
@@ -157,7 +159,7 @@ class VerificationWorker(QThread):
                 result.missing_in_ocr_html.append(block_info)
 
             if block_info.id not in result.result_blocks:
-                result.missing_in_result.append(block_info)
+                result.missing_in_annotation.append(block_info)
 
             if block_info.id not in result.document_md_blocks:
                 # Не считать отсутствующим, если это embedded TEXT (связан с IMAGE)

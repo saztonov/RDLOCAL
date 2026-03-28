@@ -108,13 +108,11 @@ def calculate_pdf_status(
         pdf_parent = str(pdf_path.parent)
 
         ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
-        res_r2_key = f"{pdf_parent}/{pdf_stem}_result.json"
 
         r2_objects = r2_storage.list_objects_with_metadata(f"{pdf_parent}/")
         r2_keys = {obj["Key"] for obj in r2_objects}
 
         has_ocr_html_r2 = ocr_r2_key in r2_keys
-        has_result_json_r2 = res_r2_key in r2_keys
 
         has_annotation = client.has_annotation_in_db(node_id)
 
@@ -131,7 +129,6 @@ def calculate_pdf_status(
             raise
 
         has_ocr_html_db = "ocr_html" in file_types_in_db
-        has_result_json_db = "result_json" in file_types_in_db
 
         pages_without_blocks: list[int] = []
         if check_blocks and has_annotation:
@@ -161,10 +158,6 @@ def calculate_pdf_status(
             missing_r2.append("ocr.html")
         if not has_ocr_html_db:
             missing_db.append("ocr.html")
-        if not has_result_json_r2:
-            missing_r2.append("result.json")
-        if not has_result_json_db:
-            missing_db.append("result.json")
 
         if not has_annotation:
             return PDFStatus.MISSING_BLOCKS, "Нет аннотации в базе данных"

@@ -1,13 +1,4 @@
 {
-  "public.image_categories.trigger_image_categories_updated_at": {
-    "schema": "public",
-    "name": "trigger_image_categories_updated_at",
-    "table_name": "image_categories",
-    "event": null,
-    "timing": null,
-    "comment": null,
-    "sql": "CREATE TRIGGER trigger_image_categories_updated_at BEFORE UPDATE ON public.image_categories FOR EACH ROW EXECUTE FUNCTION update_image_categories_updated_at()"
-  },
   "public.job_settings.update_job_settings_updated_at": {
     "schema": "public",
     "name": "update_job_settings_updated_at",

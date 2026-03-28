@@ -296,7 +296,7 @@ def register_results(ctx: JobContext) -> None:
         return
 
     update_job_status(ctx.job_id, "processing", progress=0.98, status_message="📝 Регистрация файлов...")
-    registered_count = register_ocr_results_to_node(ctx.job.node_id, ctx.job.document_name, ctx.work_dir)
+    registered_count = register_ocr_results_to_node(ctx.job.node_id, ctx.job.document_name, ctx.work_dir, blocks_metadata=getattr(ctx, "blocks_metadata", None))
     logger.info(f"✅ Зарегистрировано {registered_count} файлов в node_files для node {ctx.job.node_id}")
 
     try:

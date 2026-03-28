@@ -54,7 +54,7 @@ class CorrectionModeDialog(QDialog):
         if self.correction_count > 0:
             hint = QLabel(
                 "Результаты будут вставлены в существующие файлы\n"
-                "(result.json, ocr.html, document.md)"
+                "(аннотация в Supabase, ocr.html, document.md)"
             )
             hint.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
             group_layout.addWidget(hint)

@@ -1,7 +1,6 @@
 """Миксин редактирования OCR результатов."""
 from __future__ import annotations
 
-import json
 import logging
 
 from PySide6.QtWidgets import QMessageBox
@@ -29,7 +28,7 @@ class EditMixin:
             self._is_editing = True
             self.editor_widget.show()
             self.edit_save_btn.setText("💾 Сохранить")
-            self.edit_save_btn.setToolTip("Сохранить изменения (локально + R2)")
+            self.edit_save_btn.setToolTip("Сохранить изменения")
 
     def _on_text_changed(self):
         """Обработка изменения текста"""
@@ -44,8 +43,8 @@ class EditMixin:
         self.preview_edit.setHtml(styled_html)
 
     def _save_all(self):
-        """Сохранить изменения локально и на R2"""
-        if not self._result_path or not self._current_block_id:
+        """Сохранить изменения в Supabase"""
+        if not self._node_id or not self._current_block_id:
             return
 
         try:
@@ -60,28 +59,25 @@ class EditMixin:
                         self._blocks_index[self._current_block_id] = b
                         break
 
-            # Сохраняем локально
-            with open(self._result_path, "w", encoding="utf-8") as f:
-                json.dump(self._result_data, f, ensure_ascii=False, indent=2)
+            # Сохраняем в Supabase
+            if self._node_id:
+                try:
+                    from app.annotation_db import AnnotationDBIO
 
-            # Сохраняем на R2
-            try:
-                from pathlib import PurePosixPath
+                    AnnotationDBIO.save_to_db_raw(self._node_id, self._result_data)
+                    logger.info(f"Saved to Supabase: node_id={self._node_id}")
+                except AttributeError:
+                    # save_to_db_raw не существует — используем TreeClient напрямую
+                    try:
+                        from app.tree_client import TreeClient
 
-                from rd_core.r2_storage import R2Storage
-
-                r2 = R2Storage()
-
-                if self._r2_key:
-                    r2_dir = str(PurePosixPath(self._r2_key).parent)
-                    result_r2_key = f"{r2_dir}/{self._result_path.name}"
-                else:
-                    result_r2_key = f"tree_docs/{self._result_path.name}"
-
-                r2.upload_file(str(self._result_path), result_r2_key)
-                logger.info(f"Saved to R2: {result_r2_key}")
-            except Exception as e:
-                logger.error(f"Failed to save to R2: {e}")
+                        client = TreeClient()
+                        client.save_annotation(self._node_id, self._result_data)
+                        logger.info(f"Saved to Supabase via TreeClient: node_id={self._node_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to save to Supabase: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to save to Supabase: {e}")
 
             self._is_modified = False
 

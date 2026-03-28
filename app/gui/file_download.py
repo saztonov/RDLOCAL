@@ -206,7 +206,6 @@ class FileDownloadMixin:
         # Типы файлов для скачивания (без кропов и аннотаций)
         download_file_types = {
             FileType.OCR_HTML,
-            FileType.RESULT_JSON,
             FileType.RESULT_MD,
         }
 

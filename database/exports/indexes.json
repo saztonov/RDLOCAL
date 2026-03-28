@@ -455,30 +455,6 @@
     "is_primary": false,
     "sql": "CREATE INDEX idx_annotations_node_id ON public.annotations USING btree (node_id)"
   },
-  "public.image_categories.idx_image_categories_code": {
-    "schema": "public",
-    "name": "idx_image_categories_code",
-    "table_name": "image_categories",
-    "is_unique": false,
-    "is_primary": false,
-    "sql": "CREATE INDEX idx_image_categories_code ON public.image_categories USING btree (code)"
-  },
-  "public.image_categories.idx_image_categories_is_default": {
-    "schema": "public",
-    "name": "idx_image_categories_is_default",
-    "table_name": "image_categories",
-    "is_unique": false,
-    "is_primary": false,
-    "sql": "CREATE INDEX idx_image_categories_is_default ON public.image_categories USING btree (is_default) WHERE (is_default = true)"
-  },
-  "public.image_categories.image_categories_code_key": {
-    "schema": "public",
-    "name": "image_categories_code_key",
-    "table_name": "image_categories",
-    "is_unique": true,
-    "is_primary": false,
-    "sql": "CREATE UNIQUE INDEX image_categories_code_key ON public.image_categories USING btree (code)"
-  },
   "public.job_files.idx_job_files_block_id": {
     "schema": "public",
     "name": "idx_job_files_block_id",

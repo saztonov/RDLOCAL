@@ -37,7 +37,7 @@ class TempSessionManager:
         return workspace / Path(r2_key).name
 
     def get_sidecar_path(self, workspace: Path, r2_key: str, suffix: str) -> Path:
-        """Путь к sidecar-файлу (_ocr.html, _result.json, _document.md)."""
+        """Путь к sidecar-файлу (_ocr.html, _document.md)."""
         stem = Path(r2_key).stem
         return workspace / f"{stem}{suffix}"
 

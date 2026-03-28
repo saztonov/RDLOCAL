@@ -69,11 +69,9 @@ class DownloadMixin:
             get_metadata_cache().invalidate_prefix(actual_prefix + "/")
             logger.debug(f"Invalidated metadata cache for prefix: {actual_prefix}/")
 
-            # Скачиваем _annotation.json, _ocr.html, _result.json и _document.md
+            # Скачиваем _ocr.html и _document.md
             files_to_download = [
-                (f"{doc_stem}_annotation.json", f"{pdf_stem}_annotation.json"),
                 (f"{doc_stem}_ocr.html", f"{pdf_stem}_ocr.html"),
-                (f"{doc_stem}_result.json", f"{pdf_stem}_result.json"),
                 (f"{doc_stem}_document.md", f"{pdf_stem}_document.md"),
             ]
 

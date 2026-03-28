@@ -1,7 +1,6 @@
-"""Объединение OCR результатов: annotation.json + ocr_result.html -> result.json"""
+"""Объединение OCR результатов: annotation dict + ocr HTML -> enriched dict."""
 from __future__ import annotations
 
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -29,141 +28,119 @@ def _build_crop_url(block_id: str, r2_public_url: str, project_name: str) -> str
     return f"{r2_public_url}/tree_docs/{project_name}/crops/{block_id}.pdf"
 
 
-def merge_ocr_results(
-    annotation_path: Path,
-    ocr_html_path: Path,
-    output_path: Path,
-    project_name: Optional[str] = None,
+def enrich_annotation_dict(
+    ann: dict,
+    html_text: str,
+    project_name: str,
     r2_public_url: Optional[str] = None,
     score_cutoff: int = 90,
-    doc_name: Optional[str] = None,
-) -> bool:
+) -> dict:
     """
-    Объединить annotation.json и ocr_result.html в result.json.
+    Обогатить annotation dict данными из OCR HTML. Чистая in-memory трансформация.
 
     Добавляет к каждому блоку:
-    - ocr_html: HTML-фрагмент блока
+    - ocr_html: HTML-фрагмент блока (санитизированный)
     - ocr_json: распарсенный JSON из ocr_text (для IMAGE блоков)
-    - crop_url: ссылка на кроп (для IMAGE блоков)
+    - crop_url: ссылка на кроп (для IMAGE блоков, кроме штампов)
+    - stamp_data: унаследованные данные штампа
     - ocr_meta: {method, match_score, marker_text_sample}
 
+    Конвертирует page_number/page_index в 1-based для внешнего формата.
+
+    Args:
+        ann: Словарь аннотации (не модифицируется, используется deepcopy).
+        html_text: Полный HTML текст OCR результата.
+        project_name: Имя проекта для формирования crop_url.
+        r2_public_url: Базовый URL R2 хранилища.
+        score_cutoff: Порог совпадения для парсера HTML.
+
     Returns:
-        True если успешно, False при ошибке
+        Обогащённый словарь аннотации.
     """
     if not r2_public_url:
         r2_public_url = os.getenv("R2_PUBLIC_URL", "https://rd1.svarovsky.ru")
 
-    try:
-        if not annotation_path.exists():
-            logger.warning(f"annotation.json не найден: {annotation_path}")
-            return False
+    expected_ids = [
+        b["id"]
+        for p in ann.get("pages", [])
+        for b in p.get("blocks", [])
+        if b.get("category_code") != "stamp"
+    ]
 
-        if not ocr_html_path.exists():
-            logger.warning(f"ocr_result.html не найден: {ocr_html_path}")
-            return False
+    result = deepcopy(ann)
 
-        with open(annotation_path, "r", encoding="utf-8") as f:
-            ann = json.load(f)
+    if not expected_ids:
+        logger.info("Нет блоков для обработки")
+        return result
 
-        expected_ids = [
-            b["id"]
-            for p in ann.get("pages", [])
-            for b in p.get("blocks", [])
-            if b.get("category_code") != "stamp"
-        ]
+    segments, meta = build_segments_from_html(
+        html_text, expected_ids, score_cutoff=score_cutoff
+    )
 
-        if not expected_ids:
-            logger.info("Нет блоков для обработки")
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(ann, f, ensure_ascii=False, indent=2)
-            return True
+    missing: list[str] = []
+    matched = 0
 
-        with open(ocr_html_path, "r", encoding="utf-8") as f:
-            html_text = f.read()
+    for page in result.get("pages", []):
+        # Конвертируем page_number в 1-based для внешнего формата
+        if "page_number" in page:
+            page["page_number"] = page["page_number"] + 1
+        for blk in page.get("blocks", []):
+            bid = blk["id"]
+            block_type = blk.get("block_type", "text")
 
-        segments, meta = build_segments_from_html(
-            html_text, expected_ids, score_cutoff=score_cutoff
-        )
+            # Конвертируем page_index в 1-based для внешнего формата
+            if "page_index" in blk:
+                blk["page_index"] = blk["page_index"] + 1
 
-        result = deepcopy(ann)
-        missing = []
-        matched = 0
-
-        for page in result.get("pages", []):
-            # Конвертируем page_number в 1-based для внешнего формата
-            if "page_number" in page:
-                page["page_number"] = page["page_number"] + 1
-            for blk in page.get("blocks", []):
-                bid = blk["id"]
-                block_type = blk.get("block_type", "text")
-
-                # Конвертируем page_index в 1-based для внешнего формата
-                if "page_index" in blk:
-                    blk["page_index"] = blk["page_index"] + 1
-
-                # HTML фрагмент (санитизируем от артефактов datalab)
-                raw_html = segments.get(bid, "")
-                blk["ocr_html"] = sanitize_html(raw_html) if raw_html else ""
-                blk["ocr_meta"] = meta.get(
-                    bid, {"method": [], "match_score": 0.0, "marker_text_sample": ""}
-                )
-
-                # Для IMAGE блоков: парсим JSON из ocr_text и добавляем crop_url
-                if block_type == "image":
-                    ocr_text = blk.get("ocr_text", "")
-                    parsed_json = parse_stamp_json(ocr_text)  # Используем общую функцию
-                    if parsed_json:
-                        blk["ocr_json"] = parsed_json
-
-                    # Добавляем ссылку на кроп (кроме штампов)
-                    if blk.get("category_code") != "stamp":
-                        if project_name:
-                            blk["crop_url"] = _build_crop_url(
-                                bid, r2_public_url, project_name
-                            )
-                        elif blk.get("image_file"):
-                            crop_name = Path(blk["image_file"]).name
-                            blk["crop_url"] = f"{r2_public_url}/crops/{crop_name}"
-
-                # Stamp-блоки хранят данные в ocr_json, не в ocr_html
-                if blk.get("category_code") == "stamp":
-                    continue
-                if blk["ocr_html"]:
-                    matched += 1
-                else:
-                    missing.append(bid)
-
-        # Собираем общие данные штампа (используем общую функцию)
-        inherited_stamp = collect_inheritable_stamp_data_dict(result.get("pages", []))
-
-        # Распространение данных штампа (используем общую функцию)
-        for page in result.get("pages", []):
-            propagate_stamp_data(page, inherited_stamp)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-
-        if missing:
-            logger.warning(
-                f"Не найдено HTML для {len(missing)} блоков. Примеры: {missing[:3]}"
+            # HTML фрагмент (санитизируем от артефактов datalab)
+            raw_html = segments.get(bid, "")
+            blk["ocr_html"] = sanitize_html(raw_html) if raw_html else ""
+            blk["ocr_meta"] = meta.get(
+                bid, {"method": [], "match_score": 0.0, "marker_text_sample": ""}
             )
 
-        logger.info(
-            f"result.json сохранён: {output_path} ({matched}/{len(expected_ids)} блоков сопоставлено)"
+            # Для IMAGE блоков: парсим JSON из ocr_text и добавляем crop_url
+            if block_type == "image":
+                ocr_text = blk.get("ocr_text", "")
+                parsed_json = parse_stamp_json(ocr_text)
+                if parsed_json:
+                    blk["ocr_json"] = parsed_json
+
+                # Добавляем ссылку на кроп (кроме штампов)
+                if blk.get("category_code") != "stamp":
+                    if project_name:
+                        blk["crop_url"] = _build_crop_url(
+                            bid, r2_public_url, project_name
+                        )
+                    elif blk.get("image_file"):
+                        crop_name = Path(blk["image_file"]).name
+                        blk["crop_url"] = f"{r2_public_url}/crops/{crop_name}"
+
+            # Stamp-блоки хранят данные в ocr_json, не в ocr_html
+            if blk.get("category_code") == "stamp":
+                continue
+            if blk["ocr_html"]:
+                matched += 1
+            else:
+                missing.append(bid)
+
+    # Собираем общие данные штампа
+    inherited_stamp = collect_inheritable_stamp_data_dict(result.get("pages", []))
+
+    # Распространение данных штампа
+    for page in result.get("pages", []):
+        propagate_stamp_data(page, inherited_stamp)
+
+    if missing:
+        logger.warning(
+            f"Не найдено HTML для {len(missing)} блоков. Примеры: {missing[:3]}"
         )
 
-        # Регенерируем HTML из разделённых ocr_html
-        regenerate_html_from_result(result, ocr_html_path, doc_name=doc_name)
+    logger.info(
+        f"Annotation enriched: {matched}/{len(expected_ids)} блоков сопоставлено"
+    )
 
-        # Регенерируем MD из разделённых ocr_html
-        md_path = output_path.parent / "document.md"
-        regenerate_md_from_result(result, md_path, doc_name=doc_name)
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Ошибка объединения OCR результатов: {e}", exc_info=True)
-        return False
+    return result
 
 
 def regenerate_md_from_result(

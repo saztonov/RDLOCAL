@@ -1,11 +1,10 @@
 """Регистрация OCR результатов в node_files"""
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -14,6 +13,38 @@ from services.remote_ocr.server.node_storage.file_manager import add_node_file
 from services.remote_ocr.server.r2_keys import resolve_r2_prefix_for_node
 
 logger = get_logger(__name__)
+
+
+def _load_annotation_from_db(node_id: str) -> Optional[dict]:
+    """Загрузить аннотацию из таблицы annotations (Supabase) по node_id."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+
+    if not supabase_url or not supabase_key:
+        logger.error("SUPABASE_URL or SUPABASE_KEY not set")
+        return None
+
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = httpx.get(
+            f"{supabase_url}/rest/v1/annotations",
+            params={"node_id": f"eq.{node_id}", "select": "data"},
+            headers=headers,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows and rows[0].get("data"):
+            return rows[0]["data"]
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load annotation from Supabase: {e}")
+        return None
 
 
 def _save_annotation_to_db(node_id: str, ann_data: dict) -> bool:
@@ -72,11 +103,18 @@ def _save_annotation_to_db(node_id: str, ann_data: dict) -> bool:
     return True
 
 
-def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
+def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir, blocks_metadata: dict = None) -> int:
     """Зарегистрировать все OCR результаты в node_files.
 
     Файлы загружены в папку исходного PDF (parent dir от pdf_r2_key).
     Кропы сохраняются с метаданными блоков (block_id, page_index, coords, block_type).
+
+    Args:
+        node_id: ID узла документа.
+        doc_name: Имя документа (для формирования имён файлов).
+        work_dir: Рабочая директория с результатами OCR.
+        blocks_metadata: Данные аннотации (dict) для извлечения метаданных блоков.
+            Если None — метаданные кропов не заполняются.
     """
     if not node_id:
         return 0
@@ -90,46 +128,12 @@ def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
 
     doc_stem = Path(doc_name).stem
 
-    # Загружаем annotation.json для получения метаданных блоков
+    # Загружаем метаданные блоков из переданной аннотации
     blocks_by_id: Dict[str, dict] = {}
-    annotation_path = work_path / "annotation.json"
-    if annotation_path.exists():
-        try:
-            with open(annotation_path, "r", encoding="utf-8") as f:
-                ann = json.load(f)
-            for page in ann.get("pages", []):
-                for blk in page.get("blocks", []):
-                    blocks_by_id[blk["id"]] = blk
-        except Exception as e:
-            logger.warning(f"Failed to load annotation.json for metadata: {e}")
-
-    # result.json -> {doc_stem}_result.json
-    result_json = work_path / "result.json"
-    if result_json.exists():
-        json_filename = f"{doc_stem}_result.json"
-        add_node_file(
-            node_id,
-            "result_json",
-            f"{tree_prefix}/{json_filename}",
-            json_filename,
-            result_json.stat().st_size,
-            "application/json",
-        )
-        registered += 1
-
-    # annotation.json -> сохраняем в таблицу annotations (Supabase)
-    # Аннотация хранится в Supabase (привязана к node_id), а не в node_files
-    if annotation_path.exists():
-        try:
-            with open(annotation_path, "r", encoding="utf-8") as f:
-                ann_data = json.load(f)
-            if _save_annotation_to_db(node_id, ann_data):
-                registered += 1
-                logger.info(
-                    f"Annotation saved to Supabase annotations table: node_id={node_id}"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to save annotation to Supabase: {e}")
+    if blocks_metadata:
+        for page in blocks_metadata.get("pages", []):
+            for blk in page.get("blocks", []):
+                blocks_by_id[blk["id"]] = blk
 
     # ocr_result.html -> {doc_stem}_ocr.html
     ocr_html = work_path / "ocr_result.html"
@@ -164,23 +168,6 @@ def register_ocr_results_to_node(node_id: str, doc_name: str, work_dir) -> int:
     else:
         logger.warning(
             f"⚠️ document.md не найден для регистрации в node_files: {document_md}"
-        )
-
-    # _blocks.json -> {doc_stem}_blocks.json (file_type=blocks_index)
-    blocks_json = work_path / "_blocks.json"
-    if blocks_json.exists():
-        blocks_filename = f"{doc_stem}_blocks.json"
-        add_node_file(
-            node_id,
-            "blocks_index",
-            f"{tree_prefix}/{blocks_filename}",
-            blocks_filename,
-            blocks_json.stat().st_size,
-            "application/json",
-        )
-        registered += 1
-        logger.info(
-            f"✅ Зарегистрирован _blocks.json в node_files: {blocks_filename} (file_type=blocks_index)"
         )
 
     # Собираем все кропы из crops/ и crops_final/

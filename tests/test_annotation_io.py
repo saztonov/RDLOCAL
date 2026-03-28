@@ -124,54 +124,27 @@ class TestMigrateAnnotationData:
         assert result.success is False
 
 
-class TestAnnotationIOFileRoundTrip:
-    def test_save_and_load(self, tmp_path, annotation_v2_data):
-        """Round-trip: save → load → compare."""
+class TestAnnotationIODisabled:
+    """AnnotationIO file-based methods are disabled (standalone mode removed)."""
+
+    def test_save_raises(self, tmp_path, annotation_v2_data):
+        import pytest
         from rd_core.models import Document
 
         doc, _ = Document.from_dict(annotation_v2_data, migrate_ids=False)
-
         file_path = str(tmp_path / "test_annotation.json")
-        AnnotationIO.save_annotation(doc, file_path)
 
-        loaded_doc, was_migrated = AnnotationIO.load_annotation(file_path, migrate_ids=False)
-        assert loaded_doc is not None
-        assert len(loaded_doc.pages) == len(doc.pages)
-        assert len(loaded_doc.pages[0].blocks) == len(doc.pages[0].blocks)
+        with pytest.raises(NotImplementedError):
+            AnnotationIO.save_annotation(doc, file_path)
 
-    def test_load_and_migrate_v1(self, tmp_annotation_file):
-        """Загрузка v1 файла с автоматической миграцией."""
-        doc, result = AnnotationIO.load_and_migrate(str(tmp_annotation_file))
+    def test_load_raises(self, tmp_path):
+        import pytest
 
-        assert result.success is True
-        assert result.migrated is True
-        assert doc is not None
-        assert len(doc.pages) == 1
-        assert len(doc.pages[0].blocks) == 1
+        with pytest.raises(NotImplementedError):
+            AnnotationIO.load_annotation(str(tmp_path / "any.json"))
 
-    def test_load_nonexistent_file(self, tmp_path):
-        doc, was_migrated = AnnotationIO.load_annotation(
-            str(tmp_path / "nonexistent.json")
-        )
-        assert doc is None
-        assert was_migrated is False
+    def test_load_and_migrate_raises(self, tmp_path):
+        import pytest
 
-    def test_load_invalid_json(self, tmp_path):
-        bad_file = tmp_path / "bad.json"
-        bad_file.write_text("not json", encoding="utf-8")
-
-        doc, result = AnnotationIO.load_and_migrate(str(bad_file))
-        assert result.success is False
-        assert doc is None
-
-    def test_saved_file_has_format_version(self, tmp_path, annotation_v2_data):
-        from rd_core.models import Document
-
-        doc, _ = Document.from_dict(annotation_v2_data, migrate_ids=False)
-        file_path = str(tmp_path / "test.json")
-        AnnotationIO.save_annotation(doc, file_path)
-
-        with open(file_path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        assert data["format_version"] == ANNOTATION_FORMAT_VERSION
+        with pytest.raises(NotImplementedError):
+            AnnotationIO.load_and_migrate(str(tmp_path / "any.json"))

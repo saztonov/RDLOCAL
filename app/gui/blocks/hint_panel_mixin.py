@@ -18,12 +18,13 @@ class HintPanelMixin:
         if hasattr(self, "ocr_preview_inline") and self.ocr_preview_inline:
             self.ocr_preview_inline.clear()
 
-    def _load_ocr_result_file(self):
-        """Загрузить _result.json для текущего PDF"""
-        pdf_path = getattr(self, "_current_pdf_path", None)
-        r2_key = getattr(self, "_current_r2_key", None)
-        if pdf_path:
+    def _load_ocr_preview_data(self):
+        """Загрузить OCR данные для preview из текущей аннотации"""
+        ann_doc = getattr(self, "annotation_document", None)
+        node_id = getattr(self, "_current_node_id", None)
+        ann_data = ann_doc.to_dict() if ann_doc else None
+        if ann_data:
             if hasattr(self, "ocr_preview") and self.ocr_preview:
-                self.ocr_preview.load_result_file(pdf_path, r2_key)
+                self.ocr_preview.load_from_annotation(ann_data, node_id)
             if hasattr(self, "ocr_preview_inline") and self.ocr_preview_inline:
-                self.ocr_preview_inline.load_result_file(pdf_path, r2_key)
+                self.ocr_preview_inline.load_from_annotation(ann_data, node_id)

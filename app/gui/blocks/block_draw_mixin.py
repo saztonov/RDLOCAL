@@ -1,7 +1,6 @@
 """Миксин для создания блоков (рисование)"""
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
@@ -136,10 +135,11 @@ class BlockDrawMixin:
         self._auto_save_annotation()
 
     def _is_document_recognized(self) -> bool:
-        """Проверить, был ли документ уже распознан (есть result.json)"""
-        pdf_path = getattr(self, "_current_pdf_path", None)
-        if not pdf_path:
+        """Проверить, был ли документ уже распознан (есть ocr_text в блоках)"""
+        if not self.annotation_document:
             return False
-
-        result_path = Path(pdf_path).parent / f"{Path(pdf_path).stem}_result.json"
-        return result_path.exists()
+        return any(
+            block.ocr_text or block.ocr_html
+            for page in self.annotation_document.pages
+            for block in page.blocks
+        )

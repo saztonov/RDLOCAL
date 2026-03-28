@@ -76,11 +76,6 @@ class TreeContextMenuMixin:
                         action = menu.addAction("📥 Вставить аннотацию")
                         action.setData(("paste_annotation", node))
 
-                    # Загрузить аннотацию из файла
-                    if r2_key:
-                        action = menu.addAction("📤 Загрузить аннотацию блоков")
-                        action.setData(("upload_annotation", node))
-
                     # Определить и назначить штамп
                     if r2_key and r2_key.lower().endswith(".pdf"):
                         action = menu.addAction("🔖 Определить и назначить штамп")
@@ -91,10 +86,18 @@ class TreeContextMenuMixin:
                         action = menu.addAction("🔍 Верификация блоков")
                         action.setData(("verify_blocks", node))
 
+                    # Миграция legacy JSON
+                    if r2_key:
+                        action = menu.addAction("🔄 Перенести разметку в Supabase")
+                        action.setData(("migrate_legacy", node))
+
                     # Авторазметка файла
                     if r2_key and r2_key.lower().endswith(".pdf"):
                         action = menu.addAction("📝 Авторазметка файла")
                         action.setData(("auto_markup_file", node))
+
+                        action = menu.addAction("📦 Скачать полный архив")
+                        action.setData(("download_full_archive", node))
 
                 if node.is_document and node.attributes.get("r2_key"):
                     action = menu.addAction("☁️ Показать на R2")
@@ -158,9 +161,6 @@ class TreeContextMenuMixin:
         elif action == "paste_annotation":
             node = data[1]
             self._paste_annotation(node)
-        elif action == "upload_annotation":
-            node = data[1]
-            self._upload_annotation_dialog(node)
         elif action == "detect_stamps":
             node = data[1]
             self._detect_and_assign_stamps(node)
@@ -191,3 +191,9 @@ class TreeContextMenuMixin:
         elif action == "auto_markup_file":
             node = data[1]
             self._auto_markup_entire_file(node)
+        elif action == "download_full_archive":
+            node = data[1]
+            self._download_full_archive(node)
+        elif action == "migrate_legacy":
+            node = data[1]
+            self._migrate_legacy_json(node)

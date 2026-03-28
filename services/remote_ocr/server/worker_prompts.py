@@ -9,7 +9,6 @@ logger = get_logger(__name__)
 
 def get_image_block_prompt(
     block_prompt: Optional[dict],
-    category_id: Optional[str] = None,
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> Optional[dict]:
@@ -25,7 +24,7 @@ def get_image_block_prompt(
     try:
         from .storage_settings import get_category_prompt
 
-        category_prompt = get_category_prompt(category_id, category_code, engine=engine)
+        category_prompt = get_category_prompt(category_code=category_code, engine=engine)
         if category_prompt:
             return category_prompt
     except Exception as e:
@@ -39,7 +38,6 @@ def fill_image_prompt_variables(
     doc_name: str,
     page_index: int,
     block_id: str,
-    category_id: Optional[str] = None,
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> dict:
@@ -54,7 +52,7 @@ def fill_image_prompt_variables(
     """
     # Получаем промпт с учётом категории и движка
     effective_prompt = get_image_block_prompt(
-        prompt_data, category_id, category_code, engine=engine
+        prompt_data, category_code=category_code, engine=engine
     )
 
     if not effective_prompt:

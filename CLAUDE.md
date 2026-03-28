@@ -106,7 +106,6 @@ Server uses `backend_factory.py` to create a trio (all LM Studio): `strip_backen
 | `ocr_preview_widget.py` | OCR result preview + HTML WebEngine |
 | `block_verification_dialog.py` | Verify annotation vs result coords |
 | `reconciliation/dialog.py` | R2 ↔ Supabase file sync |
-| `image_categories_dialog.py` | Image block categorization |
 | `ocr_settings/dialog.py` | OCR engine settings |
 | `r2_viewer/dialog.py` | R2 file browser |
 

@@ -74,7 +74,7 @@ class TreeCacheOperationsMixin:
             except Exception as e:
                 logger.error(f"Failed to delete node_files: {e}")
 
-        # Удаляем из R2: PDF, OCR HTML, result JSON и crops
+        # Удаляем из R2: PDF, OCR HTML и crops
         if r2_key:
             try:
                 r2 = R2Storage()
@@ -84,7 +84,6 @@ class TreeCacheOperationsMixin:
                 files_to_delete = [
                     r2_key,  # PDF
                     f"{r2_prefix}/{pdf_stem}_ocr.html",  # OCR HTML
-                    f"{r2_prefix}/{pdf_stem}_result.json",  # result JSON
                 ]
 
                 # Удаляем папку crops по префиксу

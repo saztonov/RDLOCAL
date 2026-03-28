@@ -30,7 +30,6 @@ class Block:
         ocr_text: результат OCR распознавания
         prompt: промпт для OCR (dict с ключами system/user)
         linked_block_id: ID связанного блока (для IMAGE+TEXT)
-        category_id: ID категории изображения (для IMAGE блоков)
         category_code: код категории изображения (для IMAGE блоков)
         created_at: дата и время создания блока (ISO формат)
     """
@@ -47,10 +46,14 @@ class Block:
     ocr_text: Optional[str] = None
     prompt: Optional[dict] = None  # {"system": "...", "user": "..."}
     linked_block_id: Optional[str] = None  # ID связанного блока
-    category_id: Optional[str] = None  # ID категории изображения
     category_code: Optional[str] = None  # Код категории изображения (для сериализации)
     created_at: Optional[str] = None  # Дата создания (ISO формат)
     is_correction: bool = False  # Флаг корректировочного блока (требует повторного OCR)
+    ocr_html: Optional[str] = None  # HTML-фрагмент OCR результата
+    ocr_json: Optional[dict] = None  # Распарсенный JSON (для IMAGE блоков)
+    ocr_meta: Optional[dict] = None  # Метаданные OCR (method, match_score и т.д.)
+    crop_url: Optional[str] = None  # URL кропа в R2
+    stamp_data: Optional[dict] = None  # Данные штампа (для STAMP блоков)
 
     @staticmethod
     def generate_id() -> str:
@@ -202,14 +205,22 @@ class Block:
             result["prompt"] = self.prompt
         if self.linked_block_id:
             result["linked_block_id"] = self.linked_block_id
-        if self.category_id:
-            result["category_id"] = self.category_id
         if self.category_code:
             result["category_code"] = self.category_code
         if self.created_at:
             result["created_at"] = self.created_at
         if self.is_correction:
             result["is_correction"] = self.is_correction
+        if self.ocr_html:
+            result["ocr_html"] = self.ocr_html
+        if self.ocr_json:
+            result["ocr_json"] = self.ocr_json
+        if self.ocr_meta:
+            result["ocr_meta"] = self.ocr_meta
+        if self.crop_url:
+            result["crop_url"] = self.crop_url
+        if self.stamp_data:
+            result["stamp_data"] = self.stamp_data
         return result
 
     @classmethod
@@ -275,9 +286,13 @@ class Block:
             ocr_text=data.get("ocr_text"),
             prompt=data.get("prompt"),
             linked_block_id=linked_block_id,
-            category_id=data.get("category_id"),
             category_code=data.get("category_code"),
             created_at=data.get("created_at") or get_moscow_time_str(),
             is_correction=data.get("is_correction", False),
+            ocr_html=data.get("ocr_html"),
+            ocr_json=data.get("ocr_json"),
+            ocr_meta=data.get("ocr_meta"),
+            crop_url=data.get("crop_url"),
+            stamp_data=data.get("stamp_data"),
         )
         return block, was_migrated

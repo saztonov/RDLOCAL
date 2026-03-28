@@ -1,7 +1,7 @@
 """Верификация и повторное распознавание пропущенных блоков"""
 from __future__ import annotations
 
-import json
+import copy
 import time
 from pathlib import Path
 from typing import Callable
@@ -87,7 +87,7 @@ def _wait_for_backend(backend, max_wait: int = 300, check_interval: int = 15) ->
 
 
 def verify_and_retry_missing_blocks(
-    result_json_path: Path,
+    enriched_ann: dict,
     pdf_path: Path,
     work_dir: Path,
     ocr_backend,
@@ -95,12 +95,12 @@ def verify_and_retry_missing_blocks(
     on_progress: Callable[[int, int], None] = None,
     job_id: str = None,
     deadline: float | None = None,
-) -> bool:
+) -> dict:
     """
     Верификация блоков после OCR и повторное распознавание пропущенных.
 
     Args:
-        result_json_path: путь к result.json
+        enriched_ann: enriched annotation dict (результат OCR)
         pdf_path: путь к PDF файлу
         work_dir: рабочая директория
         ocr_backend: OCR backend для повторного распознавание (любой OCRBackend)
@@ -110,16 +110,11 @@ def verify_and_retry_missing_blocks(
             Если задан — заменяет verification_timeout_minutes.
 
     Returns:
-        True если были найдены и обработаны пропущенные блоки
+        Обновлённый dict с результатами повторного распознавания
     """
     from .text_ocr_quality import classify_text_output
 
-    if not result_json_path.exists():
-        logger.warning(f"result.json не найден: {result_json_path}")
-        return False
-
-    with open(result_json_path, "r", encoding="utf-8") as f:
-        result = json.load(f)
+    result = copy.deepcopy(enriched_ann)
 
     engine_name = _get_engine_name(ocr_backend)
 
@@ -167,7 +162,7 @@ def verify_and_retry_missing_blocks(
 
     if not missing_blocks:
         logger.info("Все текстовые блоки распознаны")
-        return False
+        return result
 
     total_found = len(missing_blocks)
     error_count = sum(1 for b in missing_blocks if b["reason"] == "api_error")
@@ -207,7 +202,7 @@ def verify_and_retry_missing_blocks(
             logger.warning(
                 f"Верификация пропущена: до deadline задачи осталось {remaining + _VERIFICATION_RESERVE:.0f}с"
             )
-            return False
+            return result
         # Пересчитываем timeout_min на основе deadline
         timeout_min = remaining / 60
         logger.info(
@@ -432,17 +427,8 @@ def verify_and_retry_missing_blocks(
                 logger.error(f"Ошибка обработки блока {block_id}: {e}", exc_info=True)
                 continue
 
-    # Сохраняем обновлённый result.json
     if successful_retries > 0:
-        with open(result_json_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        logger.info(f"result.json обновлён ({successful_retries} блоков добавлено)")
-
-        # Регенерируем HTML и MD
-        _regenerate_output_files(result, work_dir, result_json_path)
-
-        # Ресинхронизируем annotation.json с обновлённым result.json
-        _resync_annotation(result, work_dir)
+        logger.info(f"Верификация: {successful_retries} блоков обновлено в dict")
 
     elapsed_total = (time.monotonic() - start_time) / 60
     status_parts = [f"{successful_retries}/{len(missing_blocks)} блоков восстановлено"]
@@ -463,65 +449,6 @@ def verify_and_retry_missing_blocks(
             "backend": engine_name,
         },
     )
-    return successful_retries > 0
+    return result
 
 
-def _resync_annotation(result: dict, work_dir: Path):
-    """Ресинхронизировать annotation.json с обновлённым result.json.
-
-    Верификация обновляет ocr_text/ocr_html в result.json, но annotation.json
-    остаётся стейл. Клиент скачивает оба файла, поэтому они должны совпадать.
-    """
-    annotation_path = work_dir / "annotation.json"
-    if not annotation_path.exists():
-        return
-
-    try:
-        with open(annotation_path, "r", encoding="utf-8") as f:
-            ann = json.load(f)
-
-        # Собираем обновлённые ocr_text из result.json по block id
-        result_texts = {}
-        for page in result.get("pages", []):
-            for blk in page.get("blocks", []):
-                bid = blk.get("id")
-                if bid:
-                    result_texts[bid] = (blk.get("ocr_text", ""), blk.get("ocr_html", ""))
-
-        # Обновляем annotation.json
-        updated = 0
-        for page in ann.get("pages", []):
-            for blk in page.get("blocks", []):
-                bid = blk.get("id")
-                if bid in result_texts:
-                    new_text, new_html = result_texts[bid]
-                    old_text = blk.get("ocr_text", "")
-                    if old_text != new_text:
-                        blk["ocr_text"] = new_text
-                        updated += 1
-
-        if updated > 0:
-            with open(annotation_path, "w", encoding="utf-8") as f:
-                json.dump(ann, f, ensure_ascii=False, indent=2)
-            logger.info(f"annotation.json ресинхронизирован ({updated} блоков обновлено)")
-    except Exception as e:
-        logger.warning(f"Ошибка ресинхронизации annotation.json: {e}")
-
-
-def _regenerate_output_files(result: dict, work_dir: Path, result_json_path: Path):
-    """Регенерировать HTML и MD после обновления result.json"""
-    from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
-
-    try:
-        # Регенерируем HTML
-        html_path = work_dir / "ocr_result.html"
-        doc_name = result.get("pdf_path", "OCR Result")
-        regenerate_html_from_result(result, html_path, doc_name=doc_name)
-        logger.info(f"HTML регенерирован: {html_path}")
-
-        # Регенерируем MD
-        md_path = work_dir / "document.md"
-        regenerate_md_from_result(result, md_path, doc_name=doc_name)
-        logger.info(f"MD регенерирован: {md_path}")
-    except Exception as e:
-        logger.error(f"Ошибка регенерации файлов: {e}", exc_info=True)

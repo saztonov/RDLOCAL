@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.tree_archive_mixin import TreeArchiveMixin
 from app.gui.tree_context_menu import TreeContextMenuMixin
 from app.gui.tree_delegates import VersionHighlightDelegate
 from app.gui.tree_filter_mixin import TreeFilterMixin
@@ -45,6 +46,7 @@ class ProjectTreeWidget(
     TreeNodeOperationsMixin,
     TreeFilterMixin,
     TreeContextMenuMixin,
+    TreeArchiveMixin,
     TreeLoadMixin,
     TreeExpandMixin,
     TreeReorderMixin,
@@ -318,9 +320,6 @@ class ProjectTreeWidget(
     def _detect_and_assign_stamps(self, node: TreeNode):
         self._annotation_ops.detect_and_assign_stamps(node)
 
-    def _upload_annotation_dialog(self, node: TreeNode):
-        self._annotation_ops.upload_from_file(node)
-
     def _get_pdf_status_icon(self, status: str) -> str:
         return PDFStatusManager.get_status_icon(status)
 
@@ -388,6 +387,34 @@ class ProjectTreeWidget(
         from app.gui.node_files_dialog import NodeFilesDialog
         dialog = NodeFilesDialog(node, self.client, self)
         dialog.exec()
+
+    def _migrate_legacy_json(self, node: TreeNode):
+        """Перенести legacy JSON sidecar-файлы в Supabase."""
+        from app.gui.project_tree.legacy_migration import (
+            migrate_legacy_json_to_supabase,
+            show_migration_report,
+        )
+
+        r2_key = node.attributes.get("r2_key", "")
+        if not r2_key:
+            QMessageBox.warning(self, "Ошибка", "Документ не имеет привязки к R2")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Миграция legacy JSON",
+            f"Перенести разметку из legacy JSON файлов в Supabase?\n\n"
+            f"Документ: {node.name}\n"
+            f"R2 key: {r2_key}\n\n"
+            f"Legacy JSON файлы будут удалены из R2 после переноса.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        report = migrate_legacy_json_to_supabase(node.id, r2_key, parent_widget=self)
+        show_migration_report(report, parent_widget=self)
 
     def navigate_to_node(self, node_id: str) -> bool:
         """Навигация к узлу: раскрытие предков, выделение и скролл.

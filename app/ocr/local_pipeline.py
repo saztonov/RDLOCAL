@@ -64,7 +64,13 @@ def run_local_ocr(
 
     Это главная функция, вызываемая в subprocess (multiprocessing.Process).
     Переиспользует серверные модули напрямую.
+
+    DEPRECATED: Local OCR pipeline is disabled in favor of remote OCR with tree documents.
     """
+    raise NotImplementedError(
+        "Local OCR pipeline is disabled. Use remote OCR with tree documents."
+    )
+
     pdf_path = Path(pdf_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -15,7 +15,7 @@ class TreeRenameMixin:
     """Переименование узлов и связанных файлов в R2."""
 
     def _rename_related_files(self, old_r2_key: str, new_r2_key: str, node_id: str):
-        """Переименовать связанные файлы (ocr.html, result.json, document.md) в R2.
+        """Переименовать связанные файлы (ocr.html, document.md) в R2.
 
         Аннотация хранится в Supabase (привязана к node_id), переименование не нужно.
         """
@@ -33,10 +33,6 @@ class TreeRenameMixin:
         # Аннотация привязана к node_id в Supabase — переименование не требуется
         related_files = [
             (f"{r2_prefix}/{old_stem}_ocr.html", f"{r2_prefix}/{new_stem}_ocr.html"),
-            (
-                f"{r2_prefix}/{old_stem}_result.json",
-                f"{r2_prefix}/{new_stem}_result.json",
-            ),
             (
                 f"{r2_prefix}/{old_stem}_document.md",
                 f"{r2_prefix}/{new_stem}_document.md",

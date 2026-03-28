@@ -1,12 +1,11 @@
 """Операции с аннотациями документов в дереве проектов"""
-import json
 import logging
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from app.annotation_db import AnnotationDBIO
 from app.tree_client import NodeType, TreeNode
@@ -16,7 +15,6 @@ from rd_core.annotation_canonicalizer import (
     get_pdf_preview_page_sizes,
     source_pdf_looks_related,
 )
-from rd_core.annotation_io import AnnotationIO
 from rd_core.models import Document
 from rd_core.pdf_utils import PDFDocument
 from rd_core.r2_storage import R2Storage
@@ -33,7 +31,6 @@ class AnnotationOperations:
 
     Отвечает за:
     - Копирование/вставка аннотаций (через Supabase)
-    - Загрузка аннотаций из файла
     - Определение и назначение штампов
     """
 
@@ -226,84 +223,6 @@ class AnnotationOperations:
         except Exception as e:
             logger.error(f"Paste annotation failed: {e}")
             QMessageBox.critical(self._widget, "Ошибка", f"Ошибка вставки: {e}")
-
-    def upload_from_file(self, node: TreeNode) -> None:
-        """Диалог загрузки аннотации блоков из файла → сохранение в Supabase"""
-        if self._check_locked(node):
-            return
-
-        from app.tree_client import TreeClient
-
-        # Диалог выбора файла
-        file_path, _ = QFileDialog.getOpenFileName(
-            self._widget,
-            "Выберите файл аннотации",
-            "",
-            "JSON Files (*.json);;All Files (*)"
-        )
-
-        if not file_path:
-            return
-
-        try:
-            # Загружаем и мигрируем
-            loaded_doc, result = AnnotationIO.load_and_migrate(file_path)
-            if not result.success or not loaded_doc:
-                error_msg = "; ".join(result.errors) if result.errors else "Неизвестная ошибка"
-                QMessageBox.critical(
-                    self._widget, "Ошибка", f"Не удалось загрузить аннотацию:\n{error_msg}"
-                )
-                return
-
-            loaded_doc, error_message = self._validate_and_prepare_annotation(
-                node, loaded_doc
-            )
-            if error_message or not loaded_doc:
-                QMessageBox.warning(
-                    self._widget,
-                    "Несовместимая аннотация",
-                    error_message or "Не удалось подготовить аннотацию.",
-                )
-                return
-
-            # Сохраняем в Supabase
-            success = AnnotationDBIO.save_to_db(loaded_doc, node.id)
-            if not success:
-                QMessageBox.critical(
-                    self._widget, "Ошибка", "Не удалось сохранить аннотацию в Supabase"
-                )
-                return
-
-            logger.info(f"Annotation uploaded to Supabase: node_id={node.id}")
-
-            # Обновляем флаг has_annotation
-            client = TreeClient()
-            attrs = node.attributes.copy()
-            attrs["has_annotation"] = True
-            client.update_node(node.id, attributes=attrs)
-
-            # Обновляем статус PDF
-            r2_key = node.attributes.get("r2_key", "")
-            if r2_key:
-                from rd_core.r2_storage import R2Storage
-                r2 = R2Storage()
-                self._update_pdf_status(node, r2_key, r2)
-
-            self._widget.status_label.setText("📤 Аннотация загружена")
-            self._widget.annotation_replaced.emit(r2_key)
-
-            QMessageBox.information(
-                self._widget, "Успех", "Аннотация блоков успешно загружена"
-            )
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in annotation file: {e}")
-            QMessageBox.critical(self._widget, "Ошибка", f"Неверный формат JSON:\n{e}")
-        except Exception as e:
-            logger.error(f"Upload annotation failed: {e}")
-            QMessageBox.critical(
-                self._widget, "Ошибка", f"Ошибка загрузки аннотации:\n{e}"
-            )
 
     def detect_and_assign_stamps(self, node: TreeNode) -> None:
         """Определить и назначить штамп на всех страницах PDF"""

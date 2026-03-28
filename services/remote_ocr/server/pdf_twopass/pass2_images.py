@@ -74,7 +74,6 @@ async def run_blocks_phase(
                 doc_name=Path(ctx.pdf_path).name,
                 page_index=block.page_index,
                 block_id=block.id,
-                category_id=getattr(block, "category_id", None),
                 category_code=category_code,
                 engine=None,
             )
@@ -85,7 +84,6 @@ async def run_blocks_phase(
                 doc_name=Path(ctx.pdf_path).name,
                 page_index=block.page_index,
                 block_id=block.id,
-                category_id=getattr(block, "category_id", None),
                 category_code=getattr(block, "category_code", None),
                 engine=None,
             )

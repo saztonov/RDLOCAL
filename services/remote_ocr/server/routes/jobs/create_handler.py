@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import File, Form, HTTPException, UploadFile
 
 from services.remote_ocr.server.logging_config import get_logger
+from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
 from services.remote_ocr.server.queue_checker import check_queue_capacity
 from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key
 from services.remote_ocr.server.r2_keys import pdf_key as make_pdf_key
@@ -37,9 +38,9 @@ async def create_job_handler(
     text_model: str = Form(""),
     image_model: str = Form(""),
     stamp_model: str = Form(""),
-    node_id: Optional[str] = Form(None),
+    node_id: str = Form(...),
     is_correction_mode: str = Form("false"),
-    blocks_file: UploadFile = File(..., alias="blocks_file"),
+    blocks_file: Optional[UploadFile] = File(None, alias="blocks_file"),
     pdf: UploadFile = File(...),
 ) -> dict:
     """Создать новую задачу OCR.
@@ -52,7 +53,6 @@ async def create_job_handler(
             detail=f"Unsupported engine '{engine}'. Only 'lmstudio' is supported (legacy alias: 'chandra').",
         )
 
-    blocks_json = (await blocks_file.read()).decode("utf-8")
     _logger.info(
         f"POST /jobs: создание OCR задачи",
         extra={
@@ -70,11 +70,32 @@ async def create_job_handler(
         },
     )
 
-    try:
-        blocks_data = json.loads(blocks_json)
-    except json.JSONDecodeError as e:
-        _logger.error(f"Invalid blocks_json: {e}")
-        raise HTTPException(status_code=400, detail=f"Invalid blocks_json: {e}")
+    # Загрузка блоков: blocks_file (приоритет) → Supabase (node_id)
+    blocks_data: Optional[dict | list] = None
+
+    if blocks_file is not None:
+        blocks_json = (await blocks_file.read()).decode("utf-8")
+        try:
+            blocks_data = json.loads(blocks_json)
+        except json.JSONDecodeError as e:
+            _logger.error(f"Invalid blocks_json: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid blocks_json: {e}")
+    else:
+        # Загружаем аннотацию из Supabase по node_id
+        blocks_data = _load_annotation_from_db(node_id)
+        if blocks_data is None:
+            _logger.error(
+                f"No blocks_file provided and no annotation in Supabase for node {node_id}",
+                extra={"event": "blocks_not_found", "node_id": node_id},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"No blocks provided and no annotation found in Supabase for node {node_id}",
+            )
+        _logger.info(
+            f"Loaded blocks from Supabase for node {node_id}",
+            extra={"event": "blocks_from_db", "node_id": node_id},
+        )
 
     job_id = str(uuid.uuid4())
 

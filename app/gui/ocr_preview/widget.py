@@ -37,8 +37,7 @@ class OcrPreviewWidget(ContentMixin, EditMixin, QWidget):
         super().__init__(parent)
         self._current_block_id: Optional[str] = None
         self._result_data: Optional[Dict[str, Any]] = None
-        self._result_path = None
-        self._r2_key: Optional[str] = None
+        self._node_id: Optional[str] = None
         self._is_modified = False
         self._is_editing = False  # Режим редактирования
 
@@ -203,7 +202,7 @@ class OcrPreviewWidget(ContentMixin, EditMixin, QWidget):
     def clear(self):
         """Очистить виджет"""
         self._result_data = None
-        self._result_path = None
+        self._node_id = None
         self._current_block_id = None
         self._blocks_index = {}
         self.title_label.setText("OCR Preview")

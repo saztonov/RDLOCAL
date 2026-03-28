@@ -34,10 +34,3 @@ class BlockValidationMixin:
                 return True
         return False
 
-    _CATEGORY_NAMES = {"default": "По умолчанию"}
-
-    def _get_category_name(self, category_id: str) -> str:
-        """Получить название категории по ID/коду"""
-        if not category_id:
-            return ""
-        return self._CATEGORY_NAMES.get(category_id, category_id)

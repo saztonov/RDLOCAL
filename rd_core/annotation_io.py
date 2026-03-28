@@ -277,131 +277,28 @@ def migrate_annotation_data(data: dict) -> Tuple[dict, MigrationResult]:
 
 
 class AnnotationIO:
-    """Класс для работы с аннотациями (загрузка, сохранение, миграция файлов)"""
+    """Deprecated: File-based annotation I/O is disabled.
+
+    Use AnnotationDBIO (app.annotation_db) for Supabase-based annotation storage.
+    Migration helpers remain available as module-level functions.
+    """
 
     @staticmethod
-    def save_annotation(document: Document, file_path: str) -> None:
-        """
-        Сохранить разметку Document в JSON
-
-        Args:
-            document: экземпляр Document
-            file_path: путь к выходному JSON-файлу
-        """
-        try:
-            data = document.to_dict()
-            data["format_version"] = ANNOTATION_FORMAT_VERSION
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"Разметка сохранена: {file_path}")
-        except Exception as e:
-            logger.error(f"Ошибка сохранения разметки: {e}")
-            raise
+    def save_annotation(document: "Document", file_path: str) -> None:
+        raise NotImplementedError(
+            "File-based annotation save is disabled. Use AnnotationDBIO.save_to_db()."
+        )
 
     @staticmethod
     def load_annotation(
         file_path: str, migrate_ids: bool = True
-    ) -> tuple[Optional[Document], bool]:
-        """
-        Загрузить разметку Document из JSON
-
-        Args:
-            file_path: путь к JSON-файлу
-            migrate_ids: мигрировать legacy UUID в armor ID формат
-
-        Returns:
-            (Document, was_migrated) - документ и флаг миграции ID
-        """
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            doc, was_migrated = Document.from_dict(data, migrate_ids)
-            logger.info(
-                f"Разметка загружена: {file_path}"
-                + (" (ID мигрированы)" if was_migrated else "")
-            )
-            return doc, was_migrated
-        except Exception as e:
-            logger.error(f"Ошибка загрузки разметки: {e}")
-            return None, False
+    ) -> tuple[Optional["Document"], bool]:
+        raise NotImplementedError(
+            "File-based annotation load is disabled. Use AnnotationDBIO.load_from_db()."
+        )
 
     @staticmethod
-    def load_and_migrate(file_path: str) -> Tuple[Optional[Document], MigrationResult]:
-        """
-        Загрузить аннотацию с автоматической миграцией формата.
-
-        Args:
-            file_path: путь к JSON-файлу
-
-        Returns:
-            (Document, MigrationResult)
-        """
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            return None, MigrationResult(
-                success=False,
-                migrated=False,
-                errors=[f"Ошибка парсинга JSON: {e}"],
-                warnings=[],
-            )
-        except Exception as e:
-            return None, MigrationResult(
-                success=False,
-                migrated=False,
-                errors=[f"Ошибка чтения файла: {e}"],
-                warnings=[],
-            )
-
-        # Проверка на плоский формат v0 (legacy)
-        v0_migrated = False
-        if is_flat_format(data):
-            # Извлечь pdf_path из имени файла аннотации
-            # annotation_path: "doc_annotation.json" → pdf_path: "doc.pdf"
-            from pathlib import Path
-
-            ann_path = Path(file_path)
-            pdf_name = ann_path.stem.replace("_annotation", "") + ".pdf"
-            pdf_path = str(ann_path.parent / pdf_name)
-
-            data = migrate_flat_to_structured(data, pdf_path)
-            v0_migrated = True
-
-        # Миграция данных v1 → v2
-        migrated_data, result = migrate_annotation_data(data)
-
-        if not result.success:
-            return None, result
-
-        # Конвертация в Document (с миграцией ID)
-        try:
-            doc, ids_migrated = Document.from_dict(migrated_data, migrate_ids=True)
-
-            # Объединить флаги миграции
-            format_migration = v0_migrated or result.migrated
-            any_migration = format_migration or ids_migrated
-            warnings = result.warnings.copy()
-
-            if v0_migrated:
-                warnings.insert(0, "Плоский формат v0 мигрирован в структурированный v2")
-            if ids_migrated:
-                warnings.append("ID блоков мигрированы в armor формат")
-
-            if any_migration:
-                result = MigrationResult(
-                    success=True,
-                    migrated=True,
-                    errors=[],
-                    warnings=warnings,
-                )
-
-            setattr(doc, "_prefer_coords_px", format_migration)
-            return doc, result
-        except Exception as e:
-            return None, MigrationResult(
-                success=False,
-                migrated=False,
-                errors=[f"Ошибка конвертации в Document: {e}"],
-                warnings=result.warnings,
-            )
+    def load_and_migrate(file_path: str) -> Tuple[Optional["Document"], "MigrationResult"]:
+        raise NotImplementedError(
+            "File-based annotation load is disabled. Use AnnotationDBIO.load_from_db()."
+        )

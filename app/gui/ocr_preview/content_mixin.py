@@ -1,9 +1,7 @@
 """Миксин загрузки и форматирования контента OCR."""
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Dict, Optional
 
 
@@ -13,28 +11,21 @@ logger = logging.getLogger(__name__)
 class ContentMixin:
     """Загрузка результатов и форматирование контента."""
 
-    def load_result_file(self, pdf_path: str, r2_key: Optional[str] = None):
-        """Загрузить _result.json для PDF документа"""
-        self._result_data = None
-        self._result_path = None
-        self._r2_key = r2_key
+    def load_from_annotation(self, ann_data: dict, node_id: Optional[str] = None):
+        """Загрузить OCR данные из словаря аннотации.
+
+        Args:
+            ann_data: словарь аннотации (Document.to_dict())
+            node_id: ID узла для сохранения изменений
+        """
+        self._result_data = ann_data
+        self._node_id = node_id
         self._blocks_index: Dict[str, Dict] = {}
 
-        if not pdf_path:
-            return
-
-        pdf_path = Path(pdf_path)
-        result_path = pdf_path.parent / f"{pdf_path.stem}_result.json"
-
-        if not result_path.exists():
-            logger.debug(f"Result file not found: {result_path}")
+        if not ann_data:
             return
 
         try:
-            with open(result_path, "r", encoding="utf-8") as f:
-                self._result_data = json.load(f)
-            self._result_path = result_path
-
             # Индексируем блоки по ID из структуры {pages: [{blocks: [...]}]}
             blocks_count = 0
             for page in self._result_data.get("pages", []):
@@ -44,10 +35,10 @@ class ContentMixin:
                         self._blocks_index[block_id] = block
                         blocks_count += 1
 
-            logger.info(f"Loaded result file: {result_path} ({blocks_count} blocks)")
+            logger.info(f"Loaded annotation data ({blocks_count} blocks)")
             self.title_label.setText(f"OCR Preview ({blocks_count} блоков)")
         except Exception as e:
-            logger.error(f"Failed to load result file: {e}")
+            logger.error(f"Failed to load annotation data: {e}")
             self.title_label.setText("OCR Preview")
 
     def show_block(self, block_id: str):

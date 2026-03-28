@@ -410,12 +410,26 @@ class JobsController(QObject):
                 logger.warning(f"Файл аннотации не найден: {extract_dir}")
                 return
 
-            from rd_core.annotation_io import AnnotationIO
+            import json as _json
+            from rd_core.annotation_io import (
+                is_flat_format,
+                migrate_annotation_data,
+                migrate_flat_to_structured,
+            )
+            from rd_core.models import Document
 
-            loaded_doc, result = AnnotationIO.load_and_migrate(str(ann_path))
+            with open(str(ann_path), "r", encoding="utf-8") as _f:
+                _data = _json.load(_f)
 
-            if not result.success or not loaded_doc:
-                logger.warning(f"Не удалось загрузить OCR результат: {result.errors}")
+            if is_flat_format(_data):
+                _data = migrate_flat_to_structured(_data)
+            _data, _result = migrate_annotation_data(_data)
+            if not _result.success:
+                logger.warning(f"Не удалось загрузить OCR результат: {_result.errors}")
+                return
+            loaded_doc, _ = Document.from_dict(_data, migrate_ids=True)
+            if not loaded_doc:
+                logger.warning("Не удалось загрузить OCR результат: Document.from_dict вернул None")
                 return
 
             current_doc = self.main_window.annotation_document
@@ -450,8 +464,8 @@ class JobsController(QObject):
                 self.main_window._auto_save_annotation()
 
             # Перезагружаем OCR preview
-            if hasattr(self.main_window, "_load_ocr_result_file"):
-                self.main_window._load_ocr_result_file()
+            if hasattr(self.main_window, "_load_ocr_preview_data"):
+                self.main_window._load_ocr_preview_data()
 
             for preview_attr in ("ocr_preview", "ocr_preview_inline"):
                 preview = getattr(self.main_window, preview_attr, None)

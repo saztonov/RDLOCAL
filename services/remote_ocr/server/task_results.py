@@ -2,62 +2,15 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Callable
 
 from .logging_config import get_logger
-from .ocr_result_merger import merge_ocr_results
+from .ocr_result_merger import enrich_annotation_dict
 from .r2_keys import resolve_r2_prefix
 from .storage import Job, get_node_full_path
 
 logger = get_logger(__name__)
-
-
-def generate_blocks_json(
-    blocks: list,
-    work_dir: Path,
-    r2_prefix: str,
-) -> Path:
-    """Генерация _blocks.json с информацией об IMAGE блоках и их кропах.
-
-    Args:
-        blocks: список Block объектов
-        work_dir: рабочая директория
-        r2_prefix: префикс R2 (tree_docs/{node_id})
-
-    Returns:
-        Path к созданному файлу
-    """
-    from rd_core.models.enums import BlockType
-
-    r2_public_url = os.getenv("R2_PUBLIC_URL", "https://rd1.svarovsky.ru").rstrip("/")
-
-    image_blocks = []
-    for block in blocks:
-        if block.block_type == BlockType.IMAGE:
-            # Исключаем штампы (у них нет кропов в R2)
-            if getattr(block, "category_code", None) == "stamp":
-                continue
-
-            crop_url = f"{r2_public_url}/{r2_prefix}/crops/{block.id}.pdf"
-
-            image_blocks.append({
-                "id": block.id,
-                "page_index": block.page_index,
-                "block_type": "image",
-                "category_code": getattr(block, "category_code", None),
-                "crop_url": crop_url,
-            })
-
-    blocks_json_path = work_dir / "_blocks.json"
-    with open(blocks_json_path, "w", encoding="utf-8") as f:
-        json.dump({"blocks": image_blocks}, f, ensure_ascii=False, indent=2)
-
-    logger.info(
-        f"_blocks.json сгенерирован: {blocks_json_path} ({len(image_blocks)} IMAGE блоков)"
-    )
-    return blocks_json_path
 
 
 def generate_results(
@@ -70,11 +23,13 @@ def generate_results(
     on_verification_progress: Callable[[int, int], None] = None,
     verification_deadline: float | None = None,
 ) -> str:
-    """Генерация результатов OCR (annotation.json + HTML)"""
+    """Генерация результатов OCR (enriched annotation dict + HTML + MD)"""
     from rd_core.models import Block, Document, Page, ShapeType
     from rd_core.models.enums import BlockType
     from rd_core.ocr import generate_html_from_pages, generate_md_from_pages
 
+    from .node_storage.ocr_registry import _save_annotation_to_db
+    from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
     from .pdf_streaming_core import get_page_dimensions_streaming
     from .text_ocr_quality import filter_mixed_text_output
 
@@ -98,7 +53,7 @@ def generate_results(
                 )
 
     # Детекция suspicious output (JSON-dump, low density) → error marker
-    # Suspicious вывод не должен попадать в result.json как "успех",
+    # Suspicious вывод не должен попадать в result как "успех",
     # чтобы верификация могла его повторно обработать.
     from rd_core.ocr_result import is_suspicious_output, make_error as make_ocr_error
     for block in blocks:
@@ -162,22 +117,19 @@ def generate_results(
 
     # Извлекаем путь для ссылок
     if r2_prefix.startswith("tree_docs/"):
-        project_name = r2_prefix[len("tree_docs/") :]
+        project_name = r2_prefix[len("tree_docs/"):]
     else:
         project_name = job.node_id if job.node_id else job.id
 
-    # Получаем полный путь из дерева проектов (используется в HTML и JSON)
+    # Получаем полный путь из дерева проектов (используется в HTML)
     if job.node_id:
         full_path = get_node_full_path(job.node_id)
         doc_name = full_path if full_path else pdf_path.name
     else:
         doc_name = pdf_path.name
 
-    # annotation.json (для хранения разметки блоков)
-    annotation_path = work_dir / "annotation.json"
+    # Строим Document и получаем annotation dict
     doc = Document(pdf_path=doc_name, pages=pages)
-    with open(annotation_path, "w", encoding="utf-8") as f:
-        json.dump(doc.to_dict(), f, ensure_ascii=False, indent=2)
 
     # Генерация итогового HTML файла
     partial_failures = []
@@ -198,37 +150,29 @@ def generate_results(
             pages, str(md_path), doc_name=doc_name, project_name=project_name
         )
         if md_path.exists():
-            logger.info(f"✅ MD файл сгенерирован: {md_path} ({md_path.stat().st_size} bytes)")
+            logger.info(f"MD файл сгенерирован: {md_path} ({md_path.stat().st_size} bytes)")
         else:
-            logger.error(f"❌ MD файл не создан: {md_path}")
+            logger.error(f"MD файл не создан: {md_path}")
             partial_failures.append("MD: файл не создан")
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации MD: {e}", exc_info=True)
+        logger.error(f"Ошибка генерации MD: {e}", exc_info=True)
         partial_failures.append(f"MD: {e}")
 
-    # Генерация result.json (annotation + ocr_html + crop_url для каждого блока)
-    result_path = work_dir / "result.json"
+    # Обогащение annotation dict: добавление ocr_html, ocr_json, crop_url, ocr_meta
+    ann_dict = doc.to_dict()
     try:
-        merge_ocr_results(
-            annotation_path,
-            html_path,
-            result_path,
-            project_name=project_name,
-            doc_name=doc_name,
-        )
+        html_text = ""
+        if html_path.exists():
+            with open(html_path, "r", encoding="utf-8") as f:
+                html_text = f.read()
+        enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name)
     except Exception as e:
-        logger.warning(f"Ошибка генерации result.json: {e}")
-        partial_failures.append(f"result.json: {e}")
-
-    # Генерация _blocks.json (список IMAGE блоков с URL кропов)
-    try:
-        generate_blocks_json(blocks, work_dir, r2_prefix)
-    except Exception as e:
-        logger.warning(f"Ошибка генерации _blocks.json: {e}")
-        partial_failures.append(f"_blocks.json: {e}")
+        logger.warning(f"Ошибка обогащения annotation dict: {e}")
+        partial_failures.append(f"enrich: {e}")
+        enriched_dict = ann_dict
 
     # Верификация и повторное распознавание пропущенных блоков
-    if ocr_backend and result_path.exists():
+    if ocr_backend:
         from .block_verification import verify_and_retry_missing_blocks
 
         try:
@@ -238,7 +182,7 @@ def generate_results(
 
             logger.info("Запуск верификации блоков...")
             verify_and_retry_missing_blocks(
-                result_path,
+                enriched_dict,
                 pdf_path,
                 work_dir,
                 ocr_backend,
@@ -250,6 +194,28 @@ def generate_results(
         except Exception as e:
             logger.warning(f"Ошибка верификации блоков: {e}", exc_info=True)
             partial_failures.append(f"verification: {e}")
+
+    # Регенерируем HTML и MD из enriched dict (после верификации)
+    try:
+        regenerate_html_from_result(enriched_dict, html_path, doc_name=doc_name)
+    except Exception as e:
+        logger.warning(f"Ошибка регенерации HTML: {e}")
+        partial_failures.append(f"regen_html: {e}")
+
+    try:
+        regenerate_md_from_result(enriched_dict, md_path, doc_name=doc_name)
+    except Exception as e:
+        logger.warning(f"Ошибка регенерации MD: {e}")
+        partial_failures.append(f"regen_md: {e}")
+
+    # Сохраняем enriched dict в Supabase
+    if job.node_id:
+        try:
+            _save_annotation_to_db(job.node_id, enriched_dict)
+            logger.info(f"Enriched annotation saved to Supabase: node_id={job.node_id}")
+        except Exception as e:
+            logger.warning(f"Ошибка сохранения annotation в Supabase: {e}")
+            partial_failures.append(f"save_db: {e}")
 
     if partial_failures:
         logger.warning(
@@ -270,29 +236,27 @@ def _generate_correction_results(
 ) -> str:
     """
     Генерация результатов в режиме корректировки.
-    Merge новых OCR результатов с существующим result.json.
+    Merge новых OCR результатов с существующим enriched dict из Supabase.
     """
     from rd_core.ocr import generate_html_from_pages
     from rd_core.ocr.generator_common import sanitize_html
+
+    from .node_storage.ocr_registry import _load_annotation_from_db, _save_annotation_to_db
     from .ocr_html_parser import build_segments_from_html
-
     from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
-    from .task_helpers import get_r2_storage
-
-    r2_storage = get_r2_storage()
-    doc_stem = pdf_path.stem
 
     r2_prefix = resolve_r2_prefix(job)
 
     logger.info(f"[{job.id}] Correction mode: merging results, r2_prefix={r2_prefix}")
 
-    # 1. Скачать существующий result.json из R2
-    old_result_r2_key = f"{r2_prefix}/{doc_stem}_result.json"
-    old_result_path = work_dir / "old_result.json"
+    # 1. Загрузить существующий enriched dict из Supabase
+    old_result = None
+    if job.node_id:
+        old_result = _load_annotation_from_db(job.node_id)
 
-    if not r2_storage.download_file(old_result_r2_key, str(old_result_path)):
+    if not old_result:
         logger.warning(
-            f"[{job.id}] No existing result.json at {old_result_r2_key}, "
+            f"[{job.id}] No existing annotation in Supabase for node_id={job.node_id}, "
             "falling back to full generation"
         )
         # Отключаем is_correction_mode и вызываем обычную генерацию
@@ -302,10 +266,7 @@ def _generate_correction_results(
             job, pdf_path, blocks, work_dir, ocr_backend, on_verification_progress
         )
 
-    with open(old_result_path, "r", encoding="utf-8") as f:
-        old_result = json.load(f)
-
-    logger.info(f"[{job.id}] Loaded existing result.json with {len(old_result.get('pages', []))} pages")
+    logger.info(f"[{job.id}] Loaded existing annotation with {len(old_result.get('pages', []))} pages")
 
     # 2. Собрать ID корректировочных блоков и построить ocr_text map
     correction_block_ids = set()
@@ -388,7 +349,7 @@ def _generate_correction_results(
     for block in blocks:
         if block.id not in existing_ids and block.id in correction_block_ids:
             # Новый блок - добавляем на соответствующую страницу
-            # page_index в result.json 1-based, в блоках 0-based
+            # page_index в result 1-based, в блоках 0-based
             page_idx_0based = block.page_index
             page_idx_1based = page_idx_0based + 1
 
@@ -432,59 +393,21 @@ def _generate_correction_results(
     else:
         doc_name = pdf_path.name
 
-    # 7. Сохраняем обновлённый result.json
-    result_path = work_dir / "result.json"
-    with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(old_result, f, ensure_ascii=False, indent=2)
-    logger.info(f"[{job.id}] Saved merged result.json: {result_path}")
+    # 7. Сохраняем enriched dict в Supabase
+    if job.node_id:
+        try:
+            _save_annotation_to_db(job.node_id, old_result)
+            logger.info(f"[{job.id}] Saved merged annotation to Supabase")
+        except Exception as e:
+            logger.warning(f"[{job.id}] Error saving annotation to Supabase: {e}")
 
-    # 8. Регенерируем HTML из result.json
+    # 8. Регенерируем HTML из enriched dict
     html_path = work_dir / "ocr_result.html"
     regenerate_html_from_result(old_result, html_path, doc_name=doc_name)
 
-    # 9. Регенерируем MD из result.json
+    # 9. Регенерируем MD из enriched dict
     md_path = work_dir / "document.md"
     regenerate_md_from_result(old_result, md_path, doc_name=doc_name)
-
-    # 10. Также обновляем annotation.json
-    annotation_path = work_dir / "annotation.json"
-    old_ann_r2_key = f"{r2_prefix}/{doc_stem}_annotation.json"
-
-    if r2_storage.download_file(old_ann_r2_key, str(annotation_path)):
-        with open(annotation_path, "r", encoding="utf-8") as f:
-            old_annotation = json.load(f)
-
-        # Миграция v0 формата (плоский list блоков) → структурированный dict
-        if isinstance(old_annotation, list):
-            from rd_core.annotation_io import is_flat_format, migrate_flat_to_structured
-            if is_flat_format(old_annotation):
-                logger.info(f"[{job.id}] Migrating v0 annotation to structured format")
-                old_annotation = migrate_flat_to_structured(old_annotation, pdf_path=str(pdf_path))
-            else:
-                logger.warning(f"[{job.id}] Unexpected annotation format (list), skipping update")
-                old_annotation = None
-
-        # Обновляем блоки в аннотации
-        if old_annotation:
-            for page in old_annotation.get("pages", []):
-                for blk in page.get("blocks", []):
-                    block_id = blk.get("id")
-                    if block_id in new_ocr_map:
-                        blk["ocr_text"] = new_ocr_map[block_id]
-                    if block_id in correction_block_ids:
-                        blk["is_correction"] = False
-
-            with open(annotation_path, "w", encoding="utf-8") as f:
-                json.dump(old_annotation, f, ensure_ascii=False, indent=2)
-            logger.info(f"[{job.id}] Updated annotation.json")
-    else:
-        logger.warning(f"[{job.id}] Could not download annotation.json from {old_ann_r2_key}")
-
-    # 11. Генерируем _blocks.json
-    try:
-        generate_blocks_json(blocks, work_dir, r2_prefix)
-    except Exception as e:
-        logger.warning(f"[{job.id}] Error generating _blocks.json: {e}")
 
     logger.info(
         f"[{job.id}] Correction results generated: "

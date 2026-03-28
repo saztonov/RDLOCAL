@@ -33,13 +33,6 @@ class BlocksTreeManager(ContextMenuMixin):
             self._view_state_manager = ViewStateManager(self.parent.page_viewer)
         return self._view_state_manager
 
-    _CATEGORY_NAMES = {"default": "По умолчанию"}
-
-    def _get_category_name(self, category_id: str, category_code: str = None) -> str:
-        """Получить название категории по коду или ID"""
-        code = category_code or category_id or ""
-        return self._CATEGORY_NAMES.get(code, code)
-
     def update_blocks_tree(self):
         """Обновить дерево блоков со всех страниц, группировка по страницам"""
         self.blocks_tree.clear()
@@ -66,13 +59,7 @@ class BlocksTreeManager(ContextMenuMixin):
                     indicators += " 🔗"
                 block_item.setText(0, f"Блок {idx + 1}{indicators}")
                 block_item.setText(1, block.block_type.value)
-                # Колонка Категория (для IMAGE блоков)
-                cat_name = (
-                    self._get_category_name(block.category_id, block.category_code)
-                    if block.block_type == BlockType.IMAGE
-                    else ""
-                )
-                block_item.setText(2, cat_name)
+                block_item.setText(2, "")
                 # Tooltip
                 tooltip_parts = []
                 if block.linked_block_id:

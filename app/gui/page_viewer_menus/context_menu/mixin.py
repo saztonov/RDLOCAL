@@ -8,12 +8,11 @@ from PySide6.QtWidgets import QMenu
 from rd_core.models import BlockType
 
 from app.gui.page_viewer_menus.context_menu.block_operations import BlockOperationsMixin
-from app.gui.page_viewer_menus.context_menu.category_mixin import CategoryMixin
 
 logger = logging.getLogger(__name__)
 
 
-class ContextMenuMixin(CategoryMixin, BlockOperationsMixin):
+class ContextMenuMixin(BlockOperationsMixin):
     """Миксин для контекстного меню PageViewer"""
 
     def contextMenuEvent(self, event):
@@ -47,11 +46,7 @@ class ContextMenuMixin(CategoryMixin, BlockOperationsMixin):
         # 3. Удалить
         self._add_delete_action(menu, selected_blocks)
 
-        # 4. Категории изображений
-        menu.addSeparator()
-        self._add_category_menu(menu, selected_blocks)
-
-        # 5. Корректировочные блоки
+        # 4. Корректировочные блоки
         menu.addSeparator()
         self._add_correction_action(menu, selected_blocks)
 
@@ -140,32 +135,6 @@ class ContextMenuMixin(CategoryMixin, BlockOperationsMixin):
         delete_action.triggered.connect(
             lambda blocks=selected_blocks: self._delete_blocks(blocks)
         )
-
-    def _add_category_menu(self, menu: QMenu, selected_blocks: list):
-        """Добавить подменю категорий изображений"""
-        if len(selected_blocks) >= 1:
-            block_idx = selected_blocks[0]["idx"]
-            if 0 <= block_idx < len(self.current_blocks):
-                block = self.current_blocks[block_idx]
-                if block.block_type == BlockType.IMAGE:
-                    categories = self._get_image_categories()
-                    if categories:
-                        cat_menu = menu.addMenu("📂 Категория изображения")
-                        for cat in categories:
-                            cat_name = cat.get("name", "???")
-                            cat_id = cat.get("id")
-                            cat_code = cat.get("code")
-
-                            prefix = "✓ " if block.category_id == cat_id else "  "
-                            if cat.get("is_default"):
-                                prefix = "⭐ " if block.category_id == cat_id else "☆ "
-
-                            action = cat_menu.addAction(f"{prefix}{cat_name}")
-                            action.triggered.connect(
-                                lambda checked, cid=cat_id, ccode=cat_code, blocks=selected_blocks: self._apply_category_to_blocks(
-                                    blocks, cid, ccode
-                                )
-                            )
 
     def _add_correction_action(self, menu: QMenu, selected_blocks: list):
         """Добавить пункт меню для пометки как корректировочный"""
