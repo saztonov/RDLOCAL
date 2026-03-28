@@ -11,6 +11,19 @@ from rd_core.r2_metadata_cache import get_metadata_cache
 logger = logging.getLogger(__name__)
 
 
+def invalidate_r2_cache(key: str, *, prefix: bool = False) -> None:
+    """Инвалидировать R2 кэши (metadata + disk) для ключа или префикса.
+
+    Единая точка инвалидации вместо дублирования в 3+ местах.
+    """
+    if prefix:
+        get_metadata_cache().invalidate_prefix(key)
+        get_disk_cache().invalidate_prefix(key)
+    else:
+        get_metadata_cache().invalidate_key(key)
+        get_disk_cache().invalidate(key)
+
+
 class R2UtilsMixin:
     """Миксин для утилит R2"""
 
@@ -44,9 +57,7 @@ class R2UtilsMixin:
         """
         try:
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=remote_key)
-            # Инвалидируем кэши
-            get_metadata_cache().invalidate_key(remote_key)
-            get_disk_cache().invalidate(remote_key)
+            invalidate_r2_cache(remote_key)
             logger.info(f"✅ Объект удален из R2: {remote_key}")
             return True
 
