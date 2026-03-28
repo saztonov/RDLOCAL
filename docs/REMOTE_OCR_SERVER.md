@@ -83,7 +83,7 @@ REMOTE_OCR_API_KEY=        # Если задан — требуется X-API-Ke
 REMOTE_OCR_DATA_DIR=/data  # Директория для временных файлов
 
 # LM Studio (локальные OCR бэкенды)
-CHANDRA_BASE_URL=https://xxx.ngrok-free.app
+CHANDRA_BASE_URL=http://host.docker.internal:1234
 QWEN_BASE_URL=             # Fallback → CHANDRA_BASE_URL
 ```
 

@@ -57,7 +57,7 @@ class OCRDialog(QDialog):
         backend_layout.addWidget(engine_label)
 
         engine_info = QLabel(
-            "   Локальные модели через LM Studio + ngrok"
+            "   Локальные модели через LM Studio"
         )
         engine_info.setStyleSheet("color: #888; font-size: 10px; margin-left: 20px;")
         backend_layout.addWidget(engine_info)

@@ -209,7 +209,7 @@ async def pass2_ocr_from_manifest_async(
                     logger.warning(f"PASS2 ASYNC: ошибка в on_progress callback: {exc}")
 
     # --- Обработка strips ---
-    # Retry: LM Studio (ngrok instability)
+    # Retry: LM Studio
     _is_lmstudio_strip = type(strip_backend).__name__ in (
         "ChandraBackend", "QwenBackend",
     )

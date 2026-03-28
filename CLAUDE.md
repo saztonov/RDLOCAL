@@ -84,8 +84,8 @@ Desktop Client (PySide6)
 |---------|-----------|-----|-------|
 | `OpenRouterBackend` | `openrouter` | OpenRouter (VLM) | Cloud, default for IMAGE blocks |
 | `DatalabOCRBackend` | `datalab` | Datalab Marker | Cloud, segmentation + OCR |
-| `ChandraBackend` | `chandra` | LM Studio (ngrok) | Local, shared tunnel with Qwen |
-| `QwenBackend` | `qwen` | LM Studio (ngrok) | Local, mode="text" or "stamp" |
+| `ChandraBackend` | `chandra` | LM Studio | Local, shared instance with Qwen |
+| `QwenBackend` | `qwen` | LM Studio | Local, mode="text" or "stamp" |
 | `DummyBackend` | `dummy` | — | Testing stub |
 
 Server uses `backend_factory.py` to create a trio: `strip_backend` (TEXT), `image_backend` (IMAGE), `stamp_backend` (stamps/titles).
@@ -244,7 +244,7 @@ Required `.env` variables:
 - `SUPABASE_URL`, `SUPABASE_KEY` - Database
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` - Storage
 - `OPENROUTER_API_KEY` and/or `DATALAB_API_KEY` - OCR engines (cloud)
-- `CHANDRA_BASE_URL` - LM Studio URL for Chandra (via ngrok)
+- `CHANDRA_BASE_URL` - LM Studio URL for Chandra
 - `QWEN_BASE_URL` - LM Studio URL for Qwen (fallback: `CHANDRA_BASE_URL`)
 - `REMOTE_OCR_BASE_URL` - Server URL (default: http://localhost:8000)
 - `REDIS_URL` - For server (default: redis://redis:6379/0)

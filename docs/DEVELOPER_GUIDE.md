@@ -271,16 +271,16 @@ engine = create_ocr_engine(
     api_key="..."
 )
 
-# Chandra (LM Studio, через ngrok)
+# Chandra (LM Studio)
 engine = create_ocr_engine(
     backend="chandra",
-    base_url="https://xxx.ngrok-free.app"
+    base_url="http://host.docker.internal:1234"
 )
 
 # Qwen (LM Studio, два режима)
 engine = create_ocr_engine(
     backend="qwen",
-    base_url="https://xxx.ngrok-free.app",
+    base_url="http://host.docker.internal:1234",
     mode="text"   # или mode="stamp" для штампов
 )
 

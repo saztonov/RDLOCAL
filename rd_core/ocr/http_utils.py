@@ -11,14 +11,11 @@ def create_retry_session(
     total_retries: int = 3,
     backoff_factor: float = 0.5,
     status_forcelist: tuple = (502, 503, 504),
-    ngrok_mode: bool = False,
     preload_mode: bool = False,
 ) -> requests.Session:
     """Создать requests.Session с retry и connection pooling.
 
     Args:
-        ngrok_mode: расширенный retry для нестабильного ngrok tunnel
-                    (6 попыток, backoff до ~2 мин, включая 404)
         preload_mode: умеренный retry для preload-операций
                       (2 попытки, backoff ~3с, без 404)
     """
@@ -26,10 +23,6 @@ def create_retry_session(
         total_retries = 2
         backoff_factor = 1.0
         status_forcelist = (502, 503, 504)
-    elif ngrok_mode:
-        total_retries = 2
-        backoff_factor = 1.0
-        status_forcelist = (404, 429, 500, 502, 503, 504)
 
     session = requests.Session()
     retry = Retry(
@@ -41,8 +34,6 @@ def create_retry_session(
     adapter = HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    # Обход ngrok free tier browser interstitial
-    session.headers.update({"ngrok-skip-browser-warning": "true"})
     if auth:
         session.auth = auth
     return session

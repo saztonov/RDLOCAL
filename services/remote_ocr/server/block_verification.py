@@ -44,7 +44,7 @@ def _get_engine_name(backend) -> str:
 
 
 def _check_backend_available(backend, timeout: int = 10) -> bool:
-    """Быстрая проверка доступности бэкенда (ngrok tunnel для LM Studio)."""
+    """Быстрая проверка доступности бэкенда (LM Studio)."""
     if not _is_lmstudio_backend(backend):
         return True
 
@@ -64,7 +64,7 @@ def _check_backend_available(backend, timeout: int = 10) -> bool:
 
 
 def _wait_for_backend(backend, max_wait: int = 300, check_interval: int = 15) -> bool:
-    """Ожидать восстановления бэкенда (ngrok tunnel).
+    """Ожидать восстановления бэкенда (LM Studio).
 
     Args:
         backend: OCR backend

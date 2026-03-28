@@ -25,7 +25,7 @@ task_retry_delay: 60
 # ===== ЗАЩИТА ОТ ЗАЦИКЛИВАНИЯ =====
 # Максимальное время выполнения одной задачи в часах
 job_max_runtime_hours: 2
-# Увеличенный лимит для LM Studio движков (Chandra/Qwen через ngrok)
+# Увеличенный лимит для LM Studio движков (Chandra/Qwen)
 job_max_runtime_hours_lmstudio: 4
 # Максимальное количество попыток (защита от бесконечного зацикливания)
 job_max_retries: 3
@@ -44,7 +44,7 @@ ocr_request_timeout: 480
 chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
 chandra_retry_delay: 2
-# HTTP таймаут для Chandra запросов, секунды (LM Studio через ngrok)
+# HTTP таймаут для Chandra запросов, секунды
 chandra_http_timeout: 60
 
 # ===== QWEN (LM Studio — IMAGE/STAMP) =====
@@ -57,7 +57,7 @@ qwen_http_timeout: 90
 # Максимум блоков для retry верификации (0 = без лимита)
 max_retry_blocks: 0
 # Таймаут верификации в минутах (0 = без лимита)
-# Для LM Studio (ngrok) минимум 30 мин гарантируется в коде
+# Для LM Studio минимум 30 мин гарантируется в коде
 verification_timeout_minutes: 30
 
 # ===== НАСТРОЙКИ OCR =====

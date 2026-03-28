@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI):
                 "task_soft_timeout": settings.task_soft_timeout,
                 "task_hard_timeout": settings.task_hard_timeout,
                 "max_queue_size": settings.max_queue_size,
-                "chandra_base_url": bool(settings.chandra_base_url),
-                "qwen_base_url": bool(settings.qwen_base_url),
+                "chandra_base_url": settings.chandra_base_url,
+                "qwen_base_url": settings.qwen_base_url or "(fallback → chandra)",
             },
         },
     )
@@ -184,13 +184,25 @@ async def readiness() -> JSONResponse:
         if not url and engine_name == "qwen":
             url = settings.chandra_base_url
         if url:
-            try:
-                import httpx
+            import httpx
 
+            openai_ok = False
+            native_ok = False
+            try:
                 resp = httpx.get(f"{url}/v1/models", timeout=5)
-                providers[engine_name] = {"configured": True, "reachable": resp.status_code == 200}
+                openai_ok = resp.status_code == 200
             except Exception:
-                providers[engine_name] = {"configured": True, "reachable": False}
+                pass
+            try:
+                resp = httpx.get(f"{url}/api/v1/models", timeout=5)
+                native_ok = resp.status_code == 200
+            except Exception:
+                pass
+            providers[engine_name] = {
+                "configured": True,
+                "openai_reachable": openai_ok,
+                "native_reachable": native_ok,
+            }
 
     ready = all(checks.values())
     result = {"ready": ready, "checks": checks}

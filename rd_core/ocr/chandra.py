@@ -14,7 +14,6 @@ from rd_core.ocr._chandra_common import (
     TRANSIENT_CODES,
     build_payload,
     check_non_retriable_error,
-    get_ngrok_auth,
     init_base_url,
     needs_model_reload,
     parse_response,
@@ -36,9 +35,8 @@ class ChandraBackend:
         self.base_url = init_base_url(base_url)
         self._model_id: Optional[str] = None
         self._model_lock = threading.Lock()
-        self._auth = get_ngrok_auth()
-        self.session = create_retry_session(auth=self._auth, ngrok_mode=True)
-        self._preload_session = create_retry_session(auth=self._auth, preload_mode=True)
+        self.session = create_retry_session()
+        self._preload_session = create_retry_session(preload_mode=True)
         self._deadline: Optional[float] = None
         self._cancel_event: Optional[threading.Event] = None
         self._http_timeout = http_timeout
@@ -307,7 +305,7 @@ class ChandraBackend:
                 try:
                     response = self.session.post(
                         f"{self.base_url}/v1/chat/completions",
-                        headers={"Content-Type": "application/json", "ngrok-skip-browser-warning": "true"},
+                        headers={"Content-Type": "application/json"},
                         json=payload, timeout=self._http_timeout,
                     )
                 except requests.exceptions.ConnectionError as e:

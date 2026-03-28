@@ -39,7 +39,7 @@ CHANDRA_DEFAULT_SYSTEM = (
     "Output clean HTML."
 )
 
-DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
+DEFAULT_BASE_URL = "http://host.docker.internal:1234"
 
 # LM Studio native API: конфигурация загрузки модели
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)
@@ -70,13 +70,8 @@ def needs_model_reload(loaded_instances: list, required_context: int) -> Tuple[b
 
 
 def init_base_url(base_url: Optional[str]) -> str:
-    return base_url or os.getenv("CHANDRA_BASE_URL", DEFAULT_BASE_URL)
-
-
-def get_ngrok_auth() -> Optional[tuple]:
-    auth_user = os.getenv("NGROK_AUTH_USER")
-    auth_pass = os.getenv("NGROK_AUTH_PASS")
-    return (auth_user, auth_pass) if auth_user and auth_pass else None
+    url = (base_url or os.getenv("CHANDRA_BASE_URL") or DEFAULT_BASE_URL).strip()
+    return url.rstrip("/")
 
 
 def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:

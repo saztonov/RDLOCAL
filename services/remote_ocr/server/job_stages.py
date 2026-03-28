@@ -73,7 +73,7 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
         try:
             started = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             runtime_hours = (datetime.now(timezone.utc) - started).total_seconds() / 3600
-            # LM Studio движки (Chandra через ngrok) получают увеличенный лимит
+            # LM Studio движки (Chandra/Qwen) получают увеличенный лимит
             is_lmstudio = job.engine == "chandra"
             max_hours = (
                 settings.job_max_runtime_hours_lmstudio

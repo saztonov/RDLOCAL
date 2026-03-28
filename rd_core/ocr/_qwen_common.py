@@ -20,7 +20,7 @@ QWEN_DEFAULT_SYSTEM = (
 )
 QWEN_DEFAULT_PROMPT = "Recognize all content in this image and output as HTML."
 
-DEFAULT_BASE_URL = "https://louvred-madie-gigglier.ngrok-free.dev"
+DEFAULT_BASE_URL = "http://host.docker.internal:1234"
 
 # LM Studio native API: конфигурация загрузки модели
 QWEN_MODEL_KEY = os.getenv(
@@ -53,17 +53,13 @@ def needs_model_reload(loaded_instances: list, required_context: int) -> Tuple[b
 
 
 def init_base_url(base_url: Optional[str]) -> str:
-    return (
+    url = (
         base_url
         or os.getenv("QWEN_BASE_URL")
-        or os.getenv("CHANDRA_BASE_URL", DEFAULT_BASE_URL)
-    )
-
-
-def get_ngrok_auth() -> Optional[tuple]:
-    auth_user = os.getenv("NGROK_AUTH_USER")
-    auth_pass = os.getenv("NGROK_AUTH_PASS")
-    return (auth_user, auth_pass) if auth_user and auth_pass else None
+        or os.getenv("CHANDRA_BASE_URL")
+        or DEFAULT_BASE_URL
+    ).strip()
+    return url.rstrip("/")
 
 
 def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:

@@ -553,7 +553,7 @@ class OpenRouterBackend:
 
 ### ChandraBackend
 
-LM Studio через OpenAI-совместимый API (ngrok tunnel):
+LM Studio через OpenAI-совместимый API:
 
 ```python
 class ChandraBackend:
@@ -806,7 +806,7 @@ DATALAB_API_KEY=...
 REDIS_URL=redis://redis:6379/0
 
 # LM Studio (локальные OCR бэкенды)
-CHANDRA_BASE_URL=https://xxx.ngrok-free.app
+CHANDRA_BASE_URL=http://host.docker.internal:1234
 QWEN_BASE_URL=                              # fallback → CHANDRA_BASE_URL
 ```
 
