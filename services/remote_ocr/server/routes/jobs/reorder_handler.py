@@ -1,4 +1,6 @@
 """Обработчик переупорядочивания задач в очереди OCR"""
+from __future__ import annotations
+
 from fastapi import Form, HTTPException
 
 from services.remote_ocr.server.celery_app import celery_app
