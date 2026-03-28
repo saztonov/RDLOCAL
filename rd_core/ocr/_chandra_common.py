@@ -39,7 +39,7 @@ CHANDRA_DEFAULT_SYSTEM = (
     "Output clean HTML."
 )
 
-DEFAULT_BASE_URL = "http://host.docker.internal:1234"
+DEFAULT_BASE_URL = "http://localhost:1234"
 
 # LM Studio native API: конфигурация загрузки модели
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)

@@ -177,8 +177,12 @@ class JobsController(QObject):
         show_toast(mw, "Запуск локального OCR...", duration=1500)
 
         # Запуск через LocalOcrRunner
+        # .env может содержать host.docker.internal (для Docker) — десктоп-клиент
+        # всегда работает на хосте, поэтому заменяем на localhost
         chandra_url = os.getenv("CHANDRA_BASE_URL", "http://localhost:1234")
+        chandra_url = chandra_url.replace("host.docker.internal", "localhost")
         qwen_url = os.getenv("QWEN_BASE_URL", "") or chandra_url
+        qwen_url = qwen_url.replace("host.docker.internal", "localhost")
 
         self._runner.submit_job(
             pdf_path=pdf_path,

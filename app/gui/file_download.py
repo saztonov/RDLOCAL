@@ -65,8 +65,6 @@ class FileDownloadMixin:
 
         self._current_r2_key = r2_key
         self._current_node_id = node_id
-        self._current_temp_dir = str(workspace)
-        self._current_document_origin = "tree_temp"
         self._update_lock_status(node_id)
         if hasattr(self, "page_viewer"):
             self.page_viewer.read_only = self._current_node_locked
@@ -75,6 +73,10 @@ class FileDownloadMixin:
         if hasattr(self, "move_block_down_btn"):
             self.move_block_down_btn.setEnabled(not self._current_node_locked)
         self._open_pdf_file(str(pdf_path), r2_key=r2_key)
+        self._current_temp_dir = str(workspace)
+        self._current_document_origin = "tree_temp"
+        from app.logging_manager import get_logging_manager
+        get_logging_manager().switch_to_projects_folder()
         if node_id and hasattr(self, "project_tree_widget"):
             self.project_tree_widget.highlight_document(node_id)
 
@@ -117,8 +119,6 @@ class FileDownloadMixin:
         if not tasks:
             self._current_r2_key = r2_key
             self._current_node_id = node_id
-            self._current_temp_dir = str(workspace)
-            self._current_document_origin = "tree_temp"
             self._update_lock_status(node_id)
             if hasattr(self, "page_viewer"):
                 self.page_viewer.read_only = self._current_node_locked
@@ -127,6 +127,10 @@ class FileDownloadMixin:
             if hasattr(self, "move_block_down_btn"):
                 self.move_block_down_btn.setEnabled(not self._current_node_locked)
             self._open_pdf_file(local_path, r2_key=r2_key)
+            self._current_temp_dir = str(workspace)
+            self._current_document_origin = "tree_temp"
+            from app.logging_manager import get_logging_manager
+            get_logging_manager().switch_to_projects_folder()
             if node_id and hasattr(self, "project_tree_widget"):
                 self.project_tree_widget.highlight_document(node_id)
             return
@@ -152,6 +156,8 @@ class FileDownloadMixin:
         self._download_dialog.setWindowTitle("Загрузка")
         self._download_dialog.setWindowModality(Qt.WindowModal)
         self._download_dialog.setMinimumDuration(0)
+        self._download_dialog.setAutoReset(False)
+        self._download_dialog.setAutoClose(False)
         self._download_dialog.setValue(0)
         self._download_dialog.canceled.connect(self._on_download_canceled)
         self._download_dialog.show()
@@ -329,8 +335,6 @@ class FileDownloadMixin:
         ):
             self._current_r2_key = self._pending_download_r2_key
             self._current_node_id = self._pending_download_node_id
-            self._current_temp_dir = pending_temp_dir
-            self._current_document_origin = "tree_temp"
 
             # Проверяем блокировку документа
             self._update_lock_status(self._pending_download_node_id)
@@ -343,6 +347,10 @@ class FileDownloadMixin:
             self._open_pdf_file(
                 self._pending_download_local_path, r2_key=self._pending_download_r2_key
             )
+            self._current_temp_dir = pending_temp_dir
+            self._current_document_origin = "tree_temp"
+            from app.logging_manager import get_logging_manager
+            get_logging_manager().switch_to_projects_folder()
 
             # Подсветить документ в дереве
             if self._pending_download_node_id and hasattr(self, "project_tree_widget"):

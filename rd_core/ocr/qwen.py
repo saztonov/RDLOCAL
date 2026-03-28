@@ -45,6 +45,7 @@ class QwenBackend(LMStudioLifecycleMixin):
         self.base_url = init_base_url(base_url)
         self._model_id: Optional[str] = None
         self._model_lock = threading.Lock()
+        self._server_unreachable = False
         self.session = create_retry_session()
         self._preload_session = create_retry_session(preload_mode=True)
         self._deadline: Optional[float] = None

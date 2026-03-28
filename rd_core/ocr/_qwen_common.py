@@ -20,7 +20,7 @@ QWEN_DEFAULT_SYSTEM = (
 )
 QWEN_DEFAULT_PROMPT = "Recognize all content in this image and output as HTML."
 
-DEFAULT_BASE_URL = "http://host.docker.internal:1234"
+DEFAULT_BASE_URL = "http://localhost:1234"
 
 # LM Studio native API: конфигурация загрузки модели
 QWEN_MODEL_KEY = os.getenv(

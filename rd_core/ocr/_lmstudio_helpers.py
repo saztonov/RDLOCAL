@@ -44,6 +44,8 @@ class LMStudioLifecycleMixin:
     _LOAD_CONFIG: dict = {}
     _PRELOAD_TIMEOUT: int = 60
 
+    _server_unreachable: bool = False
+
     def set_deadline(self, deadline: float) -> None:
         """Установить крайний срок (unix timestamp) для прекращения retry."""
         self._deadline = deadline
@@ -75,8 +77,13 @@ class LMStudioLifecycleMixin:
 
             self._ensure_model_loaded()
 
+            if self._server_unreachable:
+                self._model_id = self._MODEL_KEY
+                logger.info(f"{self._BACKEND_NAME} сервер недоступен, используется fallback: {self._model_id}")
+                return self._model_id
+
             try:
-                resp = self.session.get(f"{self.base_url}/v1/models", timeout=30)
+                resp = self.session.get(f"{self.base_url}/v1/models", timeout=10)
                 if resp.status_code == 200:
                     model_key_lower = self._MODEL_KEY.lower()
                     for m in resp.json().get("data", []):
@@ -97,18 +104,22 @@ class LMStudioLifecycleMixin:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
         start = time.time()
+        pool = ThreadPoolExecutor(max_workers=1)
         try:
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(self._discover_model)
-                future.result(timeout=self._PRELOAD_TIMEOUT)
+            future = pool.submit(self._discover_model)
+            future.result(timeout=self._PRELOAD_TIMEOUT)
             elapsed = time.time() - start
             logger.info(f"{self._BACKEND_NAME} модель предзагружена: {self._model_id} ({elapsed:.1f}с)")
         except FuturesTimeoutError:
             elapsed = time.time() - start
+            self._server_unreachable = True
+            self._model_id = self._model_id or self._MODEL_KEY
             logger.warning(f"{self._BACKEND_NAME} preload timeout ({elapsed:.1f}с), продолжаем без preload")
         except Exception as e:
             elapsed = time.time() - start
             logger.warning(f"{self._BACKEND_NAME} preload не удался ({elapsed:.1f}с, non-fatal): {e}")
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _try_discover_and_load(self, failed_resp, load_config: dict) -> bool:
         """При model_not_found — найти модель через /v1/models и загрузить."""
@@ -230,6 +241,7 @@ class LMStudioLifecycleMixin:
                     logger.warning(f"Preload: ошибка загрузки: {load_resp.status_code} - {load_resp.text[:300]}")
 
         except Exception as e:
+            self._server_unreachable = True
             logger.warning(f"Preload: native API недоступен: {e}")
 
     def unload_model(self) -> None:
