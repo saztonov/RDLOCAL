@@ -13,13 +13,12 @@ from PySide6.QtWidgets import (
 
 from rd_core.models import BlockType
 from .context_menu_mixin import ContextMenuMixin
-from .hint_mixin import HintMixin
 from ..view_state_manager import ViewStateManager
 
 logger = logging.getLogger(__name__)
 
 
-class BlocksTreeManager(ContextMenuMixin, HintMixin):
+class BlocksTreeManager(ContextMenuMixin):
     """Управление деревом блоков"""
 
     def __init__(self, parent, blocks_tree: QTreeWidget):
@@ -65,9 +64,6 @@ class BlocksTreeManager(ContextMenuMixin, HintMixin):
                 # Индикатор связи
                 if block.linked_block_id:
                     indicators += " 🔗"
-                # Индикатор подсказки для IMAGE блоков
-                if block.block_type == BlockType.IMAGE:
-                    indicators += " 💡" if block.hint else " 📝"
                 block_item.setText(0, f"Блок {idx + 1}{indicators}")
                 block_item.setText(1, block.block_type.value)
                 # Колонка Категория (для IMAGE блоков)
@@ -81,8 +77,6 @@ class BlocksTreeManager(ContextMenuMixin, HintMixin):
                 tooltip_parts = []
                 if block.linked_block_id:
                     tooltip_parts.append("🔗 Связан с другим блоком")
-                if block.hint:
-                    tooltip_parts.append(f"Подсказка: {block.hint}")
                 if tooltip_parts:
                     block_item.setToolTip(0, "\n".join(tooltip_parts))
                 block_item.setData(

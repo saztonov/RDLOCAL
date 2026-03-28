@@ -142,7 +142,6 @@ class TestBlock:
             source=BlockSource.USER,
         )
         block.ocr_text = "Test OCR result"
-        block.hint = "Test hint"
 
         d = block.to_dict()
         restored, was_migrated = Block.from_dict(d, migrate_ids=False)
@@ -152,7 +151,6 @@ class TestBlock:
         assert restored.coords_px == block.coords_px
         assert restored.block_type == block.block_type
         assert restored.ocr_text == block.ocr_text
-        assert restored.hint == block.hint
 
     def test_from_dict_with_string_enums(self):
         data = {

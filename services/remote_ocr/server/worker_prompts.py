@@ -1,6 +1,5 @@
 """Промпты и парсинг для OCR воркера"""
 
-import json
 import re
 from typing import Dict, List, Optional
 
@@ -42,8 +41,6 @@ def fill_image_prompt_variables(
     doc_name: str,
     page_index: int,
     block_id: str,
-    hint: Optional[str],
-    pdfplumber_text: str,
     category_id: Optional[str] = None,
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
@@ -56,8 +53,6 @@ def fill_image_prompt_variables(
         {DOC_NAME} - имя PDF документа
         {PAGE_NUM} - номер страницы (1-based)
         {BLOCK_ID} - ID блока
-        {OPERATOR_HINT} - подсказка оператора (или пустая строка)
-        {PDFPLUMBER_TEXT} - извлечённый текст pdfplumber (или пустая строка)
     """
     # Получаем промпт с учётом категории и движка
     effective_prompt = get_image_block_prompt(
@@ -79,8 +74,6 @@ def fill_image_prompt_variables(
         "{DOC_NAME}": doc_name or "unknown",
         "{PAGE_NUM}": str(page_index + 1) if page_index is not None else "1",
         "{BLOCK_ID}": block_id or "",
-        "{OPERATOR_HINT}": hint if hint else "",
-        "{PDFPLUMBER_TEXT}": pdfplumber_text or "",
     }
 
     for key, value in variables.items():
@@ -88,35 +81,6 @@ def fill_image_prompt_variables(
         result["user"] = result["user"].replace(key, value)
 
     return result
-
-
-def inject_pdfplumber_to_ocr_text(ocr_result: str, pdfplumber_text: str) -> str:
-    """
-    Вставить pdfplumber текст в поле ocr_text результата OCR.
-    """
-    if not pdfplumber_text or not pdfplumber_text.strip():
-        return ocr_result
-
-    if not ocr_result:
-        return ocr_result
-
-    try:
-        json_match = re.search(r"\{[\s\S]*\}", ocr_result)
-        if json_match:
-            json_str = json_match.group(0)
-            data = json.loads(json_str)
-
-            if "ocr_text" in data:
-                data["ocr_text"] = pdfplumber_text.strip()
-                new_json = json.dumps(data, ensure_ascii=False, indent=2)
-
-                if ocr_result.strip().startswith("```"):
-                    return f"```json\n{new_json}\n```"
-                return new_json
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.warning(f"Не удалось вставить pdfplumber текст в JSON: {e}")
-
-    return ocr_result
 
 
 def build_strip_prompt(blocks: list, block_ids: Optional[List[str]] = None) -> dict:

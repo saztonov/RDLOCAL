@@ -35,8 +35,7 @@ async def run_images_phase(
     Returns:
         (image_block_parts, image_block_total_parts)
     """
-    from ..worker_pdf import extract_pdfplumber_text_for_block
-    from ..worker_prompts import fill_image_prompt_variables, inject_pdfplumber_to_ocr_text
+    from ..worker_prompts import fill_image_prompt_variables
 
     image_block_parts: Dict[str, Dict[int, str]] = {}
     image_block_total_parts: Dict[str, int] = {}
@@ -87,23 +86,13 @@ async def run_images_phase(
 
         async with ctx.concurrency_semaphore:
             try:
-                pdfplumber_text = await asyncio.to_thread(
-                    extract_pdfplumber_text_for_block,
-                    ctx.pdf_path,
-                    block.page_index,
-                    block.coords_norm,
-                )
-
                 category_id = getattr(block, "category_id", None)
-                category_code = getattr(block, "category_code", None)
 
                 prompt_data = fill_image_prompt_variables(
                     prompt_data=block.prompt,
                     doc_name=Path(ctx.pdf_path).name,
                     page_index=block.page_index,
                     block_id=block.id,
-                    hint=getattr(block, "hint", None),
-                    pdfplumber_text=pdfplumber_text,
                     category_id=category_id,
                     category_code=category_code,
                     engine=None,
@@ -175,9 +164,6 @@ async def run_images_phase(
                         "use_pdf_crop": bool(use_pdf),
                     },
                 )
-
-                text = inject_pdfplumber_to_ocr_text(text, pdfplumber_text)
-                block.pdfplumber_text = pdfplumber_text
 
                 return entry.block_id, text, entry.part_idx, entry.total_parts
 

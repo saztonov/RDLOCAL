@@ -62,43 +62,7 @@ class ContextMenuMixin:
                             )
                         )
 
-        # Проверяем, есть ли IMAGE блоки среди выбранных
-        image_blocks = self._filter_image_blocks(selected_blocks)
-        if image_blocks:
-            menu.addSeparator()
-            hint_action = menu.addAction("📝 Назначить подсказку...")
-            hint_action.triggered.connect(
-                lambda: self.set_hint_for_blocks(image_blocks)
-            )
-
-            # Показать текущую подсказку (если один блок выбран)
-            if len(image_blocks) == 1:
-                block = self._get_block(image_blocks[0])
-                if block and block.hint:
-                    clear_hint_action = menu.addAction("❌ Очистить подсказку")
-                    clear_hint_action.triggered.connect(
-                        lambda: self.clear_hint_for_blocks(image_blocks)
-                    )
-
         menu.exec_(tree.viewport().mapToGlobal(position))
-
-    def _filter_image_blocks(self, blocks_data: list) -> list:
-        """Отфильтровать только IMAGE блоки"""
-        result = []
-        if not self.parent.annotation_document:
-            return result
-
-        for data in blocks_data:
-            page_num = data["page"]
-            block_idx = data["idx"]
-
-            if page_num < len(self.parent.annotation_document.pages):
-                page = self.parent.annotation_document.pages[page_num]
-                if block_idx < len(page.blocks):
-                    block = page.blocks[block_idx]
-                    if block.block_type == BlockType.IMAGE:
-                        result.append(data)
-        return result
 
     def create_linked_block(self, block_data: dict, target_type: BlockType):
         """Создать связанный блок другого типа"""

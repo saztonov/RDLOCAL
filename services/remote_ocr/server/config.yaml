@@ -97,7 +97,7 @@ default_stamp_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 # =====================================================
 # ПРОМПТЫ ДЛЯ OCR (IMAGE/STAMP)
 # =====================================================
-# Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}, {OPERATOR_HINT}, {PDFPLUMBER_TEXT}
+# Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}
 
 # -- IMAGE blocks (default category) --
 image_system_prompt: |
@@ -105,9 +105,7 @@ image_system_prompt: |
   Your goal is stable machine-readable JSON for indexing and OCR support.
 
   Evidence priority:
-  1) Image content.
-  2) raw_pdfplumber_text only when it clearly matches visible content inside this exact tile.
-  3) operator_hint only as soft context; never let it override visible evidence.
+  1) Image content only.
 
   Rules:
   - Do not guess missing characters, numbers, codes, stages, sections, dimensions, or elevations.
@@ -141,7 +139,7 @@ image_system_prompt: |
   - location.zone_name: choose only from the enum.
   - content_summary: one short sentence in Russian; confirmed facts only.
   - detailed_description: 3-5 short sentences in Russian; describe only observable geometry, line types, hatching, callouts, arrows, dimensions, elevations, and visible relationships between elements. No conclusions.
-  - clean_ocr_text: only confirmed local text belonging to this tile. Prefer the image. Use raw_pdfplumber_text only to repair obvious OCR confusions for text clearly visible in this tile.
+  - clean_ocr_text: only confirmed local text belonging to this tile, as read from the image.
   - key_entities: up to 25 unique visible marks, positions, dimensions, elevations, Ø/DN values, and codes.
 
 image_user_prompt: |
@@ -149,12 +147,7 @@ image_user_prompt: |
   DOC_NAME: {DOC_NAME}
   PAGE_NUM: {PAGE_NUM}
   BLOCK_ID: {BLOCK_ID}
-  OPERATOR_HINT: {OPERATOR_HINT}
   </context>
-
-  <raw_pdfplumber_text>
-  {PDFPLUMBER_TEXT}
-  </raw_pdfplumber_text>
 
   Analyze only the attached image tile.
 
@@ -174,9 +167,7 @@ stamp_system_prompt: |
   Accuracy of structured fields is more important than prose.
 
   Evidence priority:
-  1) Image: cell boundaries, row alignment, handwriting, signatures, handwritten dates.
-  2) raw_pdfplumber_text: printed text, document codes, project names, organization names, if it clearly belongs to this stamp.
-  3) operator_hint: soft hint only. Never let it override visible or raw evidence.
+  1) Image only: cell boundaries, row alignment, handwriting, signatures, handwritten dates.
 
   Rules:
   - Preserve text exactly as written: Russian, Latin, digits, symbols.
@@ -211,20 +202,14 @@ stamp_user_prompt: |
   DOC_NAME: {DOC_NAME}
   PAGE_NUM: {PAGE_NUM}
   BLOCK_ID: {BLOCK_ID}
-  OPERATOR_HINT: {OPERATOR_HINT}
   </context>
-
-  <raw_pdfplumber_text>
-  {PDFPLUMBER_TEXT}
-  </raw_pdfplumber_text>
 
   Analyze the attached image of one construction title block.
 
   Tasks:
   1) Map visible stamp content to the JSON fields.
   2) Use the image to determine which text belongs to which field.
-  3) Use raw_pdfplumber_text only to correct obvious OCR errors in printed text that clearly belongs to this stamp.
-  4) Extract handwritten names and dates only if they are visible.
-  5) If a field is cropped, hidden, or ambiguous, return null.
+  3) Extract handwritten names and dates only if they are visible.
+  4) If a field is cropped, hidden, or ambiguous, return null.
 
   Return exactly one JSON object matching the system schema.

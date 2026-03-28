@@ -3,16 +3,12 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTreeWidgetItem
 
-from rd_core.models import BlockType
-
-
 class BlockSelectionMixin:
     """Миксин для обработки выбора блоков"""
 
     def _on_block_selected(self, block_idx: int):
         """Обработка выбора блока"""
         if not self.annotation_document:
-            self._hide_hint_panel()
             self._hide_ocr_preview()
             return
 
@@ -20,17 +16,10 @@ class BlockSelectionMixin:
         if not current_page_data or not (
             0 <= block_idx < len(current_page_data.blocks)
         ):
-            self._hide_hint_panel()
             self._hide_ocr_preview()
             return
 
         block = current_page_data.blocks[block_idx]
-
-        # Показываем панель подсказки для IMAGE блоков
-        if block.block_type == BlockType.IMAGE:
-            self._show_hint_panel(block)
-        else:
-            self._hide_hint_panel()
 
         # Показываем OCR preview для выбранного блока
         self._show_ocr_preview(block.id)
@@ -39,7 +28,6 @@ class BlockSelectionMixin:
 
     def _on_blocks_selected(self, block_indices: list):
         """Обработка множественного выбора блоков"""
-        self._hide_hint_panel()
         if not self.annotation_document or not block_indices:
             return
 
@@ -93,7 +81,6 @@ class BlockSelectionMixin:
                 self.page_viewer.selected_block_idx = None
                 self.page_viewer._redraw_blocks()
 
-                self._hide_hint_panel()
                 self._update_ui()
                 return
 
@@ -124,14 +111,8 @@ class BlockSelectionMixin:
 
         self._update_ui()
 
-        # Показ/скрытие панели подсказки для IMAGE
+        # Показываем OCR preview
         current_page_data = self._get_or_create_page(self.current_page)
         if current_page_data and 0 <= block_idx < len(current_page_data.blocks):
             block = current_page_data.blocks[block_idx]
-            if block.block_type == BlockType.IMAGE:
-                self._show_hint_panel(block)
-            else:
-                self._hide_hint_panel()
-
-            # Показываем OCR preview
             self._show_ocr_preview(block.id)

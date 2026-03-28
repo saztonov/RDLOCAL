@@ -29,8 +29,6 @@ class Block:
         image_file: путь к сохранённому кропу блока
         ocr_text: результат OCR распознавания
         prompt: промпт для OCR (dict с ключами system/user)
-        hint: подсказка пользователя для IMAGE блока (описание содержимого)
-        pdfplumber_text: сырой текст извлечённый pdfplumber для блока
         linked_block_id: ID связанного блока (для IMAGE+TEXT)
         category_id: ID категории изображения (для IMAGE блоков)
         category_code: код категории изображения (для IMAGE блоков)
@@ -48,8 +46,6 @@ class Block:
     image_file: Optional[str] = None
     ocr_text: Optional[str] = None
     prompt: Optional[dict] = None  # {"system": "...", "user": "..."}
-    hint: Optional[str] = None  # Подсказка пользователя для IMAGE блока
-    pdfplumber_text: Optional[str] = None  # Сырой текст pdfplumber
     linked_block_id: Optional[str] = None  # ID связанного блока
     category_id: Optional[str] = None  # ID категории изображения
     category_code: Optional[str] = None  # Код категории изображения (для сериализации)
@@ -119,8 +115,6 @@ class Block:
         ocr_text: Optional[str] = None,
         block_id: Optional[str] = None,
         prompt: Optional[dict] = None,
-        hint: Optional[str] = None,
-        pdfplumber_text: Optional[str] = None,
         linked_block_id: Optional[str] = None,
     ) -> "Block":
         """
@@ -139,8 +133,6 @@ class Block:
             ocr_text: результат OCR
             block_id: ID блока (если None, генерируется автоматически)
             prompt: промпт для OCR
-            hint: подсказка пользователя для IMAGE блока
-            pdfplumber_text: сырой текст pdfplumber
             linked_block_id: ID связанного блока
 
         Returns:
@@ -160,8 +152,6 @@ class Block:
             image_file=image_file,
             ocr_text=ocr_text,
             prompt=prompt,
-            hint=hint,
-            pdfplumber_text=pdfplumber_text,
             linked_block_id=linked_block_id,
             created_at=get_moscow_time_str(),
         )
@@ -210,10 +200,6 @@ class Block:
             result["polygon_points"] = [list(p) for p in self.polygon_points]
         if self.prompt:
             result["prompt"] = self.prompt
-        if self.hint:
-            result["hint"] = self.hint
-        if self.pdfplumber_text:
-            result["pdfplumber_text"] = self.pdfplumber_text
         if self.linked_block_id:
             result["linked_block_id"] = self.linked_block_id
         if self.category_id:
@@ -285,8 +271,6 @@ class Block:
             image_file=data.get("image_file"),
             ocr_text=data.get("ocr_text"),
             prompt=data.get("prompt"),
-            hint=data.get("hint"),
-            pdfplumber_text=data.get("pdfplumber_text"),
             linked_block_id=linked_block_id,
             category_id=data.get("category_id"),
             category_code=data.get("category_code"),

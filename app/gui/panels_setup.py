@@ -158,8 +158,6 @@ class PanelsSetupMixin:
 
         blocks_layout.addWidget(blocks_splitter)
 
-        self._selected_image_block = None
-
         self.main_right_tabs.addTab(blocks_container, "Блоки")
 
         # === Вкладка "OCR" ===
@@ -184,7 +182,3 @@ class PanelsSetupMixin:
         else:  # Блоки
             self.remote_ocr_panel.show()
 
-    def _on_hint_changed(self):
-        """Автосохранение подсказки при изменении"""
-        if self._selected_image_block:
-            self._selected_image_block.hint = self.hint_edit.toPlainText() or None
