@@ -248,7 +248,6 @@ Required `.env` variables:
 
 Server-specific (dynamic loading via `settings.py` from `config.yaml`):
 - `REMOTE_OCR_DATA_DIR` - Work directory (default: /data)
-- `REMOTE_OCR_API_KEY` - API authentication
 - `config.yaml` - Main config file (timeouts, concurrency, engines, DPI, queue settings)
 - `OCR_CONFIG_PATH` - Override path to config.yaml
 

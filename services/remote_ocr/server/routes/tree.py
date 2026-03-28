@@ -1,13 +1,11 @@
 """
 Tree API Routes - прокси для операций с деревом проектов
-Все запросы требуют X-API-Key аутентификацию
 """
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..routes.common import check_api_key
 from ..node_storage import (
     add_node_file,
     create_node,
@@ -22,7 +20,7 @@ from ..node_storage import (
 )
 
 router = APIRouter(
-    prefix="/api/tree", tags=["tree"], dependencies=[Depends(check_api_key)]
+    prefix="/api/tree", tags=["tree"]
 )
 
 

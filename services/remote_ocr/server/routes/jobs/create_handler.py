@@ -3,14 +3,13 @@ import json
 import uuid
 from typing import Optional
 
-from fastapi import File, Form, Header, HTTPException, UploadFile
+from fastapi import File, Form, HTTPException, UploadFile
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.queue_checker import check_queue_capacity
 from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key
 from services.remote_ocr.server.r2_keys import pdf_key as make_pdf_key
 from services.remote_ocr.server.routes.common import (
-    check_api_key,
     get_r2_sync_client,
 )
 from services.remote_ocr.server.storage import (
@@ -43,14 +42,11 @@ async def create_job_handler(
     is_correction_mode: str = Form("false"),
     blocks_file: UploadFile = File(..., alias="blocks_file"),
     pdf: UploadFile = File(...),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Создать новую задачу OCR.
 
     Если node_id указан - файлы берутся из tree_docs/{node_id}/, не дублируем.
     """
-    check_api_key(x_api_key)
-
     if engine not in ("lmstudio", "chandra"):
         raise HTTPException(
             status_code=400,

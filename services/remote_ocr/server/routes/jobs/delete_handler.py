@@ -1,11 +1,8 @@
 """Обработчик удаления задачи OCR"""
-from typing import Optional
-
-from fastapi import Header, HTTPException
+from fastapi import HTTPException
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import (
-    check_api_key,
     get_r2_sync_client,
     require_job,
 )
@@ -18,14 +15,12 @@ _logger = get_logger(__name__)
 
 def delete_job_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Удалить задачу и все связанные файлы.
 
     ВАЖНО: Если у job есть node_id, файлы НЕ удаляются из R2,
     т.к. они зарегистрированы в node_files и принадлежат документу в дереве.
     """
-    check_api_key(x_api_key)
 
     job = require_job(job_id)
 

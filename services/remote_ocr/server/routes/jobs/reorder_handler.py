@@ -1,11 +1,9 @@
 """Обработчик переупорядочивания задач в очереди OCR"""
-from typing import Optional
-
-from fastapi import Form, Header, HTTPException
+from fastapi import Form, HTTPException
 
 from services.remote_ocr.server.celery_app import celery_app
 from services.remote_ocr.server.logging_config import get_logger
-from services.remote_ocr.server.routes.common import check_api_key, require_job
+from services.remote_ocr.server.routes.common import require_job
 from services.remote_ocr.server.routes.jobs.update_handlers import (
     _get_block_count_for_job,
 )
@@ -42,10 +40,8 @@ def _revoke_and_resubmit(job_id: str, old_celery_task_id: Optional[str],
 def reorder_job_handler(
     job_id: str,
     direction: str = Form(...),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Переместить задачу вверх/вниз в очереди обработки."""
-    check_api_key(x_api_key)
 
     if direction not in ("up", "down"):
         raise HTTPException(

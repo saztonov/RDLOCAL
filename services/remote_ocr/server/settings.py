@@ -87,7 +87,6 @@ class Settings:
 
     # ===== СЕКРЕТЫ (только .env) =====
     data_dir: str = _env("REMOTE_OCR_DATA_DIR", "/data")
-    api_key: str = _env("REMOTE_OCR_API_KEY")
     chandra_base_url: str = _env("CHANDRA_BASE_URL")
     qwen_base_url: str = _env("QWEN_BASE_URL")
     redis_url: str = _env("REDIS_URL", "redis://redis:6379/0")

@@ -79,7 +79,6 @@ R2_PUBLIC_URL=https://pub-xxxxx.r2.dev
 # DATALAB_API_KEY=     # deprecated, не используется
 
 # Опциональные
-REMOTE_OCR_API_KEY=        # Если задан — требуется X-API-Key
 REMOTE_OCR_DATA_DIR=/data  # Директория для временных файлов
 
 # LM Studio (локальные OCR бэкенды)
@@ -130,7 +129,6 @@ Response: {"ok": true}
 ```
 POST /jobs
 Content-Type: multipart/form-data
-X-API-Key: optional_key
 
 Form fields:
   client_id: string (required)

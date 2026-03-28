@@ -2,12 +2,11 @@
 import json
 from typing import Optional
 
-from fastapi import File, Form, Header, HTTPException, UploadFile
+from fastapi import File, Form, HTTPException, UploadFile
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.queue_checker import check_queue_capacity
 from services.remote_ocr.server.routes.common import (
-    check_api_key,
     get_r2_sync_client,
     require_job,
 )
@@ -61,10 +60,8 @@ def _get_block_count_for_job(job_id: str) -> int:
 def update_job_handler(
     job_id: str,
     task_name: str = Form(...),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Обновить название задачи"""
-    check_api_key(x_api_key)
     _logger.info(
         f"Переименование задачи: {job_id}",
         extra={"event": "job_lifecycle", "action": "rename", "job_id": job_id, "task_name": task_name},
@@ -81,10 +78,8 @@ def update_job_handler(
 async def restart_job_handler(
     job_id: str,
     blocks_file: Optional[UploadFile] = File(None),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Перезапустить задачу. Опционально обновить блоки."""
-    check_api_key(x_api_key)
     _logger.info(
         f"Перезапуск задачи: {job_id}",
         extra={"event": "job_lifecycle", "action": "restart", "job_id": job_id},
@@ -160,10 +155,8 @@ def start_job_handler(
     table_model: str = Form(""),
     image_model: str = Form(""),
     stamp_model: str = Form(""),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Запустить черновик на распознавание"""
-    check_api_key(x_api_key)
 
     if engine not in ("lmstudio", "chandra"):
         raise HTTPException(
@@ -202,10 +195,8 @@ def start_job_handler(
 
 def pause_job_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Поставить задачу на паузу"""
-    check_api_key(x_api_key)
     _logger.info(
         f"Пауза задачи: {job_id}",
         extra={"event": "job_lifecycle", "action": "pause", "job_id": job_id},
@@ -226,10 +217,8 @@ def pause_job_handler(
 
 def resume_job_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Возобновить задачу с паузы"""
-    check_api_key(x_api_key)
     _logger.info(
         f"Возобновление задачи: {job_id}",
         extra={"event": "job_lifecycle", "action": "resume", "job_id": job_id},
@@ -258,13 +247,11 @@ def resume_job_handler(
 
 def cancel_job_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Отменить задачу (установить статус cancelled + revoke Celery task)"""
     from services.remote_ocr.server.celery_app import celery_app
     from services.remote_ocr.server.storage import invalidate_pause_cache, set_pause_cache, update_job_status
 
-    check_api_key(x_api_key)
     _logger.info(
         f"Отмена задачи: {job_id}",
         extra={"event": "job_lifecycle", "action": "cancel", "job_id": job_id},

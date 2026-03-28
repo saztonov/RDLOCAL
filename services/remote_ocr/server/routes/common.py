@@ -1,16 +1,5 @@
 """Общие утилиты для routes"""
-from typing import Optional
-
-from fastapi import Header, HTTPException
-
-from services.remote_ocr.server.settings import settings
-
-
-def check_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")) -> None:
-    """Проверить API ключ если он задан в настройках"""
-    if settings.api_key and x_api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
-
+from fastapi import HTTPException
 
 
 def get_r2_storage():

@@ -57,7 +57,6 @@ pip install -r services/remote_ocr/requirements.txt
 ```bash
 # Remote OCR сервер
 REMOTE_OCR_BASE_URL=http://localhost:8000
-REMOTE_OCR_API_KEY=
 
 # Tree Projects (Supabase)
 SUPABASE_URL=https://your-project.supabase.co

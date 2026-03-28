@@ -5,11 +5,10 @@ import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import Header, HTTPException, Query
+from fastapi import HTTPException, Query
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import (
-    check_api_key,
     get_file_icon,
     get_r2_storage,
     require_job,
@@ -45,10 +44,8 @@ def _job_to_list_item(j) -> dict:
 def list_jobs_handler(
     document_id: Optional[str] = None,
     since: Optional[str] = Query(None, description="ISO timestamp — вернуть только изменения после этого времени"),
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Получить список задач. При since — только изменённые."""
-    check_api_key(x_api_key)
 
     if since:
         _logger.debug(
@@ -71,10 +68,8 @@ def list_jobs_handler(
 
 def get_job_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Получить информацию о задаче"""
-    check_api_key(x_api_key)
 
     try:
         _uuid.UUID(job_id)
@@ -88,10 +83,8 @@ def get_job_handler(
 
 def get_job_details_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Получить детальную информацию о задаче"""
-    check_api_key(x_api_key)
 
     job = require_job(job_id, with_files=True, with_settings=True)
 
@@ -151,10 +144,8 @@ def get_job_details_handler(
 
 def download_result_handler(
     job_id: str,
-    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ) -> dict:
     """Получить ссылку на результат"""
-    check_api_key(x_api_key)
     _logger.info(
         f"Запрос скачивания результата: {job_id}",
         extra={"event": "job_download_result", "action": "download", "job_id": job_id},

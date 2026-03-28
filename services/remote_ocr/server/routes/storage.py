@@ -1,17 +1,15 @@
 """
 Storage API Routes - прокси для операций с R2 Storage
-Все запросы требуют X-API-Key аутентификацию
 """
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ..async_r2_storage import AsyncR2StorageSync
-from ..routes.common import check_api_key
 
 router = APIRouter(
-    prefix="/api/storage", tags=["storage"], dependencies=[Depends(check_api_key)]
+    prefix="/api/storage", tags=["storage"]
 )
 
 

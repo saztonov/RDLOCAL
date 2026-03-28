@@ -767,7 +767,6 @@ DELETE /jobs/{job_id}        → {"ok": true, "deleted_job_id": "..."}
 ```env
 # Remote OCR сервер
 REMOTE_OCR_BASE_URL=http://localhost:8000
-REMOTE_OCR_API_KEY=optional_api_key
 
 # Supabase
 SUPABASE_URL=https://project.supabase.co
