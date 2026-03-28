@@ -64,28 +64,6 @@ def run_local_ocr(
 
     Это главная функция, вызываемая в subprocess (multiprocessing.Process).
     Переиспользует серверные модули напрямую.
-
-    Args:
-        pdf_path: путь к PDF файлу
-        blocks_data: список блоков (list of dicts, формат Block.to_dict())
-        output_dir: директория для результатов (annotation.json, html, md)
-        engine: "lmstudio" (единственный вариант)
-        chandra_base_url: URL LM Studio для Chandra
-        qwen_base_url: URL LM Studio для Qwen (fallback: chandra_base_url)
-        chandra_http_timeout: таймаут HTTP для Chandra (сек)
-        qwen_http_timeout: таймаут HTTP для Qwen (сек)
-        text_model: модель для TEXT блоков (опционально)
-        image_model: модель для IMAGE блоков (опционально)
-        stamp_model: модель для STAMP блоков (опционально)
-        max_concurrent: макс. параллельных запросов к LM Studio
-        timeout_seconds: общий таймаут задачи
-        on_progress: callback для прогресса (0.0-1.0, сообщение)
-        check_cancelled: callback для проверки отмены
-        is_correction_mode: режим коррекции (только пустые блоки)
-        node_id: ID узла дерева (для регистрации результатов)
-
-    Returns:
-        LocalOcrResult с результатами и статистикой.
     """
     pdf_path = Path(pdf_path)
     output_dir = Path(output_dir)
@@ -111,7 +89,7 @@ def run_local_ocr(
                 return False
         return False
 
-    strip_backend = None
+    text_backend = None
     image_backend = None
     stamp_backend = None
 
@@ -141,13 +119,13 @@ def run_local_ocr(
         chandra_url = chandra_base_url or "http://localhost:1234"
         qwen_url = qwen_base_url or chandra_url
 
-        strip_backend = create_ocr_engine(
+        text_backend = create_ocr_engine(
             "chandra",
             base_url=chandra_url,
             http_timeout=chandra_http_timeout,
         )
         try:
-            strip_backend.preload()
+            text_backend.preload()
         except Exception as e:
             logger.warning(f"Preload chandra failed (non-fatal): {e}")
 
@@ -160,7 +138,7 @@ def run_local_ocr(
 
         # Deadline для бэкендов
         deadline = time.time() + timeout_seconds
-        for backend in (strip_backend, image_backend):
+        for backend in (text_backend, image_backend):
             if hasattr(backend, "set_deadline"):
                 backend.set_deadline(deadline)
 
@@ -181,11 +159,10 @@ def run_local_ocr(
             str(crops_dir),
             save_image_crops_as_pdf=True,
             on_progress=on_pass1_progress,
-            engine=engine,
             should_stop=_is_cancelled,
         )
 
-        if not manifest or (len(manifest.strips) == 0 and len(manifest.image_blocks) == 0):
+        if not manifest or len(manifest.blocks) == 0:
             return LocalOcrResult(
                 status="error",
                 total_blocks=total_blocks,
@@ -196,7 +173,7 @@ def run_local_ocr(
         if _is_cancelled():
             return LocalOcrResult(status="error", error_message="Отменено")
 
-        _progress(0.4, f"PASS 1 завершён: {len(manifest.strips)} strips, {len(manifest.image_blocks)} images")
+        _progress(0.4, f"PASS 1 завершён: {len(manifest.blocks)} block crops")
 
         # ── PASS 2: Recognition (async) ──────────────────────────
         import asyncio
@@ -215,7 +192,7 @@ def run_local_ocr(
             if qwen_url == chandra_url:
                 logger.info("Смена модели: chandra → qwen")
                 try:
-                    strip_backend.unload_model()
+                    text_backend.unload_model()
                 except Exception:
                     pass
                 try:
@@ -232,7 +209,7 @@ def run_local_ocr(
             pass2_ocr_from_manifest_async(
                 manifest,
                 blocks,
-                strip_backend,
+                text_backend,
                 image_backend,
                 stamp_backend,
                 str(pdf_path),
@@ -266,7 +243,7 @@ def run_local_ocr(
 
         _generate_local_results(
             pdf_path, blocks, work_dir, output_dir,
-            strip_backend=strip_backend,
+            text_backend=text_backend,
             is_correction_mode=is_correction_mode,
             deadline=deadline,
         )
@@ -325,7 +302,7 @@ def run_local_ocr(
 
     finally:
         # Выгружаем модели из LM Studio
-        for backend in (image_backend, strip_backend):
+        for backend in (image_backend, text_backend):
             try:
                 if backend and hasattr(backend, "unload_model"):
                     backend.unload_model()
@@ -346,7 +323,7 @@ def _generate_local_results(
     work_dir: Path,
     output_dir: Path,
     *,
-    strip_backend=None,
+    text_backend=None,
     is_correction_mode: bool = False,
     deadline: float | None = None,
 ):
@@ -441,12 +418,12 @@ def _generate_local_results(
         logger.warning(f"result.json generation error: {e}")
 
     # Block verification (retry missing blocks)
-    if strip_backend and result_path.exists():
+    if text_backend and result_path.exists():
         try:
             from services.remote_ocr.server.block_verification import verify_and_retry_missing_blocks
 
             verify_and_retry_missing_blocks(
-                result_path, pdf_path, output_dir, strip_backend,
+                result_path, pdf_path, output_dir, text_backend,
                 deadline=deadline,
             )
         except Exception as e:

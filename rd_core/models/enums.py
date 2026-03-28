@@ -3,10 +3,11 @@ from enum import Enum
 
 
 class BlockType(Enum):
-    """Типы блоков разметки (2 типа: текст и картинка)"""
+    """Типы блоков разметки (3 типа: текст, картинка, штамп)"""
 
     TEXT = "text"
     IMAGE = "image"
+    STAMP = "stamp"
 
 
 class BlockSource(Enum):

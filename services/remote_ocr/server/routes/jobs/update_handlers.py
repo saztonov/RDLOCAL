@@ -152,7 +152,6 @@ def start_job_handler(
     job_id: str,
     engine: str = Form("lmstudio"),
     text_model: str = Form(""),
-    table_model: str = Form(""),
     image_model: str = Form(""),
     stamp_model: str = Form(""),
 ) -> dict:
@@ -179,7 +178,7 @@ def start_job_handler(
             status_code=400, detail=f"Job is not a draft, status: {job.status}"
         )
 
-    save_job_settings(job_id, text_model, table_model, image_model, stamp_model)
+    save_job_settings(job_id, text_model, image_model, stamp_model)
     update_job_engine(job_id, engine)
 
     can_accept, queue_size, max_size = check_queue_capacity()

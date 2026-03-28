@@ -199,31 +199,6 @@ class BlockOperationsMixin:
 
         page = main_window.annotation_document.pages[current_page]
 
-        if category_code == "stamp":
-            selected_block_ids = {
-                page.blocks[d["idx"]].id
-                for d in blocks_data
-                if d["idx"] < len(page.blocks)
-            }
-            existing_stamps = [
-                b
-                for b in page.blocks
-                if getattr(b, "category_code", None) == "stamp"
-                and b.id not in selected_block_ids
-            ]
-            if existing_stamps:
-                QMessageBox.warning(
-                    main_window, "Ошибка", "На листе может быть только один штамп"
-                )
-                return
-            if len(blocks_data) > 1:
-                QMessageBox.warning(
-                    main_window,
-                    "Ошибка",
-                    "Нельзя назначить категорию 'Штамп' нескольким блокам",
-                )
-                return
-
         if hasattr(main_window, "_save_undo_state"):
             main_window._save_undo_state()
 

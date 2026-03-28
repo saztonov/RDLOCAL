@@ -113,15 +113,11 @@ class BlockRenderingMixin:
                 self._draw_polygon_handles(block.polygon_points)
 
     def _get_block_color(self, block: Block) -> QColor:
-        """Получить цвет для блока с учетом типа и категории"""
-        # Если у блока категория "stamp" - синий цвет
-        if hasattr(block, "category_code") and block.category_code == "stamp":
-            return QColor(30, 144, 255)  # Dodger Blue
-
-        # Иначе цвет по типу блока
+        """Получить цвет для блока по типу"""
         colors = {
             BlockType.TEXT: QColor(0, 255, 0),
             BlockType.IMAGE: QColor(255, 140, 0),
+            BlockType.STAMP: QColor(30, 144, 255),  # Dodger Blue
         }
         return colors.get(block.block_type, QColor(128, 128, 128))
 

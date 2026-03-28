@@ -19,7 +19,6 @@ class JobFile:
 class JobSettings:
     job_id: str
     text_model: str = ""
-    table_model: str = ""
     image_model: str = ""
     stamp_model: str = ""
     is_correction_mode: bool = False

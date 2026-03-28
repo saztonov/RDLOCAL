@@ -29,18 +29,13 @@ class OCRCheckpoint:
     """
 
     job_id: str
-    phase: str  # "pass1", "pass2_strips", "pass2_images", "verification", "completed"
+    phase: str  # "pass1", "pass2", "verification", "completed"
 
-    # Обработанные элементы (strip_id или block_id)
-    processed_strips: Set[str] = field(default_factory=set)
-    processed_images: Set[str] = field(default_factory=set)
+    # Обработанные блоки (block_id)
+    processed_blocks: Set[str] = field(default_factory=set)
 
-    # Частичные результаты: block_id -> ocr_text
+    # Результаты: block_id -> ocr_text
     partial_results: Dict[str, str] = field(default_factory=dict)
-
-    # Частичные результаты по частям (для split блоков)
-    # block_id -> {part_idx: text}
-    partial_parts: Dict[str, Dict[int, str]] = field(default_factory=dict)
 
     # Метаданные
     manifest_path: Optional[str] = None
@@ -48,71 +43,27 @@ class OCRCheckpoint:
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
     # Статистика
-    total_strips: int = 0
-    total_images: int = 0
+    total_blocks: int = 0
 
-    def is_strip_processed(self, strip_id: str) -> bool:
-        """Проверить, обработан ли strip"""
-        return strip_id in self.processed_strips
+    def is_block_processed(self, block_id: str) -> bool:
+        """Проверить, обработан ли блок"""
+        return block_id in self.processed_blocks
 
-    def is_image_processed(self, block_id: str) -> bool:
-        """Проверить, обработан ли image блок"""
-        return block_id in self.processed_images
-
-    def mark_strip_processed(self, strip_id: str, block_results: Dict[str, str] = None):
-        """Отметить strip как обработанный"""
-        self.processed_strips.add(strip_id)
-        if block_results:
-            for block_id, text in block_results.items():
-                self.partial_results[block_id] = text
+    def mark_block_processed(self, block_id: str, text: str):
+        """Отметить блок как обработанный"""
+        self.partial_results[block_id] = text
+        self.processed_blocks.add(block_id)
         self.updated_at = datetime.utcnow().isoformat()
 
-    def mark_image_processed(
-        self, block_id: str, text: str, part_idx: int = 0, total_parts: int = 1
-    ):
-        """Отметить image блок как обработанный"""
-        if total_parts == 1:
-            self.partial_results[block_id] = text
-            self.processed_images.add(block_id)
-        else:
-            # Для split блоков сохраняем части
-            if block_id not in self.partial_parts:
-                self.partial_parts[block_id] = {}
-            self.partial_parts[block_id][part_idx] = text
-
-            # Проверяем, все ли части собраны
-            if len(self.partial_parts[block_id]) >= total_parts:
-                combined = [
-                    self.partial_parts[block_id].get(i, "")
-                    for i in range(total_parts)
-                ]
-                self.partial_results[block_id] = "\n\n".join(combined)
-                self.processed_images.add(block_id)
-
-        self.updated_at = datetime.utcnow().isoformat()
-
-    def get_pending_strips(self, all_strip_ids: List[str]) -> List[str]:
-        """Получить список необработанных strips"""
-        return [s for s in all_strip_ids if s not in self.processed_strips]
-
-    def get_pending_images(self, all_block_ids: List[str]) -> List[str]:
-        """Получить список необработанных image блоков"""
-        return [b for b in all_block_ids if b not in self.processed_images]
+    def get_pending_blocks(self, all_block_ids: List[str]) -> List[str]:
+        """Получить список необработанных блоков"""
+        return [b for b in all_block_ids if b not in self.processed_blocks]
 
     def get_progress(self) -> Dict[str, float]:
         """Получить прогресс обработки"""
-        total = self.total_strips + self.total_images
-        if total == 0:
-            return {"strips": 0.0, "images": 0.0, "total": 0.0}
-
-        strips_done = len(self.processed_strips)
-        images_done = len(self.processed_images)
-
-        return {
-            "strips": strips_done / self.total_strips if self.total_strips > 0 else 1.0,
-            "images": images_done / self.total_images if self.total_images > 0 else 1.0,
-            "total": (strips_done + images_done) / total,
-        }
+        if self.total_blocks == 0:
+            return {"total": 0.0}
+        return {"total": len(self.processed_blocks) / self.total_blocks}
 
     def save(self, path: Path) -> bool:
         """
@@ -124,18 +75,12 @@ class OCRCheckpoint:
             data = {
                 "job_id": self.job_id,
                 "phase": self.phase,
-                "processed_strips": list(self.processed_strips),
-                "processed_images": list(self.processed_images),
+                "processed_blocks": list(self.processed_blocks),
                 "partial_results": self.partial_results,
-                "partial_parts": {
-                    k: {str(pi): pv for pi, pv in v.items()}
-                    for k, v in self.partial_parts.items()
-                },
                 "manifest_path": self.manifest_path,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
-                "total_strips": self.total_strips,
-                "total_images": self.total_images,
+                "total_blocks": self.total_blocks,
             }
 
             # Атомарная запись
@@ -151,8 +96,7 @@ class OCRCheckpoint:
                 extra={
                     "job_id": self.job_id,
                     "phase": self.phase,
-                    "processed_strips": len(self.processed_strips),
-                    "processed_images": len(self.processed_images),
+                    "processed_blocks": len(self.processed_blocks),
                 },
             )
             return True
@@ -171,21 +115,23 @@ class OCRCheckpoint:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
+            # Backward-compatible: объединяем старые processed_strips + processed_images
+            processed_blocks = set(data.get("processed_blocks", []))
+            processed_blocks.update(data.get("processed_strips", []))
+            processed_blocks.update(data.get("processed_images", []))
+
             checkpoint = cls(
                 job_id=data["job_id"],
                 phase=data["phase"],
-                processed_strips=set(data.get("processed_strips", [])),
-                processed_images=set(data.get("processed_images", [])),
+                processed_blocks=processed_blocks,
                 partial_results=data.get("partial_results", {}),
-                partial_parts={
-                    k: {int(pi): pv for pi, pv in v.items()}
-                    for k, v in data.get("partial_parts", {}).items()
-                },
                 manifest_path=data.get("manifest_path"),
                 created_at=data.get("created_at", datetime.utcnow().isoformat()),
                 updated_at=data.get("updated_at", datetime.utcnow().isoformat()),
-                total_strips=data.get("total_strips", 0),
-                total_images=data.get("total_images", 0),
+                total_blocks=data.get(
+                    "total_blocks",
+                    data.get("total_strips", 0) + data.get("total_images", 0),
+                ),
             )
 
             logger.info(
@@ -193,8 +139,7 @@ class OCRCheckpoint:
                 extra={
                     "job_id": checkpoint.job_id,
                     "phase": checkpoint.phase,
-                    "processed_strips": len(checkpoint.processed_strips),
-                    "processed_images": len(checkpoint.processed_images),
+                    "processed_blocks": len(checkpoint.processed_blocks),
                 },
             )
             return checkpoint
@@ -207,16 +152,14 @@ class OCRCheckpoint:
     def create_new(
         cls,
         job_id: str,
-        total_strips: int = 0,
-        total_images: int = 0,
+        total_blocks: int = 0,
         manifest_path: str = None,
     ) -> "OCRCheckpoint":
         """Создать новый checkpoint"""
         return cls(
             job_id=job_id,
             phase="pass1",
-            total_strips=total_strips,
-            total_images=total_images,
+            total_blocks=total_blocks,
             manifest_path=manifest_path,
         )
 

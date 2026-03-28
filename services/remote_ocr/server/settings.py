@@ -128,9 +128,7 @@ class Settings:
 
     # ===== НАСТРОЙКИ OCR =====
     crop_png_compress: int = _cfg("crop_png_compress", "CROP_PNG_COMPRESS", int)
-    max_ocr_batch_size: int = _cfg("max_ocr_batch_size", "MAX_OCR_BATCH_SIZE", int)
     pdf_render_dpi: int = _cfg("pdf_render_dpi", "PDF_RENDER_DPI", int)
-    max_strip_height: int = _cfg("max_strip_height", "MAX_STRIP_HEIGHT", int)
 
     # ===== ДИНАМИЧЕСКИЙ ТАЙМАУТ =====
     dynamic_timeout_base: int = _cfg("dynamic_timeout_base", "DYNAMIC_TIMEOUT_BASE", int)
@@ -147,7 +145,6 @@ class Settings:
     # ===== МОДЕЛИ ПО УМОЛЧАНИЮ =====
     default_engine: str = _cfg("default_engine", "DEFAULT_ENGINE")
     default_text_model: str = _cfg("default_text_model", "DEFAULT_TEXT_MODEL")
-    default_table_model: str = _cfg("default_table_model", "DEFAULT_TABLE_MODEL")
     default_image_model: str = _cfg("default_image_model", "DEFAULT_IMAGE_MODEL")
     default_stamp_model: str = _cfg("default_stamp_model", "DEFAULT_STAMP_MODEL")
 

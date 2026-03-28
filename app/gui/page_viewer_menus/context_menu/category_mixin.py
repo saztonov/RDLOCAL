@@ -1,9 +1,8 @@
 """Миксин для работы с категориями в контекстном меню"""
 
-# Фиксированные категории изображений (default + stamp)
+# Фиксированные категории изображений
 HARDCODED_CATEGORIES = [
     {"id": "default", "name": "По умолчанию", "code": "default", "is_default": True},
-    {"id": "stamp", "name": "Штамп", "code": "stamp", "is_default": False},
 ]
 
 

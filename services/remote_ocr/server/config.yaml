@@ -36,7 +36,7 @@ ocr_threads_per_job: 2
 # Таймаут одного OCR запроса, секунды
 ocr_request_timeout: 480
 
-# ===== CHANDRA (LM Studio — TEXT/TABLE) =====
+# ===== CHANDRA (LM Studio — TEXT) =====
 # Параллельных запросов к Chandra PER TASK
 chandra_max_concurrent: 2
 # Пауза между retry при верификации блоков, секунды
@@ -59,12 +59,8 @@ verification_timeout_minutes: 30
 # ===== НАСТРОЙКИ OCR =====
 # Сжатие PNG (0=без сжатия, 9=максимальное)
 crop_png_compress: 6
-# Максимум блоков в одном batch запросе
-max_ocr_batch_size: 5
 # DPI рендеринга PDF (влияет на качество и размер)
 pdf_render_dpi: 300
-# Максимальная высота полосы (strips), пиксели
-max_strip_height: 9000
 
 # ===== ДИНАМИЧЕСКИЙ ТАЙМАУТ =====
 # Базовое время на инициализацию задачи, секунды
@@ -85,10 +81,8 @@ default_task_priority: 5
 # ===== МОДЕЛИ OCR ПО УМОЛЧАНИЮ =====
 # Движок: lmstudio (единственный поддерживаемый)
 default_engine: "lmstudio"
-# Модель для TEXT/TABLE блоков (Chandra, LM Studio)
+# Модель для TEXT блоков (Chandra, LM Studio)
 default_text_model: "chandra-ocr-2"
-# Модель для TABLE блоков (alias для text)
-default_table_model: "chandra-ocr-2"
 # Модель для IMAGE блоков (Qwen, LM Studio)
 default_image_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 # Модель для STAMP блоков (Qwen, LM Studio)

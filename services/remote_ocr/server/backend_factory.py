@@ -1,8 +1,8 @@
 """
-Фабрика OCR бэкендов для Celery задач.
+Фабрика OCR бэкендов для задач.
 
-Создаёт тройку бэкендов (strip, image, stamp) — все через LM Studio:
-- strip (TEXT/TABLE) → ChandraBackend (chandra-ocr-2)
+Создаёт тройку бэкендов (text, image, stamp) — все через LM Studio:
+- text (TEXT) → ChandraBackend (chandra-ocr-2)
 - image/stamp → QwenBackend (qwen3.5-27b)
 """
 
@@ -37,7 +37,7 @@ def _normalize_engine(engine: str) -> str:
 class JobBackends:
     """Тройка бэкендов для OCR задачи."""
 
-    strip: OCRBackend
+    text: OCRBackend
     image: OCRBackend
     stamp: OCRBackend
     engine: str
@@ -47,7 +47,7 @@ class JobBackends:
     def unload_all(self) -> None:
         """Выгрузить все LM Studio модели (дедупликация по identity)."""
         seen: set[int] = set()
-        for backend in (self.strip, self.image, self.stamp):
+        for backend in (self.text, self.image, self.stamp):
             if backend is not None and hasattr(backend, "unload_model"):
                 backend_id = id(backend)
                 if backend_id not in seen:
@@ -63,7 +63,7 @@ def create_job_backends(job) -> JobBackends:
     Создать бэкенды для OCR задачи — все через LM Studio.
 
     Returns:
-        JobBackends с тройкой (strip, image, stamp).
+        JobBackends с тройкой (text, image, stamp).
 
     Raises:
         ValueError: если engine не поддерживается.
@@ -73,16 +73,16 @@ def create_job_backends(job) -> JobBackends:
     raw_engine = job.engine or "lmstudio"
     engine = _normalize_engine(raw_engine)
 
-    # --- Strip backend (TEXT/TABLE) → ChandraBackend ---
-    strip_backend = create_ocr_engine(
+    # --- Text backend (TEXT) → ChandraBackend ---
+    text_backend = create_ocr_engine(
         "chandra",
         base_url=settings.chandra_base_url,
         http_timeout=settings.chandra_http_timeout,
     )
     try:
-        strip_backend.preload()
+        text_backend.preload()
     except Exception as e:
-        logger.warning(f"Preload chandra strip failed (non-fatal): {e}")
+        logger.warning(f"Preload chandra text failed (non-fatal): {e}")
 
     # --- Image/Stamp backend → QwenBackend ---
     qwen_url = settings.qwen_base_url or settings.chandra_base_url
@@ -95,7 +95,7 @@ def create_job_backends(job) -> JobBackends:
     stamp_backend = image_backend
 
     result = JobBackends(
-        strip=strip_backend,
+        text=text_backend,
         image=image_backend,
         stamp=stamp_backend,
         engine=engine,
@@ -109,7 +109,7 @@ def create_job_backends(job) -> JobBackends:
             "event": "job_backends_created",
             "job_id": job.id,
             "engine": engine,
-            "strip_backend": "ChandraBackend",
+            "text_backend": "ChandraBackend",
             "image_backend": "QwenBackend",
             "stamp_backend": "QwenBackend (shared)",
             "qwen_url": qwen_url,

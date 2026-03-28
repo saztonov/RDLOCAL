@@ -7,6 +7,7 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence
 
 from rd_core.annotation_canonicalizer import sync_block_to_page
+from rd_core.models.enums import BlockType
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class BlockEventsMixin:
             new_block.linked_block_id = None
 
             # Проверка: на странице может быть только один штамп
-            if new_block.category_code == "stamp" and self._has_stamp_on_page(current_page_data):
+            if new_block.block_type == BlockType.STAMP and self._has_stamp_on_page(current_page_data):
                 logger.warning("Пропускаем вставку штампа - на странице уже есть штамп")
                 skipped_count += 1
                 continue

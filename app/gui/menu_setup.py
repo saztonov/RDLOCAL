@@ -199,9 +199,7 @@ class MenuSetupMixin:
 
         self.stamp_action = QAction("🔏 Штамп", self)
         self.stamp_action.setCheckable(True)
-        self.stamp_action.setData(
-            {"block_type": BlockType.IMAGE, "category_code": "stamp"}
-        )
+        self.stamp_action.setData({"block_type": BlockType.STAMP})
         self.stamp_action.setToolTip("Режим рисования блоков штампов (Ctrl+3)")
         self.block_type_group.addAction(self.stamp_action)
         toolbar.addAction(self.stamp_action)

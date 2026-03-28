@@ -35,7 +35,6 @@ async def create_job_handler(
     task_name: str = Form(""),
     engine: str = Form("lmstudio"),
     text_model: str = Form(""),
-    table_model: str = Form(""),
     image_model: str = Form(""),
     stamp_model: str = Form(""),
     node_id: Optional[str] = Form(None),
@@ -65,7 +64,6 @@ async def create_job_handler(
             "task_name": task_name,
             "engine": engine,
             "text_model": text_model or None,
-            "table_model": table_model or None,
             "image_model": image_model or None,
             "stamp_model": stamp_model or None,
             "node_id": node_id,
@@ -137,7 +135,7 @@ async def create_job_handler(
 
     is_correction = is_correction_mode.lower() == "true"
     save_job_settings(
-        job.id, text_model, table_model, image_model, stamp_model, is_correction
+        job.id, text_model, image_model, stamp_model, is_correction
     )
 
     try:

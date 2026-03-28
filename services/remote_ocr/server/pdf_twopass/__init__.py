@@ -1,11 +1,12 @@
 """
 Двухпроходный алгоритм OCR с минимальным потреблением памяти.
 
-PASS 1: Подготовка кропов → сохранение на диск
-PASS 2: OCR с загрузкой по одному кропу с диска (async)
+PASS 1: Подготовка per-block кропов → сохранение на диск
+PASS 2: Последовательный per-block OCR (async)
 
 Компоненты:
-- pass1_crops.py - pass1_prepare_crops, _group_and_merge_strips
+- pass1_crops.py - pass1_prepare_crops
+- pass2_images.py - run_blocks_phase
 - pass2_ocr_async.py - pass2_ocr_from_manifest_async
 - cleanup.py - cleanup_manifest_files
 """

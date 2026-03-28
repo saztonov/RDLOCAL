@@ -38,7 +38,6 @@ def get_category_prompt(
 def save_job_settings(
     job_id: str,
     text_model: str = "",
-    table_model: str = "",
     image_model: str = "",
     stamp_model: str = "",
     is_correction_mode: bool = False,
@@ -52,7 +51,6 @@ def save_job_settings(
         {
             "job_id": job_id,
             "text_model": text_model,
-            "table_model": table_model,
             "image_model": image_model,
             "stamp_model": stamp_model,
             "is_correction_mode": is_correction_mode,
@@ -64,7 +62,6 @@ def save_job_settings(
     return JobSettings(
         job_id=job_id,
         text_model=text_model,
-        table_model=table_model,
         image_model=image_model,
         stamp_model=stamp_model,
         is_correction_mode=is_correction_mode,
@@ -83,7 +80,6 @@ def get_job_settings(job_id: str) -> Optional[JobSettings]:
     return JobSettings(
         job_id=row["job_id"],
         text_model=row.get("text_model", ""),
-        table_model=row.get("table_model", ""),
         image_model=row.get("image_model", ""),
         stamp_model=row.get("stamp_model", ""),
         is_correction_mode=row.get("is_correction_mode", False),

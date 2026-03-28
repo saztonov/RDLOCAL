@@ -37,21 +37,14 @@ def compute_ocr_stats(blocks: List) -> OCRStats:
     stats = OCRStats()
 
     for block in blocks:
-        is_stamp = (
-            getattr(block, "block_type", None) == BlockType.IMAGE
-            and getattr(block, "category_code", None) == "stamp"
-        )
-        is_image = (
-            getattr(block, "block_type", None) == BlockType.IMAGE and not is_stamp
-        )
-
+        bt = getattr(block, "block_type", None)
         status = get_ocr_status(getattr(block, "ocr_text", None))
 
-        if is_stamp:
+        if bt == BlockType.STAMP:
             stats.stamp_total += 1
             if status == OCRStatus.SUCCESS:
                 stats.stamp_ok += 1
-        elif is_image:
+        elif bt == BlockType.IMAGE:
             stats.image_total += 1
             if status == OCRStatus.SUCCESS:
                 stats.image_ok += 1

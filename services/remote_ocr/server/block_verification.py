@@ -138,7 +138,7 @@ def verify_and_retry_missing_blocks(
                 continue
 
             # Проверяем только текстовые и табличные блоки
-            if block_type not in ["text", "table"]:
+            if block_type != "text":
                 continue
 
             # Неповторяемые ошибки (context exceeded, невалидные координаты) — не ретраим

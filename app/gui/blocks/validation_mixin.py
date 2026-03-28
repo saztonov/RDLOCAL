@@ -2,6 +2,8 @@
 
 from PySide6.QtWidgets import QMessageBox
 
+from rd_core.models.enums import BlockType
+
 
 class BlockValidationMixin:
     """Миксин для валидации документа и блоков"""
@@ -28,11 +30,11 @@ class BlockValidationMixin:
         for block in page_data.blocks:
             if exclude_block_id and block.id == exclude_block_id:
                 continue
-            if getattr(block, "category_code", None) == "stamp":
+            if block.block_type == BlockType.STAMP:
                 return True
         return False
 
-    _CATEGORY_NAMES = {"default": "По умолчанию", "stamp": "Штамп"}
+    _CATEGORY_NAMES = {"default": "По умолчанию"}
 
     def _get_category_name(self, category_id: str) -> str:
         """Получить название категории по ID/коду"""

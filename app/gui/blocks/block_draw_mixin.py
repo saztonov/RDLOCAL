@@ -32,16 +32,13 @@ class BlockDrawMixin:
             if isinstance(action_data, dict)
             else BlockType.TEXT
         )
-        category_code = (
-            action_data.get("category_code") if isinstance(action_data, dict) else None
-        )
 
         current_page_data = self._get_or_create_page(self.current_page)
         if not current_page_data:
             return
 
         # Проверка: на странице может быть только один штамп
-        if category_code == "stamp" and self._has_stamp_on_page(current_page_data):
+        if block_type == BlockType.STAMP and self._has_stamp_on_page(current_page_data):
             QMessageBox.warning(self, "Ошибка", "На листе может быть только один штамп")
             return
 
@@ -54,8 +51,6 @@ class BlockDrawMixin:
             source=BlockSource.USER,
             shape_type=ShapeType.RECTANGLE,
         )
-        if category_code:
-            block.category_code = category_code
 
         # Автопометка: если документ уже распознан, пометить для корректировки
         if self._is_document_recognized():
@@ -95,16 +90,13 @@ class BlockDrawMixin:
             if isinstance(action_data, dict)
             else BlockType.TEXT
         )
-        category_code = (
-            action_data.get("category_code") if isinstance(action_data, dict) else None
-        )
 
         current_page_data = self._get_or_create_page(self.current_page)
         if not current_page_data:
             return
 
         # Проверка: на странице может быть только один штамп
-        if category_code == "stamp" and self._has_stamp_on_page(current_page_data):
+        if block_type == BlockType.STAMP and self._has_stamp_on_page(current_page_data):
             QMessageBox.warning(self, "Ошибка", "На листе может быть только один штамп")
             return
 
@@ -123,8 +115,6 @@ class BlockDrawMixin:
             shape_type=ShapeType.POLYGON,
             polygon_points=points,
         )
-        if category_code:
-            block.category_code = category_code
 
         # Автопометка: если документ уже распознан, пометить для корректировки
         if self._is_document_recognized():

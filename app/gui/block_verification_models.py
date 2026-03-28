@@ -10,13 +10,13 @@ class BlockInfo:
 
     id: str
     page_index: int
-    block_type: str  # "text", "image"
-    category_code: Optional[str] = None  # "stamp" для штампов
+    block_type: str  # "text", "image", "stamp"
+    category_code: Optional[str] = None  # legacy, сохранено для совместимости
     linked_block_id: Optional[str] = None  # ID связанного блока (для TEXT→IMAGE)
 
     @property
     def is_stamp(self) -> bool:
-        return self.category_code == "stamp"
+        return self.block_type == "stamp"
 
 
 @dataclass

@@ -22,8 +22,6 @@ logger = get_logger(__name__)
 # Константы из настроек
 PDF_RENDER_DPI = settings.pdf_render_dpi
 PDF_RENDER_ZOOM = PDF_RENDER_DPI / 72.0
-MAX_STRIP_HEIGHT = settings.max_strip_height
-MAX_SINGLE_BLOCK_HEIGHT = settings.max_strip_height
 MAX_IMAGE_PIXELS = 400_000_000
 
 # Увеличиваем лимит PIL
@@ -359,124 +357,6 @@ class StreamingPDFProcessor:
         except Exception as e:
             logger.error(f"PDF crop error {block.id}: {e}")
             return None
-
-
-def split_large_crop(
-    crop: Image.Image, max_height: int = MAX_SINGLE_BLOCK_HEIGHT, overlap: int = 100
-) -> List[Image.Image]:
-    """Разделить большой кроп на части"""
-    if crop.height <= max_height:
-        return [crop]
-
-    parts = []
-    y = 0
-    step = max_height - overlap
-
-    while y < crop.height:
-        y_end = min(y + max_height, crop.height)
-        parts.append(crop.crop((0, y, crop.width, y_end)).copy())
-        y += step
-        if crop.height - y < overlap:
-            break
-
-    return parts
-
-
-BLOCK_SEPARATOR_HEIGHT = 60
-
-
-def create_block_separator(
-    block_id: str, width: int, height: int = BLOCK_SEPARATOR_HEIGHT
-) -> Image.Image:
-    """
-    Создать разделитель с белым текстом block_id на черном фоне.
-    Высота 60px, шрифт 36px, выравнивание по левому краю.
-    Формат: BLOCK: XXXX-XXXX-XXX (OCR-устойчивый код)
-    """
-    from PIL import ImageFont
-
-    from rd_core.models.armor_id import encode_block_id
-
-    separator = Image.new("RGB", (width, height), (0, 0, 0))
-    draw = ImageDraw.Draw(separator)
-
-    armor_code = encode_block_id(block_id)
-    text = f"BLOCK: {armor_code}"
-
-    try:
-        font = ImageFont.truetype("arial.ttf", 36)
-    except (IOError, OSError):
-        try:
-            font = ImageFont.truetype("DejaVuSansMono.ttf", 36)
-        except (IOError, OSError):
-            font = ImageFont.load_default(size=36)
-
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_height = bbox[3] - bbox[1]
-
-    x = 50
-    y = (height - text_height) // 2
-
-    draw.text((x, y), text, fill=(255, 255, 255), font=font)
-    return separator
-
-
-def merge_crops_vertically(
-    crops: List[Image.Image], gap: int = 20, block_ids: Optional[List[str]] = None
-) -> Image.Image:
-    """
-    Объединить кропы вертикально с опциональными разделителями block_id.
-    Разделитель вставляется только при смене block_id (не перед каждой частью блока).
-    """
-    if not crops:
-        raise ValueError("Empty crops list")
-
-    use_separators = block_ids is not None and len(block_ids) == len(crops)
-    max_width = max(c.width for c in crops)
-
-    # Считаем количество уникальных переходов между блоками
-    if use_separators:
-        separator_count = 0
-        prev_id = None
-        for bid in block_ids:
-            if bid != prev_id:
-                separator_count += 1
-                prev_id = bid
-        separator_height = BLOCK_SEPARATOR_HEIGHT
-        total_height = (
-            sum(c.height for c in crops)
-            + separator_height * separator_count
-            + gap * (len(crops) - separator_count)
-        )
-    else:
-        total_height = sum(c.height for c in crops) + gap * (len(crops) - 1)
-
-    merged = Image.new("RGB", (max_width, total_height), (255, 255, 255))
-    y_offset = 0
-    prev_block_id = None
-
-    for i, crop in enumerate(crops):
-        if use_separators:
-            current_block_id = block_ids[i]
-            if current_block_id != prev_block_id:
-                # Новый блок - вставляем разделитель
-                separator = create_block_separator(current_block_id, max_width)
-                merged.paste(separator, (0, y_offset))
-                y_offset += separator.height
-                prev_block_id = current_block_id
-            elif i > 0:
-                # Часть того же блока - только gap
-                y_offset += gap
-        elif i > 0:
-            y_offset += gap
-
-        x_offset = (max_width - crop.width) // 2
-        if crop.mode in ("RGBA", "LA"):
-            crop = crop.convert("RGB")
-        merged.paste(crop, (x_offset, y_offset))
-        y_offset += crop.height
-
-    return merged
 
 
 def get_page_dimensions_streaming(pdf_path: str) -> Dict[int, Tuple[int, int]]:

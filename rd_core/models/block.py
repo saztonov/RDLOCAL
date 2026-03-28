@@ -224,11 +224,14 @@ class Block:
         Returns:
             (Block, was_migrated) - блок и флаг миграции
         """
-        # Безопасное получение block_type с fallback на TEXT
-        # TABLE конвертируется в TEXT для обратной совместимости
+        # Безопасное получение block_type с миграцией legacy данных
+        # - "table" → TEXT (обратная совместимость)
+        # - "image" + category_code="stamp" → STAMP (миграция штампов)
         raw_type = data["block_type"]
         if raw_type == "table":
             block_type = BlockType.TEXT
+        elif raw_type == "image" and data.get("category_code") == "stamp":
+            block_type = BlockType.STAMP
         else:
             try:
                 block_type = BlockType(raw_type)

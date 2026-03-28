@@ -99,15 +99,14 @@ def get_job_details_handler(
                 blocks = json.loads(blocks_text)
 
                 text_count = sum(1 for b in blocks if b.get("block_type") == "text")
-                table_count = sum(1 for b in blocks if b.get("block_type") == "table")
                 image_count = sum(1 for b in blocks if b.get("block_type") == "image")
+                stamp_count = sum(1 for b in blocks if b.get("block_type") == "stamp")
 
                 result["block_stats"] = {
                     "total": len(blocks),
                     "text": text_count,
-                    "table": table_count,
                     "image": image_count,
-                    "grouped": text_count + table_count,
+                    "stamp": stamp_count,
                 }
         except Exception as e:
             _logger.warning(f"Failed to load blocks from R2: {e}")
@@ -115,7 +114,6 @@ def get_job_details_handler(
     if job.settings:
         result["job_settings"] = {
             "text_model": job.settings.text_model,
-            "table_model": job.settings.table_model,
             "image_model": job.settings.image_model,
             "stamp_model": job.settings.stamp_model,
         }

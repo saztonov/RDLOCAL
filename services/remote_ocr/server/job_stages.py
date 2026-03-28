@@ -180,7 +180,7 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
     import time as _time
 
     deadline = _time.time() + soft_timeout
-    for backend in (backends.strip, backends.image, backends.stamp):
+    for backend in (backends.text, backends.image, backends.stamp):
         if hasattr(backend, "set_deadline"):
             backend.set_deadline(deadline)
 
@@ -190,7 +190,7 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
             "event": "task_backends_ready",
             "job_id": job_id,
             "engine": engine,
-            "backend_type": type(backends.strip).__name__,
+            "backend_type": type(backends.text).__name__,
             "total_blocks": total_blocks,
         },
     )
@@ -232,7 +232,7 @@ def run_ocr(ctx: JobContext) -> None:
         ctx.blocks,
         ctx.crops_dir,
         ctx.work_dir,
-        ctx.backends.strip,
+        ctx.backends.text,
         ctx.backends.image,
         ctx.backends.stamp,
         ctx.start_mem,
@@ -274,7 +274,7 @@ def generate_and_upload(ctx: JobContext) -> str:
 
     r2_prefix = generate_results(
         ctx.job, ctx.pdf_path, ctx.blocks, ctx.work_dir,
-        ctx.backends.strip,
+        ctx.backends.text,
         text_fallback_backend=ctx.backends.text_fallback,
         on_verification_progress=on_verification_progress,
         verification_deadline=_verification_deadline,

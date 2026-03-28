@@ -111,13 +111,13 @@ class JobDetailsDialog(QDialog):
 
             total = block_stats.get("total", 0)
             text_count = block_stats.get("text", 0)
-            table_count = block_stats.get("table", 0)
             image_count = block_stats.get("image", 0)
+            stamp_count = block_stats.get("stamp", 0)
 
             blocks_layout.addRow("Всего блоков:", QLabel(str(total)))
             blocks_layout.addRow("Текстовых:", QLabel(str(text_count)))
-            blocks_layout.addRow("Таблиц:", QLabel(str(table_count)))
             blocks_layout.addRow("Изображений:", QLabel(str(image_count)))
+            blocks_layout.addRow("Штампов:", QLabel(str(stamp_count)))
 
             blocks_group.setLayout(blocks_layout)
             layout.addWidget(blocks_group)

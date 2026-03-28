@@ -29,7 +29,7 @@ def run_two_pass_ocr(
     blocks: list,
     crops_dir: Path,
     work_dir: Path,
-    strip_backend,
+    text_backend,
     image_backend,
     stamp_backend,
     start_mem: float,
@@ -40,7 +40,7 @@ def run_two_pass_ocr(
     from .settings import settings
 
     logger.info(
-        f"Используется двухпроходный алгоритм (OCR потоков: {settings.ocr_threads_per_job})"
+        f"Используется двухпроходный алгоритм (per-block OCR)"
     )
     manifest = None
     updater = get_debounced_updater(job.id)
@@ -53,8 +53,7 @@ def run_two_pass_ocr(
         if checkpoint:
             logger.info(
                 f"Checkpoint загружен: phase={checkpoint.phase}, "
-                f"strips={len(checkpoint.processed_strips)}, "
-                f"images={len(checkpoint.processed_images)}"
+                f"blocks={len(checkpoint.processed_blocks)}"
             )
         else:
             logger.info("Checkpoint не найден, начинаем с начала")
@@ -73,25 +72,22 @@ def run_two_pass_ocr(
             str(crops_dir),
             save_image_crops_as_pdf=True,
             on_progress=on_pass1_progress,
-            engine=engine,
             should_stop=lambda: check_paused(job.id),
         )
 
-        total_strips = len(manifest.strips) if manifest else 0
-        total_images = len(manifest.image_blocks) if manifest else 0
+        total_blocks = len(manifest.blocks) if manifest else 0
 
-        if total_strips == 0 and total_images == 0:
+        if total_blocks == 0:
             raise RuntimeError(
                 "PASS1: пустой manifest — нет блоков для обработки"
             )
 
         logger.info(
-            f"PASS1 завершён: {total_strips} strips, {total_images} images",
+            f"PASS1 завершён: {total_blocks} block crops",
             extra={
                 "event": "pass1_completed",
                 "job_id": job.id,
-                "strip_count": total_strips,
-                "image_count": total_images,
+                "block_count": total_blocks,
                 "total_blocks": len(blocks),
                 "engine": engine,
             },
@@ -118,13 +114,11 @@ def run_two_pass_ocr(
         if USE_CHECKPOINT and checkpoint is None:
             checkpoint = OCRCheckpoint.create_new(
                 job_id=job.id,
-                total_strips=total_strips,
-                total_images=total_images,
+                total_blocks=total_blocks,
                 manifest_path=str(crops_dir / "manifest.json") if crops_dir else None,
             )
         elif USE_CHECKPOINT and checkpoint:
-            checkpoint.total_strips = total_strips
-            checkpoint.total_images = total_images
+            checkpoint.total_blocks = total_blocks
 
         from .pdf_twopass.pass2_ocr_async import pass2_ocr_from_manifest_async
         from .rate_limiter import reset_async_limiter
@@ -132,18 +126,14 @@ def run_two_pass_ocr(
         # Сброс asyncio-привязанного rate limiter перед новым event loop
         reset_async_limiter()
 
-        # Для LM Studio бэкендов: ограничение параллельности
-        max_concurrent = settings.chandra_max_concurrent
-
-        # Callback для смены модели между strip и image фазами
+        # Callback для смены модели между text и image фазами
         def _swap_to_qwen():
             """Выгрузить chandra, загрузить qwen (если тот же LM Studio инстанс)."""
             qwen_url = settings.qwen_base_url or settings.chandra_base_url
             if qwen_url == settings.chandra_base_url:
-                # Тот же инстанс — нужна смена модели
                 logger.info("Смена модели: chandra → qwen (тот же LM Studio инстанс)")
                 try:
-                    strip_backend.unload_model()
+                    text_backend.unload_model()
                 except Exception as e:
                     logger.warning(f"Ошибка выгрузки chandra: {e}")
                 try:
@@ -151,7 +141,6 @@ def run_two_pass_ocr(
                 except Exception as e:
                     logger.warning(f"Ошибка загрузки qwen: {e}")
             else:
-                # Разные инстансы — просто preload qwen
                 logger.info("Preload qwen (отдельный LM Studio инстанс)")
                 try:
                     image_backend.preload()
@@ -159,13 +148,11 @@ def run_two_pass_ocr(
                     logger.warning(f"Ошибка загрузки qwen: {e}")
 
         logger.info(
-            f"PASS2: запуск async OCR (max_concurrent={max_concurrent or settings.ocr_threads_per_job})",
+            f"PASS2: запуск per-block OCR",
             extra={
                 "event": "pass2_start",
                 "job_id": job.id,
-                "strip_count": total_strips,
-                "image_count": total_images,
-                "max_concurrent": max_concurrent or settings.ocr_threads_per_job,
+                "block_count": total_blocks,
                 "engine": engine,
             },
         )
@@ -175,13 +162,12 @@ def run_two_pass_ocr(
             pass2_ocr_from_manifest_async(
                 manifest,
                 blocks,
-                strip_backend,
+                text_backend,
                 image_backend,
                 stamp_backend,
                 str(pdf_path),
                 on_progress=on_pass2_progress,
                 check_paused=lambda: is_job_paused(job.id),
-                max_concurrent=max_concurrent,
                 checkpoint=checkpoint if USE_CHECKPOINT else None,
                 work_dir=work_dir if USE_CHECKPOINT else None,
                 deadline=soft_timeout_at,

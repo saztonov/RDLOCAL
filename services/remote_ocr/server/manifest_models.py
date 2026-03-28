@@ -18,19 +18,7 @@ class CropManifestEntry:
     total_parts: int = 1
     width: int = 0
     height: int = 0
-    pdf_crop_path: str = ""  # Путь к PDF-кропу (векторный, для Gemini 3)
-
-
-@dataclass
-class StripManifestEntry:
-    """Запись в manifest для полосы (merged strip)"""
-
-    strip_id: str
-    strip_path: str
-    block_ids: List[str] = field(default_factory=list)
-    block_parts: List[dict] = field(
-        default_factory=list
-    )  # [{block_id, part_idx, total_parts}]
+    pdf_crop_path: str = ""  # Путь к PDF-кропу (векторный)
 
 
 @dataclass
@@ -39,8 +27,7 @@ class TwoPassManifest:
 
     pdf_path: str
     crops_dir: str
-    strips: List[StripManifestEntry] = field(default_factory=list)
-    image_blocks: List[CropManifestEntry] = field(default_factory=list)
+    blocks: List[CropManifestEntry] = field(default_factory=list)
     total_blocks: int = 0
 
     def save(self, path: str):
@@ -48,16 +35,7 @@ class TwoPassManifest:
             "pdf_path": self.pdf_path,
             "crops_dir": self.crops_dir,
             "total_blocks": self.total_blocks,
-            "strips": [
-                {
-                    "strip_id": s.strip_id,
-                    "strip_path": s.strip_path,
-                    "block_ids": s.block_ids,
-                    "block_parts": s.block_parts,
-                }
-                for s in self.strips
-            ],
-            "image_blocks": [
+            "blocks": [
                 {
                     "block_id": e.block_id,
                     "crop_path": e.crop_path,
@@ -69,7 +47,7 @@ class TwoPassManifest:
                     "height": e.height,
                     "pdf_crop_path": e.pdf_crop_path,
                 }
-                for e in self.image_blocks
+                for e in self.blocks
             ],
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -86,18 +64,9 @@ class TwoPassManifest:
             total_blocks=data.get("total_blocks", 0),
         )
 
-        for s in data.get("strips", []):
-            manifest.strips.append(
-                StripManifestEntry(
-                    strip_id=s["strip_id"],
-                    strip_path=s["strip_path"],
-                    block_ids=s.get("block_ids", []),
-                    block_parts=s.get("block_parts", []),
-                )
-            )
-
-        for e in data.get("image_blocks", []):
-            manifest.image_blocks.append(
+        # Читаем "blocks", fallback на "image_blocks" для совместимости
+        for e in data.get("blocks", data.get("image_blocks", [])):
+            manifest.blocks.append(
                 CropManifestEntry(
                     block_id=e["block_id"],
                     crop_path=e["crop_path"],

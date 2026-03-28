@@ -33,7 +33,7 @@ class BlocksTreeManager(ContextMenuMixin):
             self._view_state_manager = ViewStateManager(self.parent.page_viewer)
         return self._view_state_manager
 
-    _CATEGORY_NAMES = {"default": "По умолчанию", "stamp": "Штамп"}
+    _CATEGORY_NAMES = {"default": "По умолчанию"}
 
     def _get_category_name(self, category_id: str, category_code: str = None) -> str:
         """Получить название категории по коду или ID"""

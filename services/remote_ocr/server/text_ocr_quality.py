@@ -1,4 +1,4 @@
-"""Фильтрация и классификация качества TEXT/TABLE OCR результатов.
+"""Фильтрация и классификация качества TEXT OCR результатов.
 
 Решает две задачи:
 1. filter_mixed_text_output — удаляет image-артефакты из Chandra TEXT блоков
@@ -33,7 +33,7 @@ _MULTI_SPACE_RE = re.compile(r'[ \t]{2,}')
 
 
 def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
-    """Удалить image-артефакты из TEXT/TABLE OCR результата Chandra.
+    """Удалить image-артефакты из TEXT OCR результата Chandra.
 
     Применяется ТОЛЬКО к engine='chandra'. Для других engine возвращает текст без изменений.
 
@@ -83,7 +83,7 @@ def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
 
 
 def classify_text_output(ocr_text: str, ocr_html: str = "") -> dict:
-    """Классифицировать качество TEXT/TABLE OCR результата.
+    """Классифицировать качество TEXT OCR результата.
 
     Использует shared helper is_suspicious_output() из rd_core.ocr_result
     для детекции suspicious output (JSON-dump, low density и т.п.).

@@ -1,8 +1,10 @@
 """
-PASS 2 ASYNC: Асинхронный OCR с использованием asyncio.gather.
+PASS 2 ASYNC: Последовательный per-block OCR.
 
-Заменяет ThreadPoolExecutor на asyncio для эффективной обработки I/O-bound операций.
-Обеспечивает 40-60% ускорение за счёт настоящего параллелизма без GIL.
+Обрабатывает блоки в документном порядке:
+1. TEXT блоки (через text_backend / ChandraBackend)
+2. Смена модели (если тот же LM Studio инстанс)
+3. IMAGE/STAMP блоки (через image_backend / stamp_backend / QwenBackend)
 """
 from __future__ import annotations
 
@@ -16,9 +18,8 @@ from ..manifest_models import TwoPassManifest
 from ..memory_utils import force_gc, log_memory, log_memory_delta
 from ..settings import settings
 
-from .pass2_images import run_images_phase
+from .pass2_images import run_blocks_phase
 from .pass2_shared import Pass2Context
-from .pass2_strips import run_strips_phase
 
 logger = get_logger(__name__)
 
@@ -26,7 +27,7 @@ logger = get_logger(__name__)
 async def pass2_ocr_from_manifest_async(
     manifest: TwoPassManifest,
     blocks: List,
-    strip_backend,
+    text_backend,
     image_backend,
     stamp_backend,
     pdf_path: str,
@@ -39,17 +40,14 @@ async def pass2_ocr_from_manifest_async(
     before_image_phase: Optional[Callable[[], None]] = None,
 ) -> None:
     """
-    PASS 2 ASYNC: Асинхронный OCR с загрузкой кропов с диска.
+    PASS 2: Последовательный per-block OCR.
 
-    Использует asyncio.gather вместо ThreadPoolExecutor для эффективного
-    параллелизма I/O-bound операций (OCR API calls).
-
-    Поддерживает checkpoint/resume для возможности продолжения после паузы.
+    Блоки обрабатываются в порядке: TEXT → (model swap) → IMAGE/STAMP.
+    Каждый блок — отдельный OCR-запрос.
     """
-    start_mem = log_memory("PASS2 ASYNC start")
+    start_mem = log_memory("PASS2 start")
 
-    total_requests = len(manifest.strips) + len(manifest.image_blocks)
-    max_workers = max_concurrent or settings.ocr_threads_per_job
+    total_requests = len(manifest.blocks)
 
     blocks_by_id = {b.id: b for b in blocks}
 
@@ -57,14 +55,13 @@ async def pass2_ocr_from_manifest_async(
     if checkpoint is None:
         checkpoint = OCRCheckpoint.create_new(
             job_id="unknown",
-            total_strips=len(manifest.strips),
-            total_images=len(manifest.image_blocks),
+            total_blocks=total_requests,
         )
     else:
         restored = checkpoint.apply_to_blocks(blocks)
         if restored > 0:
             logger.info(
-                f"PASS2 ASYNC: восстановлено {restored} блоков из checkpoint",
+                f"PASS2: восстановлено {restored} блоков из checkpoint",
                 extra={
                     "event": "checkpoint_restored",
                     "checkpoint_count": restored,
@@ -72,7 +69,6 @@ async def pass2_ocr_from_manifest_async(
                 },
             )
 
-    # Общий контекст для обеих фаз
     ctx = Pass2Context(
         blocks_by_id=blocks_by_id,
         checkpoint=checkpoint,
@@ -80,28 +76,38 @@ async def pass2_ocr_from_manifest_async(
         check_paused=check_paused,
         deadline=deadline,
         work_dir=work_dir,
-        max_workers=max_workers,
+        max_workers=1,  # Sequential processing
         total_requests=total_requests,
         pdf_path=pdf_path,
-        processed=len(checkpoint.processed_strips) + len(checkpoint.processed_images),
+        processed=len(checkpoint.processed_blocks),
     )
 
-    # === ФАЗА 1: STRIPS ===
-    checkpoint.phase = "pass2_strips"
-    await run_strips_phase(manifest.strips, blocks, strip_backend, ctx)
+    # Разделяем блоки по типу для model swap
+    text_entries = [e for e in manifest.blocks if e.block_type == "text"]
+    non_text_entries = [e for e in manifest.blocks if e.block_type != "text"]
 
-    log_memory_delta("PASS2 ASYNC после strips", start_mem)
+    checkpoint.phase = "pass2"
+
+    # Обработка TEXT блоков
+    if text_entries:
+        logger.info(f"PASS2: обработка {len(text_entries)} TEXT блоков")
+        await run_blocks_phase(
+            text_entries, blocks, text_backend, image_backend, stamp_backend, ctx
+        )
+
+    log_memory_delta("PASS2 после TEXT", start_mem)
 
     # Смена модели между фазами (если тот же LM Studio инстанс)
-    if before_image_phase:
-        logger.info("PASS2 ASYNC: выполняем before_image_phase (смена модели)")
+    if before_image_phase and non_text_entries:
+        logger.info("PASS2: выполняем before_image_phase (смена модели)")
         await asyncio.to_thread(before_image_phase)
 
-    # === ФАЗА 2: IMAGES ===
-    checkpoint.phase = "pass2_images"
-    await run_images_phase(
-        manifest.image_blocks, blocks, image_backend, stamp_backend, ctx
-    )
+    # Обработка IMAGE/STAMP блоков
+    if non_text_entries:
+        logger.info(f"PASS2: обработка {len(non_text_entries)} IMAGE/STAMP блоков")
+        await run_blocks_phase(
+            non_text_entries, blocks, text_backend, image_backend, stamp_backend, ctx
+        )
 
     # Финальное сохранение checkpoint
     checkpoint.phase = "completed"
@@ -109,16 +115,16 @@ async def pass2_ocr_from_manifest_async(
         await asyncio.to_thread(checkpoint.save, ctx.checkpoint_path)
         logger.info(f"Финальный checkpoint сохранён: {ctx.checkpoint_path}")
 
-    force_gc("PASS2 ASYNC завершён")
-    log_memory_delta("PASS2 ASYNC end", start_mem)
+    force_gc("PASS2 завершён")
+    log_memory_delta("PASS2 end", start_mem)
 
-    logger.info(f"PASS2 ASYNC завершён: {ctx.processed} запросов обработано")
+    logger.info(f"PASS2 завершён: {ctx.processed} запросов обработано")
 
 
 def pass2_ocr_from_manifest_sync_wrapper(
     manifest: TwoPassManifest,
     blocks: List,
-    strip_backend,
+    text_backend,
     image_backend,
     stamp_backend,
     pdf_path: str,
@@ -137,7 +143,7 @@ def pass2_ocr_from_manifest_sync_wrapper(
         pass2_ocr_from_manifest_async(
             manifest=manifest,
             blocks=blocks,
-            strip_backend=strip_backend,
+            text_backend=text_backend,
             image_backend=image_backend,
             stamp_backend=stamp_backend,
             pdf_path=pdf_path,

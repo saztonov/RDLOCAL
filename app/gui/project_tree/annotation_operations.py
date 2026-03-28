@@ -325,10 +325,6 @@ class AnnotationOperations:
 
             doc, _ = Document.from_dict(data)
 
-            # Получить категорию stamp из базы
-            stamp_category = self._widget.client.get_image_category_by_code("stamp")
-            stamp_category_id = stamp_category.get("id") if stamp_category else None
-
             modified_count = 0
 
             for page in doc.pages:
@@ -337,7 +333,7 @@ class AnnotationOperations:
 
                 # Пропускаем страницы где уже есть штамп
                 has_stamp = any(
-                    getattr(b, "category_code", None) == "stamp" for b in page.blocks
+                    b.block_type == BlockType.STAMP for b in page.blocks
                 )
                 if has_stamp:
                     continue
@@ -358,10 +354,7 @@ class AnnotationOperations:
                             best_block = block
 
                 if best_block:
-                    best_block.block_type = BlockType.IMAGE
-                    best_block.category_code = "stamp"
-                    if stamp_category_id:
-                        best_block.category_id = stamp_category_id
+                    best_block.block_type = BlockType.STAMP
                     modified_count += 1
 
             if modified_count == 0:
