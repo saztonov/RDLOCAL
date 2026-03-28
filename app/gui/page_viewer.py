@@ -24,6 +24,7 @@ from app.gui.page_viewer_menus.context_menu import ContextMenuMixin
 from app.gui.page_viewer_mouse import MouseEventsMixin
 from app.gui.page_viewer_polygon import PolygonMixin
 from app.gui.page_viewer_resize import ResizeHandlesMixin
+from app.gui.page_viewer_state import ViewerState
 from rd_core.models import Block, ShapeType
 
 
@@ -65,30 +66,33 @@ class PageViewer(
         self.current_page: int = 0
 
         self.read_only = False  # Режим "только чтение" для заблокированных документов
-        self.drawing = False
-        self.drawing_polygon = False
+
+        # State machine (заменяет 7+ boolean флагов)
+        self.state: ViewerState = ViewerState.IDLE
+
+        # Polygon drawing data
         self.polygon_points: List[QPointF] = []
         self.polygon_preview_items: List[QGraphicsEllipseItem] = []
         self.polygon_line_items: List[QGraphicsLineItem] = []
         self.polygon_temp_line: Optional[QGraphicsLineItem] = None
-        self.selecting = False
-        self.right_button_pressed = False
+
+        # Common interaction data
         self.start_point: Optional[QPointF] = None
         self.rubber_band_item: Optional[QGraphicsRectItem] = None
         self.selected_block_idx: Optional[int] = None
         self.selected_block_indices: List[int] = []
 
-        self.moving_block = False
-        self.resizing_block = False
+        # Block manipulation data
         self.resize_handle = None
         self.move_start_pos: Optional[QPointF] = None
         self.original_block_rect: Optional[QRectF] = None
 
-        self.dragging_polygon_vertex: Optional[int] = None
-        self.dragging_polygon_edge: Optional[int] = None
+        # Polygon manipulation data
+        self._dragging_polygon_vertex_idx: Optional[int] = None
+        self._dragging_polygon_edge_idx: Optional[int] = None
         self.original_polygon_points: Optional[List[tuple]] = None
 
-        self.panning = False
+        # Panning data
         self.pan_start_pos: Optional[QPointF] = None
 
         self.zoom_factor = 1.0
@@ -101,6 +105,99 @@ class PageViewer(
         self._mouse_move_throttle_ms = 8  # ~120 FPS максимум
         
         self._setup_ui()
+
+    # ── State property aliases (обратная совместимость с mixins) ─────
+
+    @property
+    def drawing(self) -> bool:
+        return self.state == ViewerState.DRAWING_RECT
+
+    @drawing.setter
+    def drawing(self, value: bool):
+        self.state = ViewerState.DRAWING_RECT if value else ViewerState.IDLE
+
+    @property
+    def drawing_polygon(self) -> bool:
+        return self.state == ViewerState.DRAWING_POLYGON
+
+    @drawing_polygon.setter
+    def drawing_polygon(self, value: bool):
+        self.state = ViewerState.DRAWING_POLYGON if value else ViewerState.IDLE
+
+    @property
+    def selecting(self) -> bool:
+        return self.state == ViewerState.SELECTING
+
+    @selecting.setter
+    def selecting(self, value: bool):
+        self.state = ViewerState.SELECTING if value else ViewerState.IDLE
+
+    @property
+    def moving_block(self) -> bool:
+        return self.state == ViewerState.MOVING_BLOCK
+
+    @moving_block.setter
+    def moving_block(self, value: bool):
+        self.state = ViewerState.MOVING_BLOCK if value else ViewerState.IDLE
+
+    @property
+    def resizing_block(self) -> bool:
+        return self.state == ViewerState.RESIZING_BLOCK
+
+    @resizing_block.setter
+    def resizing_block(self, value: bool):
+        self.state = ViewerState.RESIZING_BLOCK if value else ViewerState.IDLE
+
+    @property
+    def panning(self) -> bool:
+        return self.state == ViewerState.PANNING
+
+    @panning.setter
+    def panning(self, value: bool):
+        self.state = ViewerState.PANNING if value else ViewerState.IDLE
+
+    @property
+    def right_button_pressed(self) -> bool:
+        return self.state == ViewerState.RIGHT_BUTTON_DOWN
+
+    @right_button_pressed.setter
+    def right_button_pressed(self, value: bool):
+        if value:
+            self.state = ViewerState.RIGHT_BUTTON_DOWN
+        elif self.state == ViewerState.RIGHT_BUTTON_DOWN:
+            self.state = ViewerState.IDLE
+
+    @property
+    def dragging_polygon_vertex(self) -> Optional[int]:
+        if self.state == ViewerState.DRAGGING_POLYGON_VERTEX:
+            return self._dragging_polygon_vertex_idx
+        return None
+
+    @dragging_polygon_vertex.setter
+    def dragging_polygon_vertex(self, value: Optional[int]):
+        if value is not None:
+            self._dragging_polygon_vertex_idx = value
+            self.state = ViewerState.DRAGGING_POLYGON_VERTEX
+        else:
+            self._dragging_polygon_vertex_idx = None
+            if self.state == ViewerState.DRAGGING_POLYGON_VERTEX:
+                self.state = ViewerState.IDLE
+
+    @property
+    def dragging_polygon_edge(self) -> Optional[int]:
+        if self.state == ViewerState.DRAGGING_POLYGON_EDGE:
+            return self._dragging_polygon_edge_idx
+        return None
+
+    @dragging_polygon_edge.setter
+    def dragging_polygon_edge(self, value: Optional[int]):
+        if value is not None:
+            self._dragging_polygon_edge_idx = value
+            self.state = ViewerState.DRAGGING_POLYGON_EDGE
+        else:
+            self._dragging_polygon_edge_idx = None
+            if self.state == ViewerState.DRAGGING_POLYGON_EDGE:
+                self.state = ViewerState.IDLE
 
     def _setup_ui(self):
         """Настройка интерфейса"""
