@@ -8,11 +8,14 @@ LocalOcrRunner — multiprocessing обёртка для OCR pipeline.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import multiprocessing
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from multiprocessing import Process, Queue
 from pathlib import Path
 from typing import Optional
@@ -20,6 +23,19 @@ from typing import Optional
 from PySide6.QtCore import QObject, QTimer, Signal
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_STATUSES = frozenset({"done", "partial", "error", "cancelled"})
+
+
+def _parse_iso_to_timestamp(iso_str: str) -> float:
+    """Конвертировать ISO datetime строку в Unix timestamp."""
+    if not iso_str:
+        return time.time()
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return time.time()
 
 
 @dataclass
@@ -68,6 +84,10 @@ class LocalOcrRunner(QObject):
         self._poll_timer.timeout.connect(self._poll_queues)
         self._poll_timer.setInterval(200)  # 5 Hz polling
 
+        # Загрузить историю завершённых задач из Supabase
+        self._client_id = self._get_client_id()
+        self._load_history_from_supabase()
+
     @property
     def jobs(self) -> dict[str, LocalJob]:
         return dict(self._jobs)
@@ -78,6 +98,114 @@ class LocalOcrRunner(QObject):
             j.status in ("queued", "processing")
             for j in self._jobs.values()
         )
+
+    # --- Persistence (Supabase) ---
+
+    @staticmethod
+    def _get_client_id() -> str:
+        """Стабильный UUID клиента, сохранённый в ~/.rd_cache/client_id."""
+        path = Path.home() / ".rd_cache" / "client_id"
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+            cid = str(uuid.uuid4())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(cid, encoding="utf-8")
+            return cid
+        except Exception:
+            return "local-unknown"
+
+    def _get_supabase_headers(self) -> dict | None:
+        """Получить заголовки для Supabase REST API."""
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
+        if not url or not key:
+            return None
+        return {
+            "_url": url,
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+
+    def _load_history_from_supabase(self) -> None:
+        """Загрузить завершённые задачи из Supabase."""
+        try:
+            headers = self._get_supabase_headers()
+            if not headers:
+                return
+            import httpx
+            url = headers.pop("_url")
+            resp = httpx.get(
+                f"{url}/rest/v1/jobs"
+                f"?select=id,document_name,status,progress,created_at,error_message,"
+                f"status_message,node_id"
+                f"&status=in.(done,partial,error,cancelled)"
+                f"&order=created_at.desc"
+                f"&limit=100",
+                headers=headers,
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Jobs history: HTTP {resp.status_code}")
+                return
+            rows = resp.json()
+            for row in rows:
+                job_id = row["id"]
+                if job_id in self._jobs:
+                    continue
+                self._jobs[job_id] = LocalJob(
+                    id=job_id,
+                    document_name=row.get("document_name", ""),
+                    node_id=row.get("node_id"),
+                    status=row.get("status", "done"),
+                    progress=row.get("progress", 1.0),
+                    status_message=row.get("status_message", ""),
+                    error_message=row.get("error_message"),
+                    created_at=_parse_iso_to_timestamp(row.get("created_at", "")),
+                )
+            if rows:
+                logger.info(f"Jobs history: загружено {len(rows)} задач из Supabase")
+        except Exception:
+            logger.debug("Jobs history: не удалось загрузить", exc_info=True)
+
+    def _save_job_to_supabase(self, job: LocalJob) -> None:
+        """Upsert задачу в Supabase (jobs + job_settings)."""
+        try:
+            headers = self._get_supabase_headers()
+            if not headers:
+                return
+            import httpx
+            url = headers.pop("_url")
+            now = datetime.now(timezone.utc).isoformat()
+            doc_id = hashlib.md5(job.pdf_path.encode()).hexdigest() if job.pdf_path else ""
+            payload = {
+                "id": job.id,
+                "document_id": doc_id,
+                "document_name": job.document_name,
+                "task_name": job.document_name,
+                "status": job.status,
+                "progress": job.progress,
+                "error_message": job.error_message,
+                "status_message": job.status_message,
+                "client_id": self._client_id,
+                "node_id": job.node_id,
+                "updated_at": now,
+            }
+            if job.status in _TERMINAL_STATUSES:
+                payload["completed_at"] = now
+            # Upsert by id
+            resp = httpx.post(
+                f"{url}/rest/v1/jobs",
+                headers={**headers, "Prefer": "return=minimal,resolution=merge-duplicates"},
+                json=payload,
+                timeout=5.0,
+            )
+            if resp.status_code not in (200, 201):
+                logger.debug(f"Jobs save: HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception:
+            logger.debug("Jobs save: ошибка", exc_info=True)
 
     def submit_job(
         self,
@@ -147,6 +275,7 @@ class LocalOcrRunner(QObject):
         if not self._poll_timer.isActive():
             self._poll_timer.start()
 
+        self._save_job_to_supabase(job)
         self.job_created.emit(job)
         return job
 
@@ -161,6 +290,7 @@ class LocalOcrRunner(QObject):
         if job and job.status in ("queued", "processing"):
             job.status = "cancelled"
             job.status_message = "Отменено"
+            self._save_job_to_supabase(job)
             self.job_updated.emit(job)
 
         return True
@@ -204,6 +334,7 @@ class LocalOcrRunner(QObject):
                     job.error_message = msg.get("error_message")
                     job.result_files = msg.get("result_files", {})
                     job.status_message = msg.get("status_message", "")
+                    self._save_job_to_supabase(job)
                     self.job_finished.emit(job)
                     finished_ids.append(job_id)
 
@@ -214,6 +345,7 @@ class LocalOcrRunner(QObject):
                     job.status = "error"
                     job.error_message = f"Процесс завершился с кодом {proc.exitcode}"
                     job.status_message = "Ошибка процесса"
+                    self._save_job_to_supabase(job)
                     self.job_finished.emit(job)
                 finished_ids.append(job_id)
 

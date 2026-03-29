@@ -102,6 +102,24 @@ def _build_qwen_config() -> dict:
         "top_k": settings.qwen_top_k,
         "repetition_penalty": settings.qwen_repetition_penalty,
         "min_p": settings.qwen_min_p,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "image_ocr_output",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "fragment_type": {"type": ["string", "null"]},
+                        "location": {"type": ["object", "null"]},
+                        "content_summary": {"type": ["string", "null"]},
+                        "detailed_description": {"type": ["string", "null"]},
+                        "verification_recommendations": {"type": ["string", "null"]},
+                        "key_entities": {"type": ["array", "null"]},
+                    },
+                    "required": ["fragment_type", "content_summary", "detailed_description"],
+                },
+            },
+        },
     }
 
 
@@ -125,6 +143,27 @@ def _build_stamp_config() -> dict:
         "top_k": settings.stamp_top_k,
         "repetition_penalty": settings.stamp_repetition_penalty,
         "min_p": settings.stamp_min_p,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "stamp_output",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "document_code": {"type": ["string", "null"]},
+                        "project_name": {"type": ["string", "null"]},
+                        "sheet_name": {"type": ["string", "null"]},
+                        "stage": {"type": ["string", "null"]},
+                        "sheet_number": {"type": ["string", "null"]},
+                        "total_sheets": {"type": ["string", "null"]},
+                        "organization": {"type": ["string", "null"]},
+                        "signatures": {"type": "array"},
+                        "revisions": {"type": "array"},
+                    },
+                    "required": ["document_code", "project_name", "sheet_name"],
+                },
+            },
+        },
     }
 
 

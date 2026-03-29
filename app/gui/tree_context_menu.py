@@ -99,12 +99,8 @@ class TreeContextMenuMixin:
                         action = menu.addAction("📦 Скачать полный архив")
                         action.setData(("download_full_archive", node))
 
-                if node.is_document and node.attributes.get("r2_key"):
-                    action = menu.addAction("☁️ Показать на R2")
-                    action.setData(("show_on_r2", node))
-
-                action = menu.addAction("🗄️ Показать в Supabase")
-                action.setData(("view_in_supabase", node))
+                action = menu.addAction("📦 Файлы узла (R2 + Supabase)")
+                action.setData(("show_node_files", node))
 
                 menu.addSeparator()
                 menu.addAction("✏️ Переименовать").setData(("rename", node))
@@ -173,12 +169,9 @@ class TreeContextMenuMixin:
         elif action == "verify_blocks":
             node = data[1]
             self._verify_blocks(node)
-        elif action == "show_on_r2":
+        elif action == "show_node_files":
             node = data[1]
-            self._show_on_r2(node)
-        elif action == "view_in_supabase":
-            node = data[1]
-            self._view_in_supabase(node)
+            self._show_node_files(node)
         elif action == "move_up":
             node = data[1]
             self._move_node_up(node)

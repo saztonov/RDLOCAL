@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json as _json
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -155,6 +156,22 @@ async def _process_one_block(
 
             if not should_retry_ocr(text, f"block {entry.block_id}", attempt, _max_retries):
                 break
+
+        # Валидация stamp JSON
+        if (
+            text
+            and text is not CANCELLED_SENTINEL
+            and entry.block_type == "stamp"
+            and not is_error(text)
+        ):
+            try:
+                stamp_obj = _json.loads(text)
+                if not isinstance(stamp_obj, dict):
+                    logger.warning(f"PASS2: {entry.block_id} stamp ответ не JSON объект")
+                    text = make_error("Stamp: ответ не является JSON объектом")
+            except _json.JSONDecodeError:
+                logger.warning(f"PASS2: {entry.block_id} stamp невалидный JSON")
+                text = make_error("Stamp: невалидный JSON в ответе модели")
 
         # Anti-transliteration: одноразовый retry для image блоков
         if (

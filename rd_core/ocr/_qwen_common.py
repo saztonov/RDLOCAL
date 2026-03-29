@@ -25,7 +25,7 @@ DEFAULT_BASE_URL = "http://localhost:1234"
 # LM Studio native API: конфигурация загрузки модели
 QWEN_MODEL_KEY = os.getenv(
     "QWEN_MODEL_KEY",
-    "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m",
+    "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q4_k_m",
 )
 QWEN_LOAD_CONFIG = {
     "context_length": 32000,
@@ -94,7 +94,7 @@ def build_payload(
         ],
     })
 
-    return {
+    payload = {
         "model": model_id,
         "messages": messages,
         "max_tokens": params.get("max_tokens", 12384),
@@ -105,6 +105,12 @@ def build_payload(
         "min_p": params.get("min_p", 0.05),
     }
 
+    # Structured output: response_format с JSON schema (LM Studio)
+    if params.get("response_format"):
+        payload["response_format"] = params["response_format"]
+
+    return payload
+
 
 # Regex для поиска первого HTML-тега в тексте
 _HTML_TAG_RE = re.compile(
@@ -113,17 +119,27 @@ _HTML_TAG_RE = re.compile(
 )
 
 
+_KNOWN_STAMP_KEYS = frozenset({"document_code", "project_name", "sheet_name"})
+_KNOWN_IMAGE_KEYS = frozenset({"fragment_type", "content_summary", "detailed_description"})
+
+
 def _try_extract_structured_ocr(text: str) -> Optional[str]:
-    """Попытка извлечь OCR HTML из structured JSON output."""
+    """Попытка извлечь OCR из structured JSON output (HTML, stamp, image)."""
     stripped = text.strip()
     if not (stripped.startswith('{') and stripped.endswith('}')):
         return None
     try:
         data = _json.loads(stripped)
-        if isinstance(data, dict) and "ocr_html" in data:
+        if not isinstance(data, dict):
+            return None
+        # HTML из structured output
+        if "ocr_html" in data:
             html = data["ocr_html"]
             if isinstance(html, str) and html.strip():
                 return html.strip()
+        # Stamp / Image JSON (известные ключи схемы)
+        if data.keys() & (_KNOWN_STAMP_KEYS | _KNOWN_IMAGE_KEYS):
+            return stripped
     except (_json.JSONDecodeError, ValueError):
         pass
     return None
@@ -144,6 +160,64 @@ def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
 
     reasoning_len = match.start()
     return text[match.start():], reasoning_len
+
+
+def _try_extract_json_from_reasoning(text: str) -> Optional[str]:
+    """Извлечь первый валидный JSON объект из reasoning-текста.
+
+    Reasoning-модели (qwen3.5-9b) могут возвращать JSON в reasoning_content,
+    окружённый текстом размышлений. Ищем первый `{...}` верхнего уровня.
+    """
+    if not text:
+        return None
+    stripped = text.strip()
+
+    # Быстрый путь: весь текст — чистый JSON
+    if stripped.startswith('{') and stripped.endswith('}'):
+        try:
+            _json.loads(stripped)
+            return stripped
+        except _json.JSONDecodeError:
+            pass
+
+    # Поиск первого JSON объекта в тексте
+    brace_start = stripped.find('{')
+    if brace_start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(brace_start, len(stripped)):
+        c = stripped[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if c == '\\' and in_string:
+            escape_next = True
+            continue
+        if c == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = stripped[brace_start:i + 1]
+                try:
+                    obj = _json.loads(candidate)
+                    if isinstance(obj, dict) and obj.keys() & (
+                        _KNOWN_STAMP_KEYS | _KNOWN_IMAGE_KEYS | {"ocr_html"}
+                    ):
+                        return candidate
+                except _json.JSONDecodeError:
+                    pass
+                break
+
+    return None
 
 
 def _normalize_qwen_response(message: dict) -> Tuple[str, str]:
@@ -171,15 +245,30 @@ def _normalize_qwen_response(message: dict) -> Tuple[str, str]:
             logger.debug(f"Qwen: ответ из content ({len(content)} симв.)")
             return content, "content"
 
-    reasoning = (message.get("reasoning_content") or "").strip()
+    # LM Studio 0.3.23+ использует message.reasoning, старые версии — reasoning_content
+    reasoning = (
+        message.get("reasoning")
+        or message.get("reasoning_content")
+        or ""
+    ).strip()
     if not reasoning:
         return "", "empty"
 
+    reasoning_field = "reasoning" if message.get("reasoning") else "reasoning_content"
     logger.info(
-        f"Qwen: content пуст, используем reasoning_content ({len(reasoning)} симв.)"
+        f"Qwen: content пуст, используем {reasoning_field} ({len(reasoning)} симв.)"
     )
 
     text = strip_think_tags(reasoning, backend_name="Qwen")
+
+    # Попытка извлечь JSON из reasoning (stamp/image structured output)
+    json_result = _try_extract_json_from_reasoning(text)
+    if json_result is not None:
+        logger.info(
+            f"Qwen: извлечён JSON из {reasoning_field} ({len(json_result)} симв.)"
+        )
+        return json_result, reasoning_field
+
     text, stripped_chars = _strip_reasoning_before_html(text)
     text = text.strip()
 

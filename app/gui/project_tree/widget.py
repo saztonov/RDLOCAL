@@ -378,14 +378,9 @@ class ProjectTreeWidget(
         dialog = BlockVerificationDialog(node.name, r2_key, self, node_id=node.id)
         dialog.exec()
 
-    def _show_on_r2(self, node: TreeNode):
-        from app.gui.r2_node_files_dialog import R2NodeFilesDialog
-        dialog = R2NodeFilesDialog(node, self)
-        dialog.exec()
-
-    def _view_in_supabase(self, node: TreeNode):
-        from app.gui.node_files_dialog import NodeFilesDialog
-        dialog = NodeFilesDialog(node, self.client, self)
+    def _show_node_files(self, node: TreeNode):
+        from app.gui.unified_node_files_dialog import UnifiedNodeFilesDialog
+        dialog = UnifiedNodeFilesDialog(node, self.client, self)
         dialog.exec()
 
     def _migrate_legacy_json(self, node: TreeNode):

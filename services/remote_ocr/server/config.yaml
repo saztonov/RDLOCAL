@@ -79,7 +79,7 @@ qwen_max_concurrent: 2
 # HTTP таймаут для Qwen запросов, секунды
 qwen_http_timeout: 90
 # Ключ модели в LM Studio
-qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
+qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q4_k_m"
 # Конфигурация загрузки модели
 qwen_context_length: 22000
 qwen_flash_attention: true
@@ -111,14 +111,14 @@ stamp_flash_attention: true
 stamp_eval_batch_size: 1024
 stamp_offload_kv_cache: true
 # Максимальная сторона изображения (пиксели)
-stamp_max_image_size: 3072
+stamp_max_image_size: 2048
 # Таймаут предзагрузки модели, секунды
 stamp_preload_timeout: 60
 # Retry: максимум попыток и задержки между ними (секунды)
 stamp_max_retries: 3
 stamp_retry_delays: [30, 60, 120]
 # Inference параметры
-stamp_max_tokens: 1024
+stamp_max_tokens: 512
 stamp_temperature: 0.1
 stamp_top_p: 0.95
 stamp_top_k: 40
