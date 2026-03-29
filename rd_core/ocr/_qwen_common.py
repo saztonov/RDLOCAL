@@ -28,7 +28,7 @@ QWEN_MODEL_KEY = os.getenv(
     "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m",
 )
 QWEN_LOAD_CONFIG = {
-    "context_length": 42000,
+    "context_length": 32000,
     "flash_attention": True,
     "eval_batch_size": 1024,
     "offload_kv_cache_to_gpu": True,

@@ -88,11 +88,12 @@ async def pass2_ocr_from_manifest_async(
 
     checkpoint.phase = "pass2"
 
-    # Обработка TEXT блоков
+    # Обработка TEXT блоков (параллельно, chandra_max_concurrent из config.yaml)
     if text_entries:
-        logger.info(f"PASS2: обработка {len(text_entries)} TEXT блоков")
+        logger.info(f"PASS2: обработка {len(text_entries)} TEXT блоков (max_workers={settings.chandra_max_concurrent})")
         await run_blocks_phase(
-            text_entries, blocks, text_backend, image_backend, stamp_backend, ctx
+            text_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
+            max_workers=settings.chandra_max_concurrent,
         )
 
     log_memory_delta("PASS2 после TEXT", start_mem)
@@ -102,11 +103,12 @@ async def pass2_ocr_from_manifest_async(
         logger.info("PASS2: выполняем before_image_phase (смена модели)")
         await asyncio.to_thread(before_image_phase)
 
-    # Обработка IMAGE/STAMP блоков
+    # Обработка IMAGE/STAMP блоков (последовательно)
     if non_text_entries:
-        logger.info(f"PASS2: обработка {len(non_text_entries)} IMAGE/STAMP блоков")
+        logger.info(f"PASS2: обработка {len(non_text_entries)} IMAGE/STAMP блоков (последовательно)")
         await run_blocks_phase(
-            non_text_entries, blocks, text_backend, image_backend, stamp_backend, ctx
+            non_text_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
+            max_workers=1,
         )
 
     # Финальное сохранение checkpoint
