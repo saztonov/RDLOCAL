@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -28,17 +28,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Статусы строк
-_STATUS_BOTH = "Both"
+# Статусы строк (текстовые маркеры, видны при любой теме)
+_STATUS_BOTH = "OK"
 _STATUS_R2_ONLY = "R2 only"
-_STATUS_DB_ONLY = "Supabase only"
-_STATUS_SIZE_MISMATCH = "Size mismatch"
-
-# Цвета строк
-_COLOR_OK = QColor(240, 255, 240)       # светло-зелёный
-_COLOR_R2_ONLY = QColor(255, 255, 220)  # светло-жёлтый
-_COLOR_DB_ONLY = QColor(255, 230, 230)  # светло-красный
-_COLOR_MISMATCH = QColor(255, 240, 200) # светло-оранжевый
+_STATUS_DB_ONLY = "DB only"
+_STATUS_SIZE_MISMATCH = "Size !="
 
 
 class _DownloadWorker(QObject):
@@ -317,16 +311,15 @@ class UnifiedNodeFilesDialog(QDialog):
         item.setTextAlignment(4, Qt.AlignRight | Qt.AlignVCenter)
         item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
 
-        # Цвет фона по статусу
-        color = {
-            _STATUS_BOTH: _COLOR_OK,
-            _STATUS_R2_ONLY: _COLOR_R2_ONLY,
-            _STATUS_DB_ONLY: _COLOR_DB_ONLY,
-            _STATUS_SIZE_MISMATCH: _COLOR_MISMATCH,
-        }.get(status, _COLOR_OK)
-        brush = QBrush(color)
-        for col in range(7):
-            item.setBackground(col, brush)
+        # Цвет текста статуса (без фона — совместимо с тёмными темами)
+        status_color = {
+            _STATUS_BOTH: QColor(100, 200, 100),       # зелёный
+            _STATUS_R2_ONLY: QColor(220, 200, 80),     # жёлтый
+            _STATUS_DB_ONLY: QColor(220, 100, 100),    # красный
+            _STATUS_SIZE_MISMATCH: QColor(220, 170, 60), # оранжевый
+        }.get(status)
+        if status_color:
+            item.setForeground(0, status_color)
 
         return item
 
