@@ -78,7 +78,6 @@ class ChandraBackend(LMStudioLifecycleMixin):
                 "system_prompt", "user_prompt",
                 "max_tokens", "temperature", "top_p", "top_k",
                 "repetition_penalty", "min_p",
-                "response_format",
             ) if k in cfg
         }
 

@@ -22,12 +22,11 @@ ALLOWED_ATTRIBUTES = "colspan, rowspan, type, checked, value, data-bbox, data-la
 # Максимальная сторона изображения для Chandra OCR 2 (из chandra/model/util.py: 3072×2048)
 CHANDRA_MAX_IMAGE_SIZE = 3072
 
-CHANDRA_DEFAULT_PROMPT = f"""OCR this image. Return a single JSON object: {{"ocr_html": "<HTML content>"}}.
+CHANDRA_DEFAULT_PROMPT = f"""OCR this image to HTML.
 
-The HTML inside ocr_html must use only these tags [{ALLOWED_TAGS}], and these attributes [{ALLOWED_ATTRIBUTES}].
+Only use these tags [{ALLOWED_TAGS}], and these attributes [{ALLOWED_ATTRIBUTES}].
 
 Guidelines:
-* Output format: Return ONLY a valid JSON object {{"ocr_html": "<...>"}}. No explanations, no markdown, no text outside the JSON.
 * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
 * Tables: Use colspan and rowspan attributes to match table structure.
 * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
@@ -43,8 +42,7 @@ CHANDRA_DEFAULT_SYSTEM = (
     "and Stage P documents. Preserve all dimensions, units of measurement, "
     "reference numbers, and table structures with absolute accuracy. "
     "Never describe images, photographs, seals, or visual scenes. "
-    'Output only recognized text as a JSON object: {"ocr_html": "<your HTML here>"}. '
-    "Do not output anything outside the JSON object — no explanations, no markdown."
+    "Output only recognized text as HTML."
 )
 
 DEFAULT_BASE_URL = "http://localhost:1234"
