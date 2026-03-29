@@ -83,6 +83,8 @@ class ContentMixin:
         # Для IMAGE блоков: форматируем ocr_json если есть
         if block_type == "image":
             html_content = self._format_image_block(block_data, html_content)
+        elif block_type == "stamp":
+            html_content = self._format_stamp_block(block_data, html_content)
 
         # Fallback: ocr_text если нет HTML
         if not html_content and block_data.get("ocr_text"):
@@ -152,6 +154,113 @@ class ContentMixin:
 
         self.stamp_content.setText("<br>".join(lines))
         self.stamp_group.show()
+
+    def _format_stamp_block(self, block_data: dict, html_content: str) -> str:
+        """Форматировать STAMP блок: HTML-таблица вместо сырого JSON.
+
+        Приоритет: ocr_html → таблица из stamp_data → парсинг ocr_text → fallback.
+        """
+        parts = []
+
+        crop_link = self._build_crop_link(block_data)
+        if crop_link:
+            parts.append(crop_link)
+
+        # 1. ocr_html — приоритет (ручное редактирование)
+        if html_content:
+            parts.append(html_content)
+            return "\n".join(parts) if parts else html_content
+
+        # 2. Таблица из stamp_data
+        stamp_data = block_data.get("stamp_data")
+        if stamp_data and isinstance(stamp_data, dict):
+            parts.append(self._stamp_html_table(stamp_data))
+            return "\n".join(parts)
+
+        # 3. Парсинг ocr_text как JSON
+        ocr_text = block_data.get("ocr_text", "")
+        if ocr_text:
+            try:
+                import json as json_module
+                parsed = json_module.loads(ocr_text.strip())
+                if isinstance(parsed, dict):
+                    parts.append(self._stamp_html_table(parsed))
+                    return "\n".join(parts)
+            except (json_module.JSONDecodeError, AttributeError):
+                pass
+
+        return "\n".join(parts) if parts else html_content
+
+    @staticmethod
+    def _stamp_html_table(data: dict) -> str:
+        """Сгенерировать HTML-таблицу штампа из словаря."""
+        rows = []
+
+        fields = [
+            ("Шифр", "document_code"),
+            ("Стадия", "stage"),
+            ("Объект", "project_name"),
+            ("Наименование листа", "sheet_name"),
+            ("Организация", "organization"),
+        ]
+        for label, key in fields:
+            val = data.get(key)
+            if val:
+                rows.append(f"<tr><td><b>{label}</b></td><td>{val}</td></tr>")
+
+        sheet_num = data.get("sheet_number", "")
+        total = data.get("total_sheets", "")
+        if sheet_num or total:
+            sheet_val = f"{sheet_num}" if sheet_num else ""
+            if total:
+                sheet_val = f"{sheet_val} из {total}" if sheet_val else f"из {total}"
+            rows.append(f"<tr><td><b>Лист</b></td><td>{sheet_val}</td></tr>")
+
+        html = "<h3>Штамп</h3>"
+        if rows:
+            html += "<table>" + "".join(rows) + "</table>"
+
+        # Подписи
+        signatures = data.get("signatures", [])
+        if signatures:
+            sig_rows = []
+            for s in signatures:
+                role = s.get("role", "") or ""
+                surname = s.get("surname", "") or s.get("name", "") or ""
+                date = s.get("date", "") or ""
+                if role or surname:
+                    sig_rows.append(
+                        f"<tr><td>{role}</td><td>{surname}</td><td>{date}</td></tr>"
+                    )
+            if sig_rows:
+                html += (
+                    "<h4>Подписи</h4>"
+                    "<table><tr><th>Роль</th><th>Фамилия</th><th>Дата</th></tr>"
+                    + "".join(sig_rows)
+                    + "</table>"
+                )
+
+        # Ревизии
+        revisions = data.get("revisions", [])
+        if revisions:
+            rev_rows = []
+            for r in revisions:
+                change = r.get("change_num", "") or r.get("revision_number", "") or ""
+                doc = r.get("doc_num", "") or r.get("document_number", "") or ""
+                date = r.get("date", "") or ""
+                if change or doc or date:
+                    rev_rows.append(
+                        f"<tr><td>{change}</td><td>{doc}</td><td>{date}</td></tr>"
+                    )
+            if rev_rows:
+                html += (
+                    "<h4>Изменения</h4>"
+                    "<table><tr><th>№ изм.</th><th>№ документа</th><th>Дата</th></tr>"
+                    + "".join(rev_rows)
+                    + "</table>"
+                )
+
+        return html
 
     def _format_image_block(self, block_data: dict, html_content: str) -> str:
         """Форматировать IMAGE блок с crop link и OCR контентом.
