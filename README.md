@@ -1,178 +1,128 @@
 # Core Structure
 
-**Версия:** 0.1  
-**Статус:** Alpha  
-**Лицензия:** MIT
+`Core Structure` — десктопное приложение для разметки PDF-документов и запуска OCR.
 
-**Описание:** Система структурного анализа и обработки документов с поддержкой удалённого OCR, иерархического управления проектами и интеллектуальной разметки блоков.
+Текущий основной сценарий работы GUI — локальный OCR через `app/ocr` и `LocalOcrRunner`. При этом в репозитории остаётся полноценный Remote OCR сервер в `services/remote_ocr`, который нужен для API, очередей и фоновой обработки через FastAPI + Celery + Redis.
 
-Desktop-клиент для аннотирования PDF с удалённым OCR и управлением проектами.
+## Что есть в проекте
 
-📚 **[Документация](docs/README.md)** | 🚀 **[Remote OCR сервер](docs/REMOTE_OCR_SERVER.md)**
+- Desktop GUI на `PySide6` для просмотра PDF, разметки блоков и навигации по дереву проектов.
+- Локальный OCR pipeline на базе `LM Studio`, запускаемый из GUI без HTTP и Celery.
+- Общее ядро `rd_core` с моделями, PDF-утилитами, OCR-бэкендами и R2 storage.
+- Remote OCR сервер для очередей, shared storage и фоновых OCR-задач.
+- Интеграции с `Supabase` и `Cloudflare R2` для дерева документов, аннотаций и артефактов.
 
----
+## Быстрый старт
 
-## 📋 Содержание
-
-- [Функциональность](#функциональность)
-- [Установка](#установка)
-- [Запуск](#запуск)
-- [Структура проекта](#структура-проекта)
-- [Использование](#использование)
-- [Документация](#документация)
-
----
-
-## Функциональность
-
-- ✅ Просмотр и аннотирование PDF (прямоугольники и полигоны)
-- ✅ **Remote OCR** — распределённая обработка через FastAPI + Celery
-- ✅ **Tree Projects** — иерархическое управление проектами
-- ✅ Сохранение в R2 Storage и Supabase
-- ✅ OCR движки: OpenRouter, Datalab
-- ✅ Экспорт в Markdown
-
-## Установка
-
-### 1. Python 3.11+
+### Desktop + local OCR
 
 ```bash
 pip install .
+python app/main.py
 ```
 
-Для desktop-разработки и сборки EXE можно установить полный набор из корневого манифеста:
+Для локального OCR нужен `.env` на основе [.env.example](.env.example). Минимально:
 
-```bash
-pip install -r requirements.txt
+```env
+CHANDRA_BASE_URL=http://localhost:1234
+QWEN_BASE_URL=http://localhost:1234
 ```
 
-### 2. Remote OCR сервер (если нужен локальный backend)
+Если нужны дерево проектов, аннотации в Supabase и R2-артефакты, добавьте также `SUPABASE_*` и `R2_*`.
+
+### Remote OCR сервер
+
+Установите серверные зависимости:
 
 ```bash
 pip install -r services/remote_ocr/requirements.txt
 ```
 
-### 3. .env (опционально)
+Запуск через Docker Compose:
 
-```bash
-# Remote OCR сервер
-REMOTE_OCR_BASE_URL=http://localhost:8000
-
-# Tree Projects (Supabase)
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_anon_key
-
-# OCR движки
-OPENROUTER_API_KEY=your_key
-DATALAB_API_KEY=your_key
-
-# R2 Storage
-R2_ACCOUNT_ID=your_account_id
-R2_ACCESS_KEY_ID=your_access_key
-R2_SECRET_ACCESS_KEY=your_secret_key
-R2_BUCKET_NAME=rd1
-R2_PUBLIC_URL=https://pub-xxxxx.r2.dev
-```
-
-## Запуск
-
-### Клиент (Desktop)
-
-```bash
-python app/main.py
-```
-
-### Remote OCR сервер
-
-**Docker (рекомендуется):**
 ```bash
 docker compose up --build
 ```
 
-Запускает 3 сервиса:
-- `web` — FastAPI сервер (порт 8000)
-- `redis` — Redis для Celery
-- `worker` — Celery воркер
+Ручной запуск:
 
-**Без Docker:**
 ```bash
-# Терминал 1: Redis
 redis-server
-
-# Терминал 2: API сервер
-cd services/remote_ocr
 uvicorn services.remote_ocr.server.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Терминал 3: Celery воркер
 celery -A services.remote_ocr.server.celery_app worker --loglevel=info --concurrency=1
 ```
 
-**Проверка:**
+Проверка:
+
 ```bash
 curl http://localhost:8000/health
+curl http://localhost:8000/health/ready
 curl http://localhost:8000/queue
 ```
 
-## Структура проекта
-
-```
-├── app/                    # Desktop клиент (PySide6)
-│   ├── main.py            # Точка входа
-│   ├── remote_ocr_client.py  # HTTP клиент
-│   ├── tree_client.py     # Supabase клиент
-│   └── gui/               # Интерфейс
-├── rd_core/               # Ядро (модели, OCR, R2)
-│   ├── models.py
-│   ├── pdf_utils.py
-│   ├── r2_storage.py
-│   └── ocr/               # OCR движки
-├── services/remote_ocr/   # Remote OCR сервер
-│   └── server/            # FastAPI + Celery
-├── database/              # Схема БД
-└── docs/                  # Документация
-```
-
-Подробнее: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
-
-## Использование
-
-1. **Открытие PDF:** `File → Open PDF`
-2. **Разметка блоков:** Рисуйте мышью (прямоугольники) или `Ctrl+P` (полигоны)
-3. **Remote OCR:** Выделите блоки → `Remote OCR → Send to OCR`
-4. **Tree Projects:** `View → Tree Projects` → управление иерархией проектов
-5. **Сохранение:** `File → Save Annotation` или `File → Save Draft to Server`
-
-Подробнее: [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)
-
-## Сборка в EXE
+### Сборка desktop-приложения
 
 ```bash
+pip install .[build]
 python build.py
 ```
 
-Результат: `dist/CoreStructure.exe`
+Результат: `dist/CoreStructure.exe`.
+
+## Переменные окружения
+
+Полный шаблон лежит в [.env.example](.env.example). Практически переменные делятся на четыре группы:
+
+- Local OCR: `CHANDRA_BASE_URL`, `QWEN_BASE_URL`.
+- Tree / annotations: `SUPABASE_URL`, `SUPABASE_KEY`.
+- R2 storage: `R2_ACCOUNT_ID` или `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_PUBLIC_URL`.
+- Remote OCR server: `REDIS_URL`, `REMOTE_OCR_DATA_DIR`, `OCR_CONFIG_PATH`, `LOG_LEVEL`, `LOG_FORMAT`.
+
+`ENABLE_PERFORMANCE_MONITOR` используется только desktop-клиентом и по умолчанию не нужен.
+
+## Карта репозитория
+
+```text
+app/
+  gui/            Desktop UI: MainWindow, PageViewer, ProjectTreeWidget, RemoteOCRPanel
+  ocr/            Local OCR runner и pipeline
+  tree_client/    Клиент для Supabase tree / annotations
+  services.py     Facade-слой для GUI над R2, tree и annotations
+
+rd_core/
+  models/         Block, Page, Document и enum'ы
+  ocr/            OCR-бэкенды Chandra, Qwen, Dummy
+  pdf_utils.py    Рендеринг и чтение PDF
+  r2_storage.py   Sync R2 storage client
+  annotation_io.py
+
+services/remote_ocr/server/
+  main.py         FastAPI entrypoint
+  routes/         Jobs, tree, storage API
+  tasks.py        Celery tasks
+  pdf_twopass/    Two-pass OCR pipeline
+  config.yaml     Серверный конфиг
+
+database/
+  migrations/     SQL-дамп и миграции схемы
+  exports/        Экспортированные артефакты схемы
+
+tests/
+  smoke, contract и unit-тесты
+```
+
+## Архитектурная заметка
+
+В репозитории есть два OCR-сценария:
+
+1. GUI -> `JobsController` -> `LocalOcrRunner` -> `app/ocr/local_pipeline.py`.
+2. Клиент/интеграция -> FastAPI -> Celery worker -> `services/remote_ocr/server/task_ocr_twopass.py`.
+
+Оба сценария используют общие OCR-бэкенды из `rd_core` и общие two-pass модули из `services/remote_ocr/server/pdf_twopass`.
 
 ## Документация
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — техническая документация и архитектура
-- [`docs/README.md`](docs/README.md) — индекс актуальной документации
-- [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) — руководство разработчика
-- [`docs/DATABASE.md`](docs/DATABASE.md) — схема базы данных (Supabase)
-- [`docs/REMOTE_OCR_SERVER.md`](docs/REMOTE_OCR_SERVER.md) — документация Remote OCR сервера
-
----
-
-## О продукте
-
-**Название:** Core Structure  
-**Версия:** 0.1  
-**Статус:** Alpha  
-**Лицензия:** MIT  
-
-**Технологии:**  
-- **Python:** 3.11+  
-- **GUI:** PySide6  
-- **Storage:** Cloudflare R2 + Supabase  
-- **OCR:** OpenRouter, Datalab  
-- **Queue:** Celery + Redis
+- [docs/README.md](docs/README.md) — индекс актуальных документов.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — карта подсистем и потоков данных.
+- [docs/REMOTE_OCR_SERVER.md](docs/REMOTE_OCR_SERVER.md) — серверный режим, API и конфиг.
+- [docs/DATABASE.md](docs/DATABASE.md) — минимальный обзор схемы и миграций.
