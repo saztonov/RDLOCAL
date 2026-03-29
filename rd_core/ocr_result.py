@@ -183,6 +183,32 @@ def _is_json_structure_dump(text: str) -> Tuple[bool, str]:
     return False, ""
 
 
+_TABLE_TAG_RE = re.compile(r'<table\b', re.IGNORECASE)
+_HEADING_TAG_RE = re.compile(r'<h[1-6]\b', re.IGNORECASE)
+_BBOX_TOP_RE = re.compile(r'data-bbox="(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"')
+
+
+def _is_table_missing_header(text: str) -> bool:
+    """Определить table-only HTML с пропущенным section header.
+
+    Условия:
+    - HTML содержит таблицу
+    - HTML НЕ содержит h1-h6
+    - HTML содержит data-bbox
+    - Минимальная верхняя координата табличного контента >= 150
+      (указывает на заметный пустой верх блока — место для заголовка)
+    """
+    if not _TABLE_TAG_RE.search(text):
+        return False
+    if _HEADING_TAG_RE.search(text):
+        return False
+    bboxes = _BBOX_TOP_RE.findall(text)
+    if not bboxes:
+        return False
+    min_top = min(int(b[1]) for b in bboxes)
+    return min_top >= 150
+
+
 def is_suspicious_output(ocr_text: str, ocr_html: str = "") -> Tuple[bool, str]:
     """Проверить OCR-вывод на подозрительный контент.
 
@@ -231,5 +257,9 @@ def is_suspicious_output(ocr_text: str, ocr_html: str = "") -> Tuple[bool, str]:
             has_html = bool(_HTML_TAG_RE_SIMPLE.search(stripped))
             if not has_html or len(reasoning_matches) >= 3:
                 return True, "suspicious OCR output: reasoning-like response"
+
+    # 5. Table-only без заголовка с пустым верхом (вероятно пропущен Section-Header)
+    if _is_table_missing_header(stripped):
+        return True, "table-only output likely missing section header"
 
     return False, ""

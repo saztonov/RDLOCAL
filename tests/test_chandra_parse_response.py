@@ -402,3 +402,159 @@ class TestSuspiciousReasoningDetection:
         )
         suspicious, _ = is_suspicious_output(text)
         assert not suspicious
+
+
+# ── Тесты извлечения заголовка из reasoning (YJPN-NCTH-R3C) ────────
+
+
+class TestTitleRescueFromReasoning:
+    """Регрессионные тесты для спасения заголовка из reasoning-прозы.
+
+    Блок YJPN-NCTH-R3C: модель вернула content пуст, заголовок
+    'Ведомость отверстий в стенах 2 этажа' в reasoning_content как
+    'The title is "..."' перед <table>.
+    """
+
+    def test_title_rescued_from_reasoning_yjpn(self):
+        """Регрессия YJPN-NCTH-R3C: заголовок спасён из reasoning."""
+        reasoning = (
+            'The user wants me to create a table based on the provided image. '
+            'The title is "Ведомость отверстий в стенах 2 этажа". '
+            'The table has three columns: "Наименование", '
+            '"Отметка низа отверстия", and "Количество".\n\n'
+            '<table border="1"><thead><tr>'
+            '<th data-bbox="50 243 460 413">Наименование</th>'
+            '<th data-bbox="460 243 718 413">Отметка низа отверстия</th>'
+            '<th data-bbox="718 243 970 413">Количество</th>'
+            '</tr></thead><tbody><tr>'
+            '<td data-bbox="50 413 460 541">Отв. 250×300</td>'
+            '<td data-bbox="460 413 718 541">+6,700</td>'
+            '<td data-bbox="718 413 970 541">2</td>'
+            '</tr></tbody></table>'
+        )
+        resp = _make_response(content="", reasoning_content=reasoning)
+        result = parse_response(resp)
+        assert not is_error(result)
+        assert "<h1>Ведомость отверстий в стенах 2 этажа</h1>" in result
+        assert "<table" in result
+
+    def test_no_title_rescue_without_explicit_pattern(self):
+        """Negative: reasoning без явного title-паттерна → заголовок НЕ восстанавливается."""
+        reasoning = (
+            'The user wants me to create a table based on the provided image. '
+            'The table has openings data for 2nd floor.\n\n'
+            '<table border="1"><thead><tr>'
+            '<th>Наименование</th><th>Количество</th>'
+            '</tr></thead></table>'
+        )
+        resp = _make_response(content="", reasoning_content=reasoning)
+        result = parse_response(resp)
+        assert not is_error(result)
+        assert "<h1>" not in result
+        assert "<table" in result
+
+    def test_no_title_rescue_when_html_already_has_heading(self):
+        """Если HTML уже содержит h1 — не добавлять дублирующий заголовок."""
+        reasoning = (
+            'The title is "Some Title"\n\n'
+            '<h1>Existing Header</h1>'
+            '<table border="1"><tr><td>Cell</td></tr></table>'
+        )
+        result, stripped = _strip_reasoning_before_html(reasoning)
+        # h1 уже есть — не дублировать
+        assert result.count("<h1>") == 1
+        assert "Existing Header" in result
+
+    def test_already_good_content_6pwv(self):
+        """Блок 6PVW-FCEN-YMU: content содержит h1 — без изменений."""
+        content = (
+            '<div data-bbox="96 152 910 247" data-label="Section-Header">'
+            '<h1>Ведомость отверстий в стенах 3 этажа</h1></div>'
+            '<div data-bbox="28 276 968 911" data-label="Table">'
+            '<table border="1"><thead><tr>'
+            '<th>Наименование</th><th>Отметка низа отверстия</th>'
+            '<th>Количество</th></tr></thead></table></div>'
+        )
+        resp = _make_response(content=content)
+        result = parse_response(resp)
+        assert not is_error(result)
+        assert "Ведомость отверстий в стенах 3 этажа" in result
+        assert result.count("<h1>") == 1
+
+    def test_title_rescue_russian_zagolovok_pattern(self):
+        """Паттерн 'Заголовок: ...' в reasoning."""
+        reasoning = (
+            'Анализируя изображение. Заголовок: «Спецификация элементов».\n\n'
+            '<table border="1"><tr><td>Elem</td></tr></table>'
+        )
+        result, _ = _strip_reasoning_before_html(reasoning)
+        assert '<h1>Спецификация элементов</h1>' in result
+
+    def test_title_rescue_title_colon_pattern(self):
+        """Паттерн 'Title: ...' в reasoning."""
+        reasoning = (
+            'I see a document. Title: "Schedule of openings".\n\n'
+            '<table><tr><td>Data</td></tr></table>'
+        )
+        result, _ = _strip_reasoning_before_html(reasoning)
+        assert '<h1>Schedule of openings</h1>' in result
+
+
+# ── Тесты suspicious-эвристики table-missing-header ─────────────────
+
+
+class TestTableMissingHeaderSuspicious:
+    """Тесты для _is_table_missing_header suspicious-эвристики."""
+
+    def test_table_only_with_high_top_bbox_is_suspicious(self):
+        """table-only HTML с data-bbox и min_top >= 150 → suspicious."""
+        from rd_core.ocr_result import is_suspicious_output
+        text = (
+            '<table border="1"><thead><tr>'
+            '<th data-bbox="50 243 460 413">Наименование</th>'
+            '<th data-bbox="460 243 718 413">Отметка</th>'
+            '</tr></thead><tbody><tr>'
+            '<td data-bbox="50 413 460 541">Отв. 250×300</td>'
+            '<td data-bbox="460 413 718 541">+6,700</td>'
+            '</tr></tbody></table>'
+        )
+        suspicious, reason = is_suspicious_output(text)
+        assert suspicious
+        assert "missing section header" in reason
+
+    def test_table_with_heading_not_suspicious(self):
+        """table с h1 — NOT suspicious."""
+        from rd_core.ocr_result import is_suspicious_output
+        text = (
+            '<h1>Ведомость</h1>'
+            '<table border="1"><thead><tr>'
+            '<th data-bbox="50 243 460 413">Наименование</th>'
+            '</tr></thead></table>'
+        )
+        suspicious, _ = is_suspicious_output(text)
+        assert not suspicious
+
+    def test_table_with_low_top_bbox_not_suspicious(self):
+        """table с data-bbox и min_top < 150 — NOT suspicious (table-missing-header)."""
+        from rd_core.ocr_result import _is_table_missing_header
+        text = (
+            '<table border="1"><thead><tr>'
+            '<th data-bbox="50 10 460 100">Колонка</th>'
+            '<th data-bbox="460 10 718 100">Значение</th>'
+            '</tr></thead><tbody><tr>'
+            '<td data-bbox="50 100 460 200">Данные первой колонки</td>'
+            '<td data-bbox="460 100 718 200">Данные второй колонки</td>'
+            '</tr></tbody></table>'
+        )
+        assert not _is_table_missing_header(text)
+
+    def test_table_without_bbox_not_suspicious(self):
+        """table без data-bbox — NOT suspicious (нет данных для анализа)."""
+        from rd_core.ocr_result import is_suspicious_output
+        text = (
+            '<table border="1"><thead><tr>'
+            '<th>Наименование</th><th>Количество</th>'
+            '</tr></thead></table>'
+        )
+        suspicious, _ = is_suspicious_output(text)
+        assert not suspicious
