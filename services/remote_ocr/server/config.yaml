@@ -42,7 +42,7 @@ text_max_concurrent: 3
 # Параллельных запросов для STAMP фазы (Qwen 9b — быстрая модель)
 stamp_max_concurrent: 4
 # Параллельных запросов для IMAGE фазы (Qwen 27b)
-image_max_concurrent: 2
+image_max_concurrent: 1
 
 # ===== CHANDRA (LM Studio — TEXT) =====
 # Параллельных запросов к Chandra PER TASK
@@ -66,7 +66,7 @@ chandra_preload_timeout: 60
 chandra_max_retries: 3
 chandra_retry_delays: [30, 60, 120]
 # Inference параметры
-chandra_max_tokens: 12384
+chandra_max_tokens: 2048
 chandra_temperature: 0.1
 chandra_top_p: 0.95
 chandra_top_k: 40
@@ -77,7 +77,7 @@ chandra_min_p: 0.05
 # Параллельных запросов к Qwen PER TASK
 qwen_max_concurrent: 2
 # HTTP таймаут для Qwen запросов, секунды
-qwen_http_timeout: 90
+qwen_http_timeout: 300
 # Ключ модели в LM Studio
 qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q4_k_m"
 # Конфигурация загрузки модели
@@ -90,10 +90,10 @@ qwen_max_image_size: 3072
 # Таймаут предзагрузки модели, секунды
 qwen_preload_timeout: 120
 # Retry: максимум попыток и задержки между ними (секунды)
-qwen_max_retries: 3
-qwen_retry_delays: [30, 60, 120]
+qwen_max_retries: 1
+qwen_retry_delays: [10]
 # Inference параметры
-qwen_max_tokens: 22384
+qwen_max_tokens: 4096
 qwen_temperature: 0.1
 qwen_top_p: 0.95
 qwen_top_k: 40
@@ -197,8 +197,8 @@ qwen_default_user_prompt: |
 # Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}
 image_system_prompt: |
   You are an expert in visual analysis of Russian construction documentation for multi-apartment residential building projects.
-  This task requires deep visual analysis and engaged thinking. Before answering, carefully study the image: text orientation, symbols, lines, relationships between elements, technical labels, tables, legends, dimensions, elevations, calculated values, formulas, mathematical expressions, and other visible data.
-  Think deeply and silently, but return only the final JSON object.
+  Before answering, carefully study the image: text orientation, symbols, lines, relationships between elements, technical labels, tables, legends, dimensions, elevations, calculated values, formulas, mathematical expressions, and other visible data.
+  Return only the final JSON object.
 
   Possible content of the image fragment:
   floor plans, equipment plans, engineering network plans, single-line electrical diagrams, schematic diagrams, automation diagrams, riser diagrams, elevations/facades, cross-sections, assembly details, detail drawings, tables, specifications, room schedules, legends, notes, material take-offs, general data sheets, title block fragments, formulas, calculation expressions, calculation tables, charts/graphs, and mixed fragments.

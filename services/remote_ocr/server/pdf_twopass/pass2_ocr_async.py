@@ -88,16 +88,26 @@ async def pass2_ocr_from_manifest_async(
     stamp_entries = [e for e in manifest.blocks if e.block_type == "stamp"]
     image_entries = [e for e in manifest.blocks if e.block_type not in ("text", "stamp")]
 
+    # max_concurrent из вызывающего кода ограничивает фазовые настройки
+    def _cap(phase_max: int) -> int:
+        if max_concurrent is not None:
+            return min(phase_max, max_concurrent)
+        return phase_max
+
+    text_workers = _cap(settings.text_max_concurrent)
+    stamp_workers = _cap(settings.stamp_max_concurrent)
+    image_workers = _cap(settings.image_max_concurrent)
+
     checkpoint.phase = "pass2"
 
     # ── Phase 1: TEXT блоки (Chandra) ────────────────────────────
     if text_entries:
         logger.info(
-            f"PASS2: phase=text, max_workers={settings.text_max_concurrent}, blocks={len(text_entries)}"
+            f"PASS2: phase=text, max_workers={text_workers}, blocks={len(text_entries)}"
         )
         await run_blocks_phase(
             text_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
-            max_workers=settings.text_max_concurrent,
+            max_workers=text_workers,
         )
 
     log_memory_delta("PASS2 после TEXT", start_mem)
@@ -110,11 +120,11 @@ async def pass2_ocr_from_manifest_async(
     # ── Phase 2: STAMP блоки (Qwen 9b) ──────────────────────────
     if stamp_entries:
         logger.info(
-            f"PASS2: phase=stamp, max_workers={settings.stamp_max_concurrent}, blocks={len(stamp_entries)}"
+            f"PASS2: phase=stamp, max_workers={stamp_workers}, blocks={len(stamp_entries)}"
         )
         await run_blocks_phase(
             stamp_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
-            max_workers=settings.stamp_max_concurrent,
+            max_workers=stamp_workers,
         )
 
     log_memory_delta("PASS2 после STAMP", start_mem)
@@ -127,11 +137,11 @@ async def pass2_ocr_from_manifest_async(
     # ── Phase 3: IMAGE блоки (Qwen 27b) ─────────────────────────
     if image_entries:
         logger.info(
-            f"PASS2: phase=image, max_workers={settings.image_max_concurrent}, blocks={len(image_entries)}"
+            f"PASS2: phase=image, max_workers={image_workers}, blocks={len(image_entries)}"
         )
         await run_blocks_phase(
             image_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
-            max_workers=settings.image_max_concurrent,
+            max_workers=image_workers,
         )
 
     # Финальное сохранение checkpoint

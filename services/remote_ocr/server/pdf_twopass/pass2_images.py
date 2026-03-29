@@ -22,6 +22,77 @@ from .pass2_shared import (
 
 logger = get_logger(__name__)
 
+_KNOWN_STAMP_KEYS = frozenset({"document_code", "project_name", "sheet_name"})
+
+
+def _parse_stamp_json(text: str) -> Optional[dict]:
+    """Извлечь stamp JSON из ответа модели.
+
+    Поддерживает: чистый JSON, fenced ```json``` блоки,
+    JSON внутри reasoning-текста.
+    """
+    if not text or not text.strip():
+        return None
+
+    stripped = text.strip()
+
+    # 1. Чистый JSON
+    if stripped.startswith("{"):
+        try:
+            obj = _json.loads(stripped)
+            if isinstance(obj, dict):
+                return obj
+        except _json.JSONDecodeError:
+            pass
+
+    # 2. Fenced JSON (```json ... ```)
+    import re
+    fenced = re.search(r"```json\s*([\s\S]*?)\s*```", stripped)
+    if fenced:
+        try:
+            obj = _json.loads(fenced.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except _json.JSONDecodeError:
+            pass
+
+    # 3. JSON внутри reasoning — ищем первый {…} верхнего уровня с stamp-ключами
+    brace_start = stripped.find("{")
+    if brace_start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(brace_start, len(stripped)):
+        c = stripped[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if c == "\\" and in_string:
+            escape_next = True
+            continue
+        if c == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = stripped[brace_start : i + 1]
+                try:
+                    obj = _json.loads(candidate)
+                    if isinstance(obj, dict) and obj.keys() & _KNOWN_STAMP_KEYS:
+                        return obj
+                except _json.JSONDecodeError:
+                    pass
+                break
+
+    return None
+
 
 async def _process_one_block(
     entry: CropManifestEntry,
@@ -164,14 +235,12 @@ async def _process_one_block(
             and entry.block_type == "stamp"
             and not is_error(text)
         ):
-            try:
-                stamp_obj = _json.loads(text)
-                if not isinstance(stamp_obj, dict):
-                    logger.warning(f"PASS2: {entry.block_id} stamp ответ не JSON объект")
-                    text = make_error("Stamp: ответ не является JSON объектом")
-            except _json.JSONDecodeError:
+            stamp_obj = _parse_stamp_json(text)
+            if stamp_obj is None:
                 logger.warning(f"PASS2: {entry.block_id} stamp невалидный JSON")
                 text = make_error("Stamp: невалидный JSON в ответе модели")
+            else:
+                text = _json.dumps(stamp_obj, ensure_ascii=False)
 
         # Anti-transliteration: одноразовый retry для image блоков
         if (
