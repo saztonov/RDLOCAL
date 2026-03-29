@@ -2,7 +2,6 @@
 
 import logging
 import re
-from pathlib import PurePosixPath
 
 from PySide6.QtCore import QThread, Signal
 
@@ -32,24 +31,43 @@ class VerificationWorker(QThread):
 
     def _verify(self) -> VerificationResult:
         from rd_core.r2_storage import R2Storage
+        from rd_core.sidecar_resolver import resolve_sidecar_keys
 
         r2 = R2Storage()
         result = VerificationResult()
 
-        # Формируем ключи файлов
-        pdf_path = PurePosixPath(self.r2_key)
-        pdf_stem = pdf_path.stem
-        pdf_parent = str(pdf_path.parent)
+        # Resolve R2-ключей через sidecar resolver
+        client = None
+        if self.node_id:
+            try:
+                from app.tree_client import TreeClient
+                client = TreeClient()
+            except Exception:
+                pass
 
-        ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
-        md_r2_key = f"{pdf_parent}/{pdf_stem}_document.md"
+        resolved = resolve_sidecar_keys(
+            node_id=self.node_id, r2_key=self.r2_key, r2=r2, client=client,
+        )
+        ocr_r2_key = resolved.ocr_html_key
+        md_r2_key = resolved.document_md_key
+        result.ocr_html_r2_key = ocr_r2_key
+        result.document_md_r2_key = md_r2_key
+        result.resolve_source = resolved.source
+        result.ocr_html_file_found = resolved.ocr_html_found
+        result.document_md_file_found = resolved.document_md_found
+
+        logger.info(
+            "Sidecar resolved: source=%s, ocr=%s, md=%s",
+            resolved.source, ocr_r2_key, md_r2_key,
+        )
 
         # 1. Загружаем и парсим аннотацию из Supabase
         self.progress.emit("Загрузка аннотации...")
         ann_data = None
         if self.node_id:
-            from app.tree_client import TreeClient
-            client = TreeClient()
+            if client is None:
+                from app.tree_client import TreeClient
+                client = TreeClient()
             ann_data = client.get_annotation(self.node_id)
 
         if not ann_data:
@@ -94,7 +112,7 @@ class VerificationWorker(QThread):
 
         # 2. Загружаем и парсим ocr.html
         self.progress.emit("Загрузка ocr.html...")
-        ocr_content = r2.download_text(ocr_r2_key)
+        ocr_content = r2.download_text(ocr_r2_key) if ocr_r2_key else None
         if ocr_content:
             # Ищем маркеры BLOCK: XXXX-XXXX-XXX
             block_pattern = re.compile(
@@ -139,7 +157,7 @@ class VerificationWorker(QThread):
 
         # 4. Загружаем и парсим document.md
         self.progress.emit("Загрузка document.md...")
-        md_content = r2.download_text(md_r2_key)
+        md_content = r2.download_text(md_r2_key) if md_r2_key else None
         if md_content:
             # Ищем маркеры в формате: ### BLOCK [TYPE]: XXXX-XXXX-XXX
             block_pattern = re.compile(

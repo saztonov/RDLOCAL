@@ -211,7 +211,7 @@ def regenerate_html_from_result(
                 f'<div class="block-header">Блок #{idx + 1} (стр. {page_num}) | Тип: {block_type}</div>'
             )
             html_parts.append('<div class="block-content">')
-            html_parts.append(f"<p>BLOCK: {block_id}</p>")
+            html_parts.append(f"<p>BLOCK: {get_block_armor_id(block_id)}</p>")
 
             # Linked block - в шапку
             linked_id = blk.get("linked_block_id")

@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import Any
 
 import httpx
@@ -103,16 +102,13 @@ def calculate_pdf_status(
         if client is None:
             client = _create_status_client()
 
-        pdf_path = PurePosixPath(r2_key)
-        pdf_stem = pdf_path.stem
-        pdf_parent = str(pdf_path.parent)
+        from rd_core.sidecar_resolver import resolve_sidecar_keys
 
-        ocr_r2_key = f"{pdf_parent}/{pdf_stem}_ocr.html"
+        resolved = resolve_sidecar_keys(
+            node_id=node_id, r2_key=r2_key, r2=r2_storage, client=client,
+        )
 
-        r2_objects = r2_storage.list_objects_with_metadata(f"{pdf_parent}/")
-        r2_keys = {obj["Key"] for obj in r2_objects}
-
-        has_ocr_html_r2 = ocr_r2_key in r2_keys
+        has_ocr_html_r2 = resolved.ocr_html_found
 
         has_annotation = client.has_annotation_in_db(node_id)
 

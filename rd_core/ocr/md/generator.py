@@ -349,7 +349,8 @@ def generate_md_from_result(
             block_count += 1
 
             # Заголовок блока (H3)
-            header_parts = [f"### BLOCK [{block_type}]: {block_id}"]
+            armor_code = get_block_armor_id(block_id)
+            header_parts = [f"### BLOCK [{block_type}]: {armor_code}"]
 
             # Метаданные - компактно в одну строку под заголовком
             meta_parts = []
@@ -357,7 +358,7 @@ def generate_md_from_result(
             # Linked block - НЕ выводим для IMAGE с встроенным TEXT
             has_embedded_text = block_id in image_to_text
             if blk.get("linked_block_id") and not has_embedded_text:
-                meta_parts.append(f"→{blk['linked_block_id']}")
+                meta_parts.append(f"→{get_block_armor_id(blk['linked_block_id'])}")
 
             md_parts.append(" ".join(header_parts))
             if meta_parts:

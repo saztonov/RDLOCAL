@@ -364,12 +364,22 @@ def verify_and_retry_missing_blocks(
                         _try_extract_structured_ocr,
                         _try_extract_structured_array,
                     )
+                    from rd_core.ocr_result import is_suspicious_output
                     normalized = _try_extract_structured_ocr(ocr_text)
                     if normalized is None:
                         normalized = _try_extract_structured_array(ocr_text)
                     if normalized is None:
                         normalized = ocr_text
-                    blk_data["ocr_html"] = sanitize_html(normalized)
+                    sanitized = sanitize_html(normalized)
+                    # Проверка: retry результат может быть suspicious (layout-dump и пр.)
+                    suspicious, sus_reason = is_suspicious_output(ocr_text, sanitized)
+                    if suspicious:
+                        logger.warning(
+                            f"Блок {block_id}: retry результат подозрительный — {sus_reason}"
+                        )
+                        consecutive_failures += 1
+                        continue
+                    blk_data["ocr_html"] = sanitized
                     blk_data["ocr_text"] = ocr_text
                     blk_data["ocr_meta"] = {
                         "method": [f"{method_prefix}_{retry_engine}"],
@@ -395,12 +405,20 @@ def verify_and_retry_missing_blocks(
                                     _try_extract_structured_ocr,
                                     _try_extract_structured_array,
                                 )
+                                from rd_core.ocr_result import is_suspicious_output
                                 normalized = _try_extract_structured_ocr(ocr_text)
                                 if normalized is None:
                                     normalized = _try_extract_structured_array(ocr_text)
                                 if normalized is None:
                                     normalized = ocr_text
-                                blk_data["ocr_html"] = sanitize_html(normalized)
+                                sanitized = sanitize_html(normalized)
+                                suspicious, sus_reason = is_suspicious_output(ocr_text, sanitized)
+                                if suspicious:
+                                    logger.warning(
+                                        f"Блок {block_id}: primary retry подозрительный — {sus_reason}"
+                                    )
+                                    break  # не принимаем, выходим из fallback
+                                blk_data["ocr_html"] = sanitized
                                 blk_data["ocr_text"] = ocr_text
                                 blk_data["ocr_meta"] = {
                                     "method": [f"retry_{engine_name}"],

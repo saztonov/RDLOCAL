@@ -58,6 +58,13 @@ class VerificationResult:
     error_reasons: dict = field(default_factory=dict)
     suspicious_reasons: dict = field(default_factory=dict)
 
+    # Resolved R2 keys (для диагностики)
+    ocr_html_r2_key: str = ""
+    document_md_r2_key: str = ""
+    resolve_source: str = ""  # "node_files" | "node_prefix" | "pdf_parent" | "not_found"
+    ocr_html_file_found: bool = False
+    document_md_file_found: bool = False
+
     @property
     def is_success(self) -> bool:
         """Верификация прошла успешно (структурная + контентная)?"""

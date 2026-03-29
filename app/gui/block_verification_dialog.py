@@ -176,8 +176,12 @@ class BlockVerificationDialog(QDialog):
         self.ann_group.show()
 
         # OCR HTML stats
+        if not r.ocr_html_file_found:
+            ocr_status = "<span style='color: #ff6b6b;'>файл не найден в R2</span>"
+        else:
+            ocr_status = f"<b>Найдено блоков:</b> {len(r.ocr_html_blocks)}"
         self.ocr_label.setText(
-            f"<b>Найдено блоков:</b> {len(r.ocr_html_blocks)}<br>"
+            f"{ocr_status}<br>"
             f"<span style='color: #888;'>(штампы не включаются в ocr.html)</span>"
         )
         self.ocr_group.show()
@@ -189,8 +193,12 @@ class BlockVerificationDialog(QDialog):
         self.result_group.show()
 
         # Document MD stats
+        if not r.document_md_file_found:
+            md_status = "<span style='color: #ff6b6b;'>файл не найден в R2</span>"
+        else:
+            md_status = f"<b>Найдено блоков:</b> {len(r.document_md_blocks)}"
         self.md_label.setText(
-            f"<b>Найдено блоков:</b> {len(r.document_md_blocks)}<br>"
+            f"{md_status}<br>"
             f"<span style='color: #888;'>(компактный формат для LLM)</span>"
         )
         self.md_group.show()
@@ -288,6 +296,9 @@ class BlockVerificationDialog(QDialog):
         lines = [
             f"Верификация блоков: {self.node_name}",
             f"R2 Key: {self.r2_key}",
+            f"Resolve source: {r.resolve_source}",
+            f"OCR HTML R2: {r.ocr_html_r2_key or '(не найден)'}",
+            f"Document MD R2: {r.document_md_r2_key or '(не найден)'}",
             "",
             "=== Annotation.json ===",
             f"Всего блоков: {r.ann_total}",
@@ -297,12 +308,14 @@ class BlockVerificationDialog(QDialog):
             f"Встроенных TEXT→IMAGE: {len(r.embedded_text_ids)}",
             "",
             "=== OCR.html ===",
+            f"Файл найден: {'да' if r.ocr_html_file_found else 'нет'}",
             f"Найдено блоков: {len(r.ocr_html_blocks)}",
             "",
             "=== Аннотация (OCR-результаты) ===",
             f"Блоков с OCR-результатами: {len(r.result_blocks)}",
             "",
             "=== Document.md ===",
+            f"Файл найден: {'да' if r.document_md_file_found else 'нет'}",
             f"Найдено блоков: {len(r.document_md_blocks)}",
             "",
             "=== Результат ===",
