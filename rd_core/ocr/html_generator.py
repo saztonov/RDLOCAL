@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from .generator_common import (
     HTML_FOOTER,
     INHERITABLE_STAMP_FIELDS,
+    collect_first_full_stamp,
     collect_inheritable_stamp_data,
     contains_html,
     extract_image_ocr_data,
@@ -234,22 +235,16 @@ def _format_stamp_html(stamp_data: Dict) -> str:
 
 
 def _format_inherited_stamp_html(inherited_data: Dict) -> str:
-    """Форматировать унаследованные данные штампа в компактный HTML блок."""
-    parts = []
+    """Форматировать унаследованные данные штампа в компактный HTML блок.
 
-    if inherited_data.get("document_code"):
-        parts.append(f"<b>Шифр:</b> {inherited_data['document_code']}")
-    if inherited_data.get("stage"):
-        parts.append(f"<b>Стадия:</b> {inherited_data['stage']}")
-    if inherited_data.get("project_name"):
-        parts.append(f"<b>Объект:</b> {inherited_data['project_name']}")
-    if inherited_data.get("organization"):
-        parts.append(f"<b>Организация:</b> {inherited_data['organization']}")
-
+    Использует format_stamp_parts() для единообразных подписей полей.
+    """
+    parts = format_stamp_parts(inherited_data)
     if not parts:
         return ""
 
-    return '<div class="stamp-info stamp-inherited">' + " | ".join(parts) + "</div>"
+    html_parts = [f"<b>{key}:</b> {value}" for key, value in parts]
+    return '<div class="stamp-info stamp-inherited">' + " | ".join(html_parts) + "</div>"
 
 
 def generate_html_from_pages(
@@ -281,6 +276,13 @@ def generate_html_from_pages(
 
         # Используем общий HTML шаблон
         html_parts = [get_html_header(title)]
+
+        # Полный штамп для заголовка документа
+        doc_stamp = collect_first_full_stamp(pages)
+        if doc_stamp:
+            doc_stamp_html = _format_stamp_html(doc_stamp)
+            if doc_stamp_html:
+                html_parts.append(doc_stamp_html)
 
         # Собираем общие данные штампа для страниц без штампа (fallback — из имени PDF)
         inherited_stamp_data = collect_inheritable_stamp_data(pages)

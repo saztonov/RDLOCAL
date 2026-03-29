@@ -5,9 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..generator_common import (
+    collect_first_full_stamp,
+    collect_first_full_stamp_dict,
     collect_inheritable_stamp_data,
     extract_stamp_from_doc_name,
     find_page_stamp,
+    find_page_stamp_dict,
     get_block_armor_id,
     is_stamp_block,
 )
@@ -49,7 +52,12 @@ def generate_md_from_pages(
 
         title = doc_name or "OCR Result"
 
-        # Собираем данные штампа (fallback — из имени PDF)
+        # Полный штамп для заголовка документа (все поля)
+        doc_stamp = collect_first_full_stamp(pages)
+        if not doc_stamp:
+            doc_stamp = extract_stamp_from_doc_name(doc_name)
+
+        # Inheritable штамп для per-block метаданных
         inherited_stamp_data = collect_inheritable_stamp_data(pages)
         if not inherited_stamp_data:
             inherited_stamp_data = extract_stamp_from_doc_name(doc_name)
@@ -73,11 +81,12 @@ def generate_md_from_pages(
         md_parts.append("")
         md_parts.append(f"Сгенерировано: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-        # Штамп документа
-        if inherited_stamp_data:
-            stamp_str = format_stamp_md(inherited_stamp_data)
+        # Штамп документа (многострочный — все поля)
+        if doc_stamp:
+            stamp_str = format_stamp_md(doc_stamp, multiline=True)
             if stamp_str:
-                md_parts.append(f"**Штамп:** {stamp_str}")
+                md_parts.append("**Штамп:**")
+                md_parts.append(stamp_str)
 
         md_parts.append("")
         md_parts.append("---")
@@ -231,23 +240,29 @@ def generate_md_from_result(
     md_parts.append("")
     md_parts.append(f"Сгенерировано: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-    # Собираем данные штампа из первого блока (fallback — из имени PDF)
+    # Полный штамп для заголовка документа
+    pages_for_stamp = result.get("pages", [])
+    doc_stamp = collect_first_full_stamp_dict(pages_for_stamp)
+    if not doc_stamp:
+        doc_stamp = extract_stamp_from_doc_name(doc_name)
+
+    # Также ищем first_stamp для per-block fallback
     first_stamp = None
-    for page in result.get("pages", []):
+    for page in pages_for_stamp:
         for blk in page.get("blocks", []):
             if blk.get("stamp_data"):
                 first_stamp = blk["stamp_data"]
                 break
         if first_stamp:
             break
-
     if not first_stamp:
-        first_stamp = extract_stamp_from_doc_name(doc_name)
+        first_stamp = doc_stamp
 
-    if first_stamp:
-        stamp_str = format_stamp_md(first_stamp)
+    if doc_stamp:
+        stamp_str = format_stamp_md(doc_stamp, multiline=True)
         if stamp_str:
-            md_parts.append(f"**Штамп:** {stamp_str}")
+            md_parts.append("**Штамп:**")
+            md_parts.append(stamp_str)
 
     md_parts.append("")
     md_parts.append("---")

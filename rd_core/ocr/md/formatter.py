@@ -14,11 +14,16 @@ from ..generator_common import (
 from .html_converter import html_to_markdown
 
 
-def format_stamp_md(stamp_data: Dict) -> str:
-    """Форматировать данные штампа в компактную Markdown строку.
+def format_stamp_md(stamp_data: Dict, multiline: bool = False) -> str:
+    """Форматировать данные штампа в Markdown строку.
 
     Канонический порядок полей:
-    Шифр | Стадия | Лист N (из M) | Объект | Наименование | Организация
+    Шифр | Стадия | Лист N (из M) | Объект | Наименование листа | Организация
+
+    Args:
+        stamp_data: словарь с данными штампа.
+        multiline: True — каждое поле на отдельной строке (для заголовка),
+            False — через `` | `` (для per-block метаданных).
     """
     parts = []
 
@@ -41,11 +46,13 @@ def format_stamp_md(stamp_data: Dict) -> str:
 
     # Наименование листа (page-level)
     if stamp_data.get("sheet_name"):
-        parts.append(f"Наименование: {stamp_data['sheet_name']}")
+        parts.append(f"Наименование листа: {stamp_data['sheet_name']}")
 
     if stamp_data.get("organization"):
-        parts.append(f"Организация: {stamp_data['organization']}")
+        parts.append(f"Организация выпустившая проект: {stamp_data['organization']}")
 
+    if multiline:
+        return "\n".join(parts) if parts else ""
     return " | ".join(parts) if parts else ""
 
 

@@ -9,6 +9,8 @@ from rd_core.ocr_result import make_error, make_non_retriable, is_error
 
 # Специальный маркер для length-truncation (не OCR ошибка, а сигнал для retry)
 LENGTH_TRUNCATED_PREFIX = "[LENGTH_TRUNCATED]"
+# Маркер context overflow (parallel contention) — сигнал для isolated retry
+CONTEXT_OVERFLOW_PREFIX = "[CONTEXT_OVERFLOW]"
 from rd_core.ocr.utils import extract_message_text, strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ def build_payload(
     prompt: Optional[dict],
     img_b64: str,
     inference_params: Optional[dict] = None,
+    context_length: Optional[int] = None,
 ) -> dict:
     """Собрать payload для Chandra API.
 
@@ -103,10 +106,20 @@ def build_payload(
         ],
     })
 
+    max_tokens = params.get("max_tokens", 12384)
+    # Динамическое ограничение: max_tokens ≤ context_length // 2
+    if context_length and max_tokens > context_length // 2:
+        capped = context_length // 2
+        logger.warning(
+            f"Chandra: max_tokens {max_tokens} capped to {capped} "
+            f"(context_length={context_length})"
+        )
+        max_tokens = capped
+
     return {
         "model": model_id,
         "messages": messages,
-        "max_tokens": params.get("max_tokens", 12384),
+        "max_tokens": max_tokens,
         "temperature": params.get("temperature", 0.1),
         "top_p": params.get("top_p", 0.95),
         "top_k": params.get("top_k", 40),
@@ -364,8 +377,15 @@ def parse_response(response_json: dict) -> str:
 
 
 def check_non_retriable_error(status_code: int, response_text: str) -> Optional[str]:
-    """Проверить детерминированную ошибку. Возвращает сообщение или None."""
+    """Проверить детерминированную ошибку. Возвращает сообщение или None.
+
+    Context overflow возвращает CONTEXT_OVERFLOW_PREFIX (не non-retriable),
+    чтобы вызывающий код мог попробовать isolated retry.
+    """
     if status_code == 400 and "context size" in response_text.lower():
-        logger.error(f"Chandra API error: {status_code} - {response_text[:500]}")
-        return make_non_retriable("контекст превышен — блок слишком большой для модели")
+        logger.warning(
+            f"Chandra: context overflow (may be parallel contention): "
+            f"{response_text[:300]}"
+        )
+        return CONTEXT_OVERFLOW_PREFIX
     return None

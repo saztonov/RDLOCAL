@@ -54,7 +54,7 @@ chandra_http_timeout: 60
 # Ключ модели в LM Studio
 chandra_model_key: "chandra-ocr-2"
 # Конфигурация загрузки модели
-chandra_context_length: 8000
+chandra_context_length: 62236
 chandra_flash_attention: true
 chandra_eval_batch_size: 2048
 chandra_offload_kv_cache: true
@@ -66,10 +66,10 @@ chandra_preload_timeout: 60
 chandra_max_retries: 3
 chandra_retry_delays: [30, 60, 120]
 # Inference параметры
-chandra_max_tokens: 8192
+chandra_max_tokens: 4096
 # Length-retry: повтор при обрезании ответа (finish_reason="length")
 chandra_length_retry_attempts: 1
-chandra_length_retry_max_tokens: 16384
+chandra_length_retry_max_tokens: 8192
 chandra_temperature: 0.1
 chandra_top_p: 0.95
 chandra_top_k: 40

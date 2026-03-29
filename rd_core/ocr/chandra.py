@@ -10,6 +10,7 @@ from rd_core.ocr._chandra_common import (
     CHANDRA_LOAD_CONFIG,
     CHANDRA_MAX_IMAGE_SIZE,
     CHANDRA_MODEL_KEY,
+    CONTEXT_OVERFLOW_PREFIX,
     LENGTH_TRUNCATED_PREFIX,
     TRANSIENT_CODES,
     build_payload,
@@ -117,9 +118,11 @@ class ChandraBackend(LMStudioLifecycleMixin):
         try:
             model_id = self._discover_model()
             img_b64 = image_to_base64(image, max_size=self._max_image_size)
+            ctx_len = self._LOAD_CONFIG.get("context_length")
             payload = build_payload(
                 model_id, prompt, img_b64,
                 inference_params=self._inference_params or None,
+                context_length=ctx_len,
             )
 
             last_error = None
@@ -174,7 +177,47 @@ class ChandraBackend(LMStudioLifecycleMixin):
                     break
 
                 non_retriable = check_non_retriable_error(response.status_code, response.text)
-                if non_retriable:
+                if non_retriable == CONTEXT_OVERFLOW_PREFIX:
+                    # Context overflow — возможно parallel contention в KV-кэше.
+                    # Ждём и пробуем isolated retry.
+                    logger.info(
+                        "Chandra: context overflow, attempting isolated retry "
+                        f"(attempt {attempt})"
+                    )
+                    if self._interruptible_sleep(5):
+                        return make_error("Chandra: операция отменена")
+
+                    try:
+                        iso_resp = self.session.post(
+                            f"{self.base_url}/v1/chat/completions",
+                            headers={"Content-Type": "application/json"},
+                            json=payload, timeout=self._http_timeout,
+                        )
+                        if iso_resp.status_code == 200:
+                            logger.info("Chandra: parallel-overflow recovered")
+                            response = iso_resp
+                            break
+
+                        iso_check = check_non_retriable_error(
+                            iso_resp.status_code, iso_resp.text,
+                        )
+                        if iso_check == CONTEXT_OVERFLOW_PREFIX:
+                            logger.error(
+                                "Chandra: true isolated overflow — "
+                                "блок действительно слишком велик"
+                            )
+                            return make_non_retriable(
+                                "контекст превышен — блок слишком большой для модели"
+                            )
+                        # Другая ошибка — обычный retry flow
+                        last_error = f"HTTP {iso_resp.status_code} (isolated)"
+                        continue
+                    except (httpx.ConnectError, httpx.TimeoutException) as e:
+                        logger.warning(f"Chandra: isolated retry failed: {e}")
+                        return make_non_retriable(
+                            "контекст превышен — блок слишком большой для модели"
+                        )
+                elif non_retriable:
                     return non_retriable
 
                 if response.status_code in TRANSIENT_CODES:
@@ -226,6 +269,7 @@ class ChandraBackend(LMStudioLifecycleMixin):
             retry_payload = build_payload(
                 model_id, prompt, img_b64,
                 inference_params=retry_params,
+                context_length=self._LOAD_CONFIG.get("context_length"),
             )
 
             try:

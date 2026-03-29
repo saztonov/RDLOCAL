@@ -172,6 +172,24 @@ def extract_stamp_from_doc_name(doc_name: Optional[str]) -> Optional[Dict]:
     return {"document_code": name}
 
 
+def collect_first_full_stamp(pages: List) -> Optional[Dict]:
+    """Первый полный штамп (все поля) для заголовка документа (Block objects)."""
+    for page in pages:
+        stamp_data = find_page_stamp(page.blocks)
+        if stamp_data and stamp_data.get("document_code"):
+            return stamp_data
+    return None
+
+
+def collect_first_full_stamp_dict(pages: List[Dict]) -> Optional[Dict]:
+    """Первый полный штамп (все поля) для заголовка документа (dict path)."""
+    for page in pages:
+        stamp_json = find_page_stamp_dict(page)
+        if stamp_json and stamp_json.get("document_code"):
+            return stamp_json
+    return None
+
+
 # Паттерн для мусорных img тегов от datalab (хеш_img.ext)
 DATALAB_IMG_PATTERN = re.compile(
     r'<img[^>]*src=["\']?[a-f0-9]{20,}_img(?:\.[a-z]{3,4})?["\']?[^>]*/?>',
@@ -449,9 +467,9 @@ def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
     if stamp_data.get("project_name"):
         parts.append(("Объект", stamp_data["project_name"]))
     if stamp_data.get("sheet_name"):
-        parts.append(("Наименование", stamp_data["sheet_name"]))
+        parts.append(("Наименование листа", stamp_data["sheet_name"]))
     if stamp_data.get("organization"):
-        parts.append(("Организация", stamp_data["organization"]))
+        parts.append(("Организация выпустившая проект", stamp_data["organization"]))
 
     # Ревизии/изменения
     revisions = stamp_data.get("revisions")
@@ -499,10 +517,20 @@ def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
 
 
 def find_page_stamp_dict(page: Dict) -> Optional[Dict]:
-    """Найти JSON штампа на странице (для dict структуры)."""
+    """Найти JSON штампа на странице (для dict структуры).
+
+    Порядок: ocr_json → fallback на parse_ocr_json(ocr_text) для
+    совместимости со старыми результатами, где ocr_json не был заполнен.
+    """
     for blk in page.get("blocks", []):
         if is_stamp_block(blk):
-            return blk.get("ocr_json")
+            stamp = blk.get("ocr_json")
+            if stamp:
+                return stamp
+            ocr_text = blk.get("ocr_text", "")
+            parsed = parse_ocr_json(ocr_text)
+            if parsed:
+                return parsed
     return None
 
 

@@ -118,8 +118,13 @@ def enrich_annotation_dict(
                         crop_name = Path(blk["image_file"]).name
                         blk["crop_url"] = f"{r2_public_url}/crops/{crop_name}"
 
-            # Stamp-блоки хранят данные в ocr_json, не в ocr_html
+            # Stamp-блоки: парсим ocr_text → ocr_json + stamp_data для propagation
             if is_stamp_block(blk):
+                ocr_text = blk.get("ocr_text", "")
+                parsed_json = parse_ocr_json(ocr_text)
+                if parsed_json:
+                    blk["ocr_json"] = parsed_json
+                    blk["stamp_data"] = parsed_json
                 continue
             if blk["ocr_html"]:
                 matched += 1

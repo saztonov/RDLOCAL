@@ -94,7 +94,7 @@ async def pass2_ocr_from_manifest_async(
             return min(phase_max, max_concurrent)
         return phase_max
 
-    text_workers = _cap(settings.text_max_concurrent)
+    text_workers = _cap(min(settings.text_max_concurrent, settings.chandra_max_concurrent))
     stamp_workers = _cap(settings.stamp_max_concurrent)
     image_workers = _cap(settings.image_max_concurrent)
 
