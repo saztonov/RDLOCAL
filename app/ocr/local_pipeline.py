@@ -64,13 +64,7 @@ def run_local_ocr(
 
     Это главная функция, вызываемая в subprocess (multiprocessing.Process).
     Переиспользует серверные модули напрямую.
-
-    DEPRECATED: Local OCR pipeline is disabled in favor of remote OCR with tree documents.
     """
-    raise NotImplementedError(
-        "Local OCR pipeline is disabled. Use remote OCR with tree documents."
-    )
-
     pdf_path = Path(pdf_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -414,16 +408,8 @@ def _generate_local_results(
     except Exception as e:
         logger.warning(f"MD generation error: {e}")
 
-    # result.json (merged format)
-    result_path = output_dir / f"{pdf_stem}_result.json"
-    try:
-        from services.remote_ocr.server.ocr_result_merger import merge_ocr_results
-
-        merge_ocr_results(annotation_path, html_path, result_path, doc_name=doc_name)
-    except Exception as e:
-        logger.warning(f"result.json generation error: {e}")
-
     # Block verification (retry missing blocks)
+    result_path = output_dir / f"{pdf_stem}_result.json"
     if text_backend and result_path.exists():
         try:
             from services.remote_ocr.server.block_verification import verify_and_retry_missing_blocks
