@@ -126,26 +126,35 @@ def run_two_pass_ocr(
         # Сброс asyncio-привязанного rate limiter перед новым event loop
         reset_async_limiter()
 
-        # Callback для смены модели между text и image фазами
-        def _swap_to_qwen():
-            """Выгрузить chandra, загрузить qwen (если тот же LM Studio инстанс)."""
-            qwen_url = settings.qwen_base_url or settings.chandra_base_url
-            if qwen_url == settings.chandra_base_url:
-                logger.info("Смена модели: chandra → qwen (тот же LM Studio инстанс)")
+        # Callbacks для смены моделей между фазами
+        qwen_url = settings.qwen_base_url or settings.chandra_base_url
+        same_instance = (qwen_url == settings.chandra_base_url)
+
+        def _swap_to_stamp():
+            """Выгрузить chandra, загрузить stamp model."""
+            if same_instance:
+                logger.info("Model swap: chandra → stamp")
                 try:
                     text_backend.unload_model()
                 except Exception as e:
                     logger.warning(f"Ошибка выгрузки chandra: {e}")
+            try:
+                stamp_backend.preload()
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки stamp: {e}")
+
+        def _swap_to_image():
+            """Выгрузить stamp model, загрузить image model."""
+            if same_instance:
+                logger.info("Model swap: stamp → image")
                 try:
-                    image_backend.preload()
+                    stamp_backend.unload_model()
                 except Exception as e:
-                    logger.warning(f"Ошибка загрузки qwen: {e}")
-            else:
-                logger.info("Preload qwen (отдельный LM Studio инстанс)")
-                try:
-                    image_backend.preload()
-                except Exception as e:
-                    logger.warning(f"Ошибка загрузки qwen: {e}")
+                    logger.warning(f"Ошибка выгрузки stamp: {e}")
+            try:
+                image_backend.preload()
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки image: {e}")
 
         logger.info(
             f"PASS2: запуск per-block OCR",
@@ -171,7 +180,8 @@ def run_two_pass_ocr(
                 checkpoint=checkpoint if USE_CHECKPOINT else None,
                 work_dir=work_dir if USE_CHECKPOINT else None,
                 deadline=soft_timeout_at,
-                before_image_phase=_swap_to_qwen,
+                before_stamp_phase=_swap_to_stamp,
+                before_image_phase=_swap_to_image,
             )
         )
 

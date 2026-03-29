@@ -3,7 +3,8 @@
 
 Создаёт тройку бэкендов (text, image, stamp) — все через LM Studio:
 - text (TEXT) → ChandraBackend (chandra-ocr-2)
-- image/stamp → QwenBackend (qwen3.5-27b)
+- image (IMAGE) → QwenBackend (qwen3.5-27b)
+- stamp (STAMP) → QwenBackend (qwen3.5-9b)
 """
 
 from __future__ import annotations
@@ -104,6 +105,29 @@ def _build_qwen_config() -> dict:
     }
 
 
+def _build_stamp_config() -> dict:
+    """Собрать model_config для Stamp QwenBackend из settings (config.yaml)."""
+    return {
+        "model_key": settings.stamp_model_key,
+        "context_length": settings.stamp_context_length,
+        "flash_attention": settings.stamp_flash_attention,
+        "eval_batch_size": settings.stamp_eval_batch_size,
+        "offload_kv_cache": settings.stamp_offload_kv_cache,
+        "max_image_size": settings.stamp_max_image_size,
+        "preload_timeout": settings.stamp_preload_timeout,
+        "max_retries": settings.stamp_max_retries,
+        "retry_delays": settings.stamp_retry_delays,
+        "default_system_prompt": settings.stamp_system_prompt,
+        "default_user_prompt": settings.stamp_user_prompt,
+        "max_tokens": settings.stamp_max_tokens,
+        "temperature": settings.stamp_temperature,
+        "top_p": settings.stamp_top_p,
+        "top_k": settings.stamp_top_k,
+        "repetition_penalty": settings.stamp_repetition_penalty,
+        "min_p": settings.stamp_min_p,
+    }
+
+
 def create_job_backends(job) -> JobBackends:
     """
     Создать бэкенды для OCR задачи — все через LM Studio.
@@ -134,7 +158,7 @@ def create_job_backends(job) -> JobBackends:
     except Exception as e:
         logger.warning(f"Preload chandra text failed (non-fatal): {e}")
 
-    # --- Image/Stamp backend → QwenBackend ---
+    # --- Image backend (IMAGE) → QwenBackend (qwen3.5-27b) ---
     qwen_url = settings.qwen_base_url or settings.chandra_base_url
     image_backend = create_ocr_engine(
         "qwen",
@@ -142,8 +166,14 @@ def create_job_backends(job) -> JobBackends:
         http_timeout=settings.qwen_http_timeout,
         model_config=_build_qwen_config(),
     )
-    # Stamp использует тот же QwenBackend (разные промпты передаются в recognize)
-    stamp_backend = image_backend
+
+    # --- Stamp backend (STAMP) → QwenBackend (qwen3.5-9b) ---
+    stamp_backend = create_ocr_engine(
+        "qwen",
+        base_url=qwen_url,
+        http_timeout=settings.stamp_http_timeout,
+        model_config=_build_stamp_config(),
+    )
 
     result = JobBackends(
         text=text_backend,
@@ -160,9 +190,9 @@ def create_job_backends(job) -> JobBackends:
             "event": "job_backends_created",
             "job_id": job.id,
             "engine": engine,
-            "text_backend": "ChandraBackend",
-            "image_backend": "QwenBackend",
-            "stamp_backend": "QwenBackend (shared)",
+            "text_backend": f"ChandraBackend ({settings.chandra_model_key})",
+            "image_backend": f"QwenBackend ({settings.qwen_model_key})",
+            "stamp_backend": f"QwenBackend ({settings.stamp_model_key})",
             "qwen_url": qwen_url,
         },
     )

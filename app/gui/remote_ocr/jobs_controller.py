@@ -477,12 +477,16 @@ class JobsController(QObject):
             logger.error(f"Ошибка применения OCR результатов: {e}")
 
     def _refresh_document_in_tree(self) -> None:
-        """Обновить узел документа в дереве проектов."""
+        """Обновить узел документа в дереве проектов — инвалидировать R2 кэши."""
         node_id = getattr(self.main_window, "_current_node_id", None)
         if not node_id:
             return
-        if not hasattr(self.main_window, "project_tree_widget"):
-            return
+        # Инвалидировать R2 кэши (metadata + disk) ��ля этого узла
+        try:
+            from rd_core.r2_utils import invalidate_r2_cache
+            invalidate_r2_cache(f"tree_docs/{node_id}/", prefix=True)
+        except Exception:
+            pass
         logger.info(f"Refreshed document in tree: {node_id}")
 
     # ══════════════════════════════════════════════════════════════════

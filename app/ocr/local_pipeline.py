@@ -134,11 +134,15 @@ def run_local_ocr(
             base_url=qwen_url,
             http_timeout=qwen_http_timeout,
         )
-        stamp_backend = image_backend
+        stamp_backend = create_ocr_engine(
+            "qwen",
+            base_url=qwen_url,
+            http_timeout=qwen_http_timeout,
+        )
 
         # Deadline для бэкендов
         deadline = time.time() + timeout_seconds
-        for backend in (text_backend, image_backend):
+        for backend in (text_backend, image_backend, stamp_backend):
             if hasattr(backend, "set_deadline"):
                 backend.set_deadline(deadline)
 
@@ -187,23 +191,32 @@ def run_local_ocr(
             msg = f"PASS 2: {block_info} ({current}/{total})" if block_info else f"PASS 2: {current}/{total}"
             _progress(progress, msg)
 
-        # Model swap callback (если один LM Studio инстанс)
-        def _swap_to_qwen():
+        # Model swap callbacks (если один LM Studio инстанс)
+        def _swap_to_stamp():
+            """chandra → stamp model (qwen3.5-9b)"""
             if qwen_url == chandra_url:
-                logger.info("Смена модели: chandra → qwen")
+                logger.info("Model swap: chandra → stamp")
                 try:
                     text_backend.unload_model()
                 except Exception:
                     pass
+            try:
+                stamp_backend.preload()
+            except Exception:
+                pass
+
+        def _swap_to_image():
+            """stamp model → image model (qwen3.5-27b)"""
+            if qwen_url == chandra_url:
+                logger.info("Model swap: stamp → image")
                 try:
-                    image_backend.preload()
+                    stamp_backend.unload_model()
                 except Exception:
                     pass
-            else:
-                try:
-                    image_backend.preload()
-                except Exception:
-                    pass
+            try:
+                image_backend.preload()
+            except Exception:
+                pass
 
         asyncio.run(
             pass2_ocr_from_manifest_async(
@@ -219,7 +232,8 @@ def run_local_ocr(
                 checkpoint=None,
                 work_dir=work_dir,
                 deadline=deadline,
-                before_image_phase=_swap_to_qwen,
+                before_stamp_phase=_swap_to_stamp,
+                before_image_phase=_swap_to_image,
             )
         )
 
@@ -246,6 +260,7 @@ def run_local_ocr(
             text_backend=text_backend,
             is_correction_mode=is_correction_mode,
             deadline=deadline,
+            node_id=node_id,
         )
 
         _progress(0.98, "Результаты сохранены")
@@ -326,6 +341,7 @@ def _generate_local_results(
     text_backend=None,
     is_correction_mode: bool = False,
     deadline: float | None = None,
+    node_id: str | None = None,
 ):
     """Генерация файлов результатов (annotation.json, HTML, MD, export_report.json)."""
     from datetime import datetime, timezone
@@ -428,13 +444,17 @@ def _generate_local_results(
             if html_path.exists():
                 with open(html_path, "r", encoding="utf-8") as f:
                     html_text = f.read()
-            enriched_dict = enrich_annotation_dict(ann_dict, html_text)
+            enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name=doc_name)
 
             # Верификация и повторное распознавание пропущенных блоков
             enriched_dict = verify_and_retry_missing_blocks(
                 enriched_dict, pdf_path, work_dir, text_backend,
                 deadline=deadline,
             )
+
+            # Перезаписать annotation.json из enriched_dict (после верификации)
+            with open(annotation_path, "w", encoding="utf-8") as f:
+                json.dump(enriched_dict, f, ensure_ascii=False, indent=2)
 
             # Перегенерируем HTML/MD из обновлённого enriched dict
             try:
@@ -468,3 +488,46 @@ def _generate_local_results(
         logger.info(f"Export report: {report_path}")
     except Exception as e:
         logger.warning(f"Export report generation error: {e}")
+
+    # Sync артефактов в tree_docs/{node_id} (если запуск с node_id)
+    _sync_results_to_tree(node_id, pdf_stem, output_dir)
+
+
+def _sync_results_to_tree(node_id: str | None, pdf_stem: str, output_dir: Path) -> None:
+    """Загрузить свежие OCR-артефакты в R2 и обновить node_files."""
+    if not node_id:
+        return
+    try:
+        from app.services import get_r2, get_tree_client
+        from app.tree_models import FileType
+        from rd_core.r2_utils import invalidate_r2_cache
+
+        r2 = get_r2()
+        tc = get_tree_client()
+        r2_prefix = f"tree_docs/{node_id}"
+
+        files_to_sync = [
+            (f"{pdf_stem}_ocr.html", FileType.OCR_HTML, "text/html"),
+            (f"{pdf_stem}_document.md", FileType.RESULT_MD, "text/markdown"),
+        ]
+
+        for filename, file_type, mime in files_to_sync:
+            local_path = output_dir / filename
+            if not local_path.exists():
+                continue
+            r2_key = f"{r2_prefix}/{filename}"
+            r2.upload_file(str(local_path), r2_key, content_type=mime)
+            tc.upsert_node_file(
+                node_id=node_id,
+                file_type=file_type,
+                r2_key=r2_key,
+                file_name=filename,
+                file_size=local_path.stat().st_size,
+                mime_type=mime,
+            )
+            invalidate_r2_cache(r2_key)
+
+        invalidate_r2_cache(f"{r2_prefix}/", prefix=True)
+        logger.info(f"Synced OCR results to tree: node_id={node_id}")
+    except Exception as e:
+        logger.warning(f"Sync to tree failed (non-fatal): {e}")

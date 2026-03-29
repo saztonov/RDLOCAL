@@ -36,6 +36,14 @@ ocr_threads_per_job: 2
 # Таймаут одного OCR запроса, секунды
 ocr_request_timeout: 480
 
+# ===== PHASE CONCURRENCY (per block type) =====
+# Параллельных запросов для TEXT фазы (Chandra)
+text_max_concurrent: 3
+# Параллельных запросов для STAMP фазы (Qwen 9b)
+stamp_max_concurrent: 2
+# Параллельных запросов для IMAGE фазы (Qwen 27b)
+image_max_concurrent: 2
+
 # ===== CHANDRA (LM Studio — TEXT) =====
 # Параллельных запросов к Chandra PER TASK
 chandra_max_concurrent: 2
@@ -91,6 +99,31 @@ qwen_top_p: 0.95
 qwen_top_k: 40
 qwen_repetition_penalty: 1.1
 qwen_min_p: 0.05
+
+# ===== STAMP MODEL (LM Studio — STAMP blocks) =====
+# HTTP таймаут для Stamp запросов, секунды
+stamp_http_timeout: 60
+# Ключ модели в LM Studio
+stamp_model_key: "qwen/qwen3.5-9b"
+# Конфигурация загрузки модели
+stamp_context_length: 8000
+stamp_flash_attention: true
+stamp_eval_batch_size: 1024
+stamp_offload_kv_cache: true
+# Максимальная сторона изображения (пиксели)
+stamp_max_image_size: 3072
+# Таймаут предзагрузки модели, секунды
+stamp_preload_timeout: 60
+# Retry: максимум попыток и задержки между ними (секунды)
+stamp_max_retries: 3
+stamp_retry_delays: [30, 60, 120]
+# Inference параметры
+stamp_max_tokens: 4096
+stamp_temperature: 0.1
+stamp_top_p: 0.95
+stamp_top_k: 40
+stamp_repetition_penalty: 1.1
+stamp_min_p: 0.05
 
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)

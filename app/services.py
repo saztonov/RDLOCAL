@@ -83,6 +83,11 @@ def add_node_file(node_id: str, file_type: str, r2_key: str, **kwargs) -> Option
     return get_tree_client().add_node_file(node_id, file_type, r2_key, **kwargs)
 
 
+def upsert_node_file(node_id: str, file_type: str, r2_key: str, **kwargs) -> Optional[str]:
+    """Добавить или обновить файл узла дерева (upsert по node_id + r2_key)."""
+    return get_tree_client().upsert_node_file(node_id, file_type, r2_key, **kwargs)
+
+
 def delete_node_file(file_id: str) -> bool:
     """Удалить файл узла."""
     return get_tree_client().delete_node_file(file_id)

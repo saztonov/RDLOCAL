@@ -38,12 +38,13 @@ async def pass2_ocr_from_manifest_async(
     work_dir: Optional[Path] = None,
     deadline: Optional[float] = None,
     before_image_phase: Optional[Callable[[], None]] = None,
+    before_stamp_phase: Optional[Callable[[], None]] = None,
 ) -> None:
     """
-    PASS 2: Последовательный per-block OCR.
+    PASS 2: Per-block OCR в три фазы.
 
-    Блоки обрабатываются в порядке: TEXT → (model swap) → IMAGE/STAMP.
-    Каждый блок — отдельный OCR-запрос.
+    Блоки обрабатываются в порядке:
+    1. TEXT (Chandra) → model swap → 2. STAMP (Qwen 9b) → model swap → 3. IMAGE (Qwen 27b)
     """
     start_mem = log_memory("PASS2 start")
 
@@ -76,39 +77,61 @@ async def pass2_ocr_from_manifest_async(
         check_paused=check_paused,
         deadline=deadline,
         work_dir=work_dir,
-        max_workers=1,  # Sequential processing
+        max_workers=1,
         total_requests=total_requests,
         pdf_path=pdf_path,
         processed=len(checkpoint.processed_blocks),
     )
 
-    # Разделяем блоки по типу для model swap
+    # Разделяем блоки по типу для трёхфазной обработки
     text_entries = [e for e in manifest.blocks if e.block_type == "text"]
-    non_text_entries = [e for e in manifest.blocks if e.block_type != "text"]
+    stamp_entries = [e for e in manifest.blocks if e.block_type == "stamp"]
+    image_entries = [e for e in manifest.blocks if e.block_type not in ("text", "stamp")]
 
     checkpoint.phase = "pass2"
 
-    # Обработка TEXT блоков (параллельно, chandra_max_concurrent из config.yaml)
+    # ── Phase 1: TEXT блоки (Chandra) ────────────────────────────
     if text_entries:
-        logger.info(f"PASS2: обработка {len(text_entries)} TEXT блоков (max_workers={settings.chandra_max_concurrent})")
+        logger.info(
+            f"PASS2: phase=text, max_workers={settings.text_max_concurrent}, blocks={len(text_entries)}"
+        )
         await run_blocks_phase(
             text_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
-            max_workers=settings.chandra_max_concurrent,
+            max_workers=settings.text_max_concurrent,
         )
 
     log_memory_delta("PASS2 после TEXT", start_mem)
 
-    # Смена модели между фазами (если тот же LM Studio инстанс)
-    if before_image_phase and non_text_entries:
-        logger.info("PASS2: выполняем before_image_phase (смена модели)")
+    # ── Model swap: chandra → stamp model ────────────────────────
+    if before_stamp_phase and stamp_entries:
+        logger.info("PASS2: model swap chandra → stamp")
+        await asyncio.to_thread(before_stamp_phase)
+
+    # ── Phase 2: STAMP блоки (Qwen 9b) ──────────────────────────
+    if stamp_entries:
+        logger.info(
+            f"PASS2: phase=stamp, max_workers={settings.stamp_max_concurrent}, blocks={len(stamp_entries)}"
+        )
+        await run_blocks_phase(
+            stamp_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
+            max_workers=settings.stamp_max_concurrent,
+        )
+
+    log_memory_delta("PASS2 после STAMP", start_mem)
+
+    # ── Model swap: stamp → image model ──────────────────────────
+    if before_image_phase and image_entries:
+        logger.info("PASS2: model swap stamp → image")
         await asyncio.to_thread(before_image_phase)
 
-    # Обработка IMAGE/STAMP блоков (последовательно)
-    if non_text_entries:
-        logger.info(f"PASS2: обработка {len(non_text_entries)} IMAGE/STAMP блоков (последовательно)")
+    # ── Phase 3: IMAGE блоки (Qwen 27b) ─────────────────────────
+    if image_entries:
+        logger.info(
+            f"PASS2: phase=image, max_workers={settings.image_max_concurrent}, blocks={len(image_entries)}"
+        )
         await run_blocks_phase(
-            non_text_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
-            max_workers=1,
+            image_entries, blocks, text_backend, image_backend, stamp_backend, ctx,
+            max_workers=settings.image_max_concurrent,
         )
 
     # Финальное сохранение checkpoint
@@ -135,6 +158,7 @@ def pass2_ocr_from_manifest_sync_wrapper(
     checkpoint: Optional[OCRCheckpoint] = None,
     work_dir: Optional[Path] = None,
     before_image_phase: Optional[Callable[[], None]] = None,
+    before_stamp_phase: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Синхронная обёртка для async pass2_ocr.
@@ -154,5 +178,6 @@ def pass2_ocr_from_manifest_sync_wrapper(
             checkpoint=checkpoint,
             work_dir=work_dir,
             before_image_phase=before_image_phase,
+            before_stamp_phase=before_stamp_phase,
         )
     )

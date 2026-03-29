@@ -113,6 +113,11 @@ class Settings:
     ocr_threads_per_job: int = _cfg("ocr_threads_per_job", "OCR_THREADS_PER_JOB", int)
     ocr_request_timeout: int = _cfg("ocr_request_timeout", "OCR_REQUEST_TIMEOUT", int)
 
+    # ===== PHASE CONCURRENCY (per block type) =====
+    text_max_concurrent: int = _cfg("text_max_concurrent", "TEXT_MAX_CONCURRENT", int)
+    stamp_max_concurrent: int = _cfg("stamp_max_concurrent", "STAMP_MAX_CONCURRENT", int)
+    image_max_concurrent: int = _cfg("image_max_concurrent", "IMAGE_MAX_CONCURRENT", int)
+
     # ===== CHANDRA (LM Studio — TEXT/TABLE) =====
     chandra_max_concurrent: int = _cfg("chandra_max_concurrent", "CHANDRA_MAX_CONCURRENT", int)
     chandra_retry_delay: int = _cfg("chandra_retry_delay", "CHANDRA_RETRY_DELAY", int)
@@ -155,6 +160,24 @@ class Settings:
     qwen_min_p: float = _cfg("qwen_min_p", "QWEN_MIN_P", float)
     qwen_default_system_prompt: str = _cfg("qwen_default_system_prompt", "QWEN_DEFAULT_SYSTEM_PROMPT")
     qwen_default_user_prompt: str = _cfg("qwen_default_user_prompt", "QWEN_DEFAULT_USER_PROMPT")
+
+    # ===== STAMP MODEL (LM Studio — STAMP blocks) =====
+    stamp_http_timeout: int = _cfg("stamp_http_timeout", "STAMP_HTTP_TIMEOUT", int)
+    stamp_model_key: str = _cfg("stamp_model_key", "STAMP_MODEL_KEY")
+    stamp_context_length: int = _cfg("stamp_context_length", "STAMP_CONTEXT_LENGTH", int)
+    stamp_flash_attention: bool = _cfg("stamp_flash_attention", "STAMP_FLASH_ATTENTION", bool)
+    stamp_eval_batch_size: int = _cfg("stamp_eval_batch_size", "STAMP_EVAL_BATCH_SIZE", int)
+    stamp_offload_kv_cache: bool = _cfg("stamp_offload_kv_cache", "STAMP_OFFLOAD_KV_CACHE", bool)
+    stamp_max_image_size: int = _cfg("stamp_max_image_size", "STAMP_MAX_IMAGE_SIZE", int)
+    stamp_preload_timeout: int = _cfg("stamp_preload_timeout", "STAMP_PRELOAD_TIMEOUT", int)
+    stamp_max_retries: int = _cfg("stamp_max_retries", "STAMP_MAX_RETRIES", int)
+    stamp_retry_delays: list = _cfg("stamp_retry_delays", "STAMP_RETRY_DELAYS")
+    stamp_max_tokens: int = _cfg("stamp_max_tokens", "STAMP_MAX_TOKENS", int)
+    stamp_temperature: float = _cfg("stamp_temperature", "STAMP_TEMPERATURE", float)
+    stamp_top_p: float = _cfg("stamp_top_p", "STAMP_TOP_P", float)
+    stamp_top_k: int = _cfg("stamp_top_k", "STAMP_TOP_K", int)
+    stamp_repetition_penalty: float = _cfg("stamp_repetition_penalty", "STAMP_REPETITION_PENALTY", float)
+    stamp_min_p: float = _cfg("stamp_min_p", "STAMP_MIN_P", float)
 
     # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
     max_retry_blocks: int = _cfg("max_retry_blocks", "MAX_RETRY_BLOCKS", int)
