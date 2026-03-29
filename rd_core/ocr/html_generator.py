@@ -8,9 +8,13 @@ from typing import Any, Dict, List
 
 from .generator_common import (
     HTML_FOOTER,
+    INHERITABLE_STAMP_FIELDS,
+    collect_inheritable_stamp_data,
     contains_html,
     extract_image_ocr_data,
     extract_qwen_html,
+    find_page_stamp,
+    format_stamp_parts,
     get_block_armor_id,
     get_html_header,
     is_image_ocr_json,
@@ -267,7 +271,7 @@ def generate_html_from_pages(
     try:
         from rd_core.models import BlockType
 
-        r2_public_url = os.getenv("R2_PUBLIC_URL", "https://rd1.svarovsky.ru")
+        r2_public_url = os.getenv("R2_PUBLIC_URL", "https://pub-9530315f35b34246a04e8ad8144e46d5.r2.dev")
 
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -277,11 +281,33 @@ def generate_html_from_pages(
         # Используем общий HTML шаблон
         html_parts = [get_html_header(title)]
 
+        # Собираем общие данные штампа для страниц без штампа
+        inherited_stamp_data = collect_inheritable_stamp_data(pages)
+        inherited_stamp_html = (
+            _format_inherited_stamp_html(inherited_stamp_data)
+            if inherited_stamp_data
+            else ""
+        )
+
         total_blocks = sum(len(p.blocks) for p in pages)
         excluded_stamp = 0
         block_count = 0
 
         for page in pages:
+            # Формируем stamp-info для блоков этой страницы
+            page_stamp = find_page_stamp(page.blocks)
+            if page_stamp:
+                merged_stamp = dict(page_stamp)
+                if inherited_stamp_data:
+                    for fld in INHERITABLE_STAMP_FIELDS:
+                        if not merged_stamp.get(fld) and inherited_stamp_data.get(fld):
+                            merged_stamp[fld] = inherited_stamp_data[fld]
+                stamp_html = _format_stamp_html(merged_stamp)
+            elif inherited_stamp_data:
+                stamp_html = inherited_stamp_html
+            else:
+                stamp_html = ""
+
             for idx, block in enumerate(page.blocks):
                 # Пропускаем блоки штампа
                 if is_stamp_block(block):
@@ -312,6 +338,10 @@ def generate_html_from_pages(
                 created_at = getattr(block, "created_at", None)
                 if created_at:
                     html_parts.append(f"<p><b>Created:</b> {created_at}</p>")
+
+                # Информация о штампе в заголовке блока
+                if stamp_html:
+                    html_parts.append(stamp_html)
 
                 # Для IMAGE блоков добавляем ссылку на изображение
                 if block.block_type == BlockType.IMAGE and block.image_file:

@@ -59,7 +59,7 @@ def enrich_annotation_dict(
         Обогащённый словарь аннотации.
     """
     if not r2_public_url:
-        r2_public_url = os.getenv("R2_PUBLIC_URL", "https://rd1.svarovsky.ru")
+        r2_public_url = os.getenv("R2_PUBLIC_URL", "https://pub-9530315f35b34246a04e8ad8144e46d5.r2.dev")
 
     expected_ids = [
         b["id"]
@@ -211,6 +211,16 @@ def regenerate_html_from_result(
             # Created - в шапку
             if created_at:
                 html_parts.append(f"<p><b>Created:</b> {created_at}</p>")
+
+            # Stamp info - в шапку блока
+            stamp_data = blk.get("stamp_data")
+            if stamp_data:
+                parts = format_stamp_parts(stamp_data)
+                if parts:
+                    stamp_html_parts = [f"<b>{key}:</b> {value}" for key, value in parts]
+                    html_parts.append(
+                        '<div class="stamp-info">' + " | ".join(stamp_html_parts) + "</div>"
+                    )
 
             # Для IMAGE блоков добавляем ссылку на кроп
             if block_type == "image" and blk.get("crop_url"):
