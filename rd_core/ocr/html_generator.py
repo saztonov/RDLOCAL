@@ -102,12 +102,16 @@ def _format_image_ocr_html(data: dict) -> str:
     img_data = extract_image_ocr_data(data)
     parts = []
 
-    # Заголовок: [ИЗОБРАЖЕНИЕ] Тип: XXX | Оси: XXX
+    # Заголовок: [ИЗОБРАЖЕНИЕ] Фрагмент: XXX | Зона: XXX | Оси: XXX | Отм.: XXX
     header_parts = ["<b>[ИЗОБРАЖЕНИЕ]</b>"]
+    if img_data.get("fragment_type") and img_data["fragment_type"] != "Не определено":
+        header_parts.append(f"Фрагмент: {img_data['fragment_type']}")
     if img_data.get("zone_name") and img_data["zone_name"] != "Не определено":
-        header_parts.append(f"Тип: {img_data['zone_name']}")
+        header_parts.append(f"Зона: {img_data['zone_name']}")
     if img_data.get("grid_lines") and img_data["grid_lines"] != "Не определены":
         header_parts.append(f"Оси: {img_data['grid_lines']}")
+    if img_data.get("level_or_elevation") and img_data["level_or_elevation"] != "Не определено":
+        header_parts.append(f"Отм.: {img_data['level_or_elevation']}")
     if img_data.get("location_text"):
         header_parts.append(img_data["location_text"])
     parts.append(f"<p>{' | '.join(header_parts)}</p>")
@@ -119,10 +123,6 @@ def _format_image_ocr_html(data: dict) -> str:
     # Детальное описание
     if img_data.get("detailed_description"):
         parts.append(f"<p><b>Описание:</b> {_escape_html(img_data['detailed_description'])}</p>")
-
-    # Распознанный текст
-    if img_data.get("clean_ocr_text"):
-        parts.append(f"<p><b>Текст на чертеже:</b> {_escape_html(img_data['clean_ocr_text'])}</p>")
 
     # Ключевые сущности - через запятую
     if img_data.get("key_entities"):

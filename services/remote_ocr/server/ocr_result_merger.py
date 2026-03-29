@@ -12,7 +12,7 @@ from rd_core.ocr.generator_common import (
     format_stamp_parts,
     get_block_armor_id,
     get_html_header,
-    parse_stamp_json,
+    parse_ocr_json,
     propagate_stamp_data,
     sanitize_html,
 )
@@ -102,7 +102,7 @@ def enrich_annotation_dict(
             # Для IMAGE блоков: парсим JSON из ocr_text и добавляем crop_url
             if block_type == "image":
                 ocr_text = blk.get("ocr_text", "")
-                parsed_json = parse_stamp_json(ocr_text)
+                parsed_json = parse_ocr_json(ocr_text)
                 if parsed_json:
                     blk["ocr_json"] = parsed_json
 

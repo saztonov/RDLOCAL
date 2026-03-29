@@ -69,8 +69,8 @@ def get_block_armor_id(block_id: str) -> str:
     return uuid_to_armor_id(block_id)
 
 
-def parse_stamp_json(ocr_text: Optional[str]) -> Optional[Dict]:
-    """Извлечь JSON штампа из ocr_text."""
+def parse_ocr_json(ocr_text: Optional[str]) -> Optional[Dict]:
+    """Извлечь JSON из ocr_text (IMAGE или STAMP блок)."""
     if not ocr_text:
         return None
 
@@ -100,7 +100,7 @@ def find_page_stamp(blocks: List) -> Optional[Dict]:
     """Найти данные штампа на странице (из блока с category_code='stamp')."""
     for block in blocks:
         if getattr(block, "category_code", None) == "stamp":
-            stamp_data = parse_stamp_json(block.ocr_text)
+            stamp_data = parse_ocr_json(block.ocr_text)
             if stamp_data:
                 return stamp_data
     return None
@@ -308,12 +308,16 @@ def extract_image_ocr_data(data: dict) -> Dict[str, Any]:
 
     result = {}
 
+    # Тип фрагмента
+    result["fragment_type"] = data.get("fragment_type", "")
+
     # Локация
     location = data.get("location")
     if location:
         if isinstance(location, dict):
             result["zone_name"] = location.get("zone_name", "")
             result["grid_lines"] = location.get("grid_lines", "")
+            result["level_or_elevation"] = location.get("level_or_elevation", "")
         else:
             result["location_text"] = str(location)
 
@@ -321,17 +325,10 @@ def extract_image_ocr_data(data: dict) -> Dict[str, Any]:
     result["content_summary"] = data.get("content_summary", "")
     result["detailed_description"] = data.get("detailed_description", "")
 
-    # Распознанный текст - нормализуем
-    clean_ocr = data.get("clean_ocr_text", "")
-    if clean_ocr:
-        clean_ocr = re.sub(r"•\s*", "", clean_ocr)
-        clean_ocr = re.sub(r"\s+", " ", clean_ocr).strip()
-    result["clean_ocr_text"] = clean_ocr
-
     # Ключевые сущности
     key_entities = data.get("key_entities", [])
     if isinstance(key_entities, list):
-        result["key_entities"] = key_entities[:20]  # Максимум 20
+        result["key_entities"] = key_entities[:100]
     else:
         result["key_entities"] = []
 
@@ -344,7 +341,7 @@ def is_image_ocr_json(data: dict) -> bool:
         return False
 
     # Проверяем характерные поля
-    image_fields = ["content_summary", "detailed_description", "clean_ocr_text"]
+    image_fields = ["content_summary", "detailed_description", "fragment_type"]
     return any(
         key in data or (data.get("analysis") and key in data["analysis"])
         for key in image_fields
@@ -396,8 +393,8 @@ def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
     if revisions:
         if isinstance(revisions, list) and revisions:
             last_rev = revisions[-1] if revisions else {}
-            rev_num = last_rev.get("revision_number", "")
-            doc_num = last_rev.get("document_number", "")
+            rev_num = last_rev.get("change_num") or last_rev.get("revision_number", "")
+            doc_num = last_rev.get("doc_num") or last_rev.get("document_number", "")
             rev_date = last_rev.get("date", "")
             if rev_num or doc_num:
                 rev_str = f"Изм. {rev_num}"
@@ -418,7 +415,7 @@ def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
             for sig in signatures:
                 if isinstance(sig, dict):
                     role = sig.get("role", "")
-                    name = sig.get("name", "")
+                    name = sig.get("surname") or sig.get("name", "")
                     if role and name:
                         sig_parts.append(f"{role}: {name}")
                 elif isinstance(sig, str):

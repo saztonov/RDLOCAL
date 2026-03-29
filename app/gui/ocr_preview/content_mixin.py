@@ -176,6 +176,10 @@ class ContentMixin:
         """Форматировать ocr_json в HTML."""
         parts = []
 
+        # Тип фрагмента
+        if ocr_json.get("fragment_type"):
+            parts.append(f"<p><b>Тип фрагмента:</b> {ocr_json['fragment_type']}</p>")
+
         # Описание
         if ocr_json.get("content_summary"):
             parts.append(f"<p><b>Описание:</b> {ocr_json['content_summary']}</p>")
@@ -188,17 +192,17 @@ class ContentMixin:
         if loc:
             zone = loc.get("zone_name", "—")
             grid = loc.get("grid_lines", "—")
-            parts.append(f"<p><b>Зона:</b> {zone} | <b>Оси:</b> {grid}</p>")
+            level = loc.get("level_or_elevation", "")
+            loc_str = f"<b>Зона:</b> {zone} | <b>Оси:</b> {grid}"
+            if level:
+                loc_str += f" | <b>Отм.:</b> {level}"
+            parts.append(f"<p>{loc_str}</p>")
 
         # Ключевые сущности
         entities = ocr_json.get("key_entities", [])
         if entities:
-            entities_str = ", ".join(str(e) for e in entities[:15])
+            entities_str = ", ".join(str(e) for e in entities[:50])
             parts.append(f"<p><b>Сущности:</b> {entities_str}</p>")
-
-        # Чистый OCR текст
-        if ocr_json.get("clean_ocr_text"):
-            parts.append(f"<pre>{ocr_json['clean_ocr_text']}</pre>")
 
         # Если ничего не распознали — показываем JSON как есть
         if not parts:
