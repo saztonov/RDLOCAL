@@ -6,6 +6,7 @@ import pytest
 from rd_core.ocr.generator_common import (
     extract_image_ocr_data,
     format_stamp_parts,
+    has_latin_axis_lookalikes,
     is_image_ocr_json,
     parse_ocr_json,
 )
@@ -49,6 +50,7 @@ class TestExtractImageOcrData:
             },
             "content_summary": "Фрагмент однолинейной схемы ВРУ",
             "detailed_description": "Видны автоматы QF1-QF5...",
+            "verification_recommendations": "Стоит проверить номиналы автоматов",
             "key_entities": ["QF1", "QF2", "ВРУ-1"],
         }
         result = extract_image_ocr_data(data)
@@ -58,7 +60,14 @@ class TestExtractImageOcrData:
         assert result["level_or_elevation"] == "-3.600"
         assert result["content_summary"] == "Фрагмент однолинейной схемы ВРУ"
         assert result["detailed_description"] == "Видны автоматы QF1-QF5..."
+        assert result["verification_recommendations"] == "Стоит проверить номиналы автоматов"
         assert result["key_entities"] == ["QF1", "QF2", "ВРУ-1"]
+
+    def test_verification_recommendations_default(self):
+        """Старые JSON без verification_recommendations → пустая строка."""
+        data = {"fragment_type": "План", "content_summary": "тест"}
+        result = extract_image_ocr_data(data)
+        assert result["verification_recommendations"] == ""
 
     def test_no_clean_ocr_text(self):
         """clean_ocr_text удалён из контракта."""
@@ -195,3 +204,32 @@ class TestFormatStampParts:
         assert parts_dict["Объект"] == "ЖК Альфа"
         assert parts_dict["Наименование"] == "План освещения"
         assert parts_dict["Организация"] == "ООО Проект"
+
+
+# ---------------------------------------------------------------------------
+# has_latin_axis_lookalikes — детектирование латинских lookalike-символов
+# ---------------------------------------------------------------------------
+class TestHasLatinAxisLookalikes:
+    def test_cyrillic_axes_ok(self):
+        assert has_latin_axis_lookalikes("А-1, Б-2, В-3") is False
+
+    def test_latin_lookalike_detected(self):
+        # A (Latin) instead of А (Cyrillic)
+        assert has_latin_axis_lookalikes("A-1, B-2") is True
+
+    def test_empty_string(self):
+        assert has_latin_axis_lookalikes("") is False
+
+    def test_none(self):
+        assert has_latin_axis_lookalikes(None) is False
+
+    def test_mixed_latin_in_word_not_detected(self):
+        # "QF1" — полноценное латинское слово, не одиночная буква-lookalike
+        assert has_latin_axis_lookalikes("QF1, QF2") is False
+
+    def test_single_latin_H_detected(self):
+        # H (Latin) looks like Н (Cyrillic)
+        assert has_latin_axis_lookalikes("H - 3") is True
+
+    def test_digits_only_ok(self):
+        assert has_latin_axis_lookalikes("1, 2, 3") is False

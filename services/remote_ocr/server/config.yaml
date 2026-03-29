@@ -39,8 +39,8 @@ ocr_request_timeout: 480
 # ===== PHASE CONCURRENCY (per block type) =====
 # Параллельных запросов для TEXT фазы (Chandra)
 text_max_concurrent: 3
-# Параллельных запросов для STAMP фазы (Qwen 9b)
-stamp_max_concurrent: 2
+# Параллельных запросов для STAMP фазы (Qwen 9b — быстрая модель)
+stamp_max_concurrent: 4
 # Параллельных запросов для IMAGE фазы (Qwen 27b)
 image_max_concurrent: 2
 
@@ -106,7 +106,7 @@ stamp_http_timeout: 60
 # Ключ модели в LM Studio
 stamp_model_key: "qwen/qwen3.5-9b"
 # Конфигурация загрузки модели
-stamp_context_length: 8000
+stamp_context_length: 8192
 stamp_flash_attention: true
 stamp_eval_batch_size: 1024
 stamp_offload_kv_cache: true
@@ -118,7 +118,7 @@ stamp_preload_timeout: 60
 stamp_max_retries: 3
 stamp_retry_delays: [30, 60, 120]
 # Inference параметры
-stamp_max_tokens: 4096
+stamp_max_tokens: 1024
 stamp_temperature: 0.1
 stamp_top_p: 0.95
 stamp_top_k: 40
@@ -215,10 +215,11 @@ image_system_prompt: |
   - Extract the maximum reliable information from this exact image fragment.
   - Do not guess missing, cropped, blurred, hidden, partially visible, or ambiguous characters, words, numbers, codes, dimensions, stages, elevations, formulas, coefficients, indices, position numbers, device ratings, or calculated parameters.
   - Preserve visible technical text exactly as shown: Russian, Latin, digits, punctuation, units and designations including Ø, DN, mm², mm³, m, m², m³, м, м², м³, м2, м3, м.п., шт., тн, т, кг, г, л, кВт, Вт, МВт, кВА, В, кВ, А, кА, мА, Гц, Па, кПа, МПа, °C, cos φ, Wh, kWh, PE, PEN, N, L1/L2/L3, QF, QS, KM, TA, FU, XT, HL, SB, KV, РЕ, N, L, АПС, СОУЭ, СКС, ЭОМ, ОВ, ВК, and other standard Russian and English designations found in construction documentation.
+  - Coordinate axis labels in Russian construction documentation use Cyrillic letters (А, Б, В, Г, Д, Е, Ж, И, К, Л, М, Н) and Arabic numerals. Always output axis labels using Cyrillic, never replace Cyrillic with visually similar Latin characters (А≠A, В≠B, С≠C, Н≠H, К≠K, М≠M, Р≠P, Т≠T, Х≠X). This applies to grid_lines, key_entities, and all axis references in descriptions.
   - Do not translate, normalize, expand abbreviations, or correct spelling.
   - Do not merge text across crop boundaries unless the connection is visually obvious within this exact fragment.
   - If part of the fragment is illegible, skip the illegible part instead of guessing.
-  - Separate observed facts from verification recommendations.
+  - Separate observed facts from verification recommendations. All verification items go into verification_recommendations, not into detailed_description.
   - Do not fabricate hidden intent, hidden connections, technical solutions not shown, or errors not confirmed by the image.
   - Return exactly one JSON object. No Markdown. No explanations. No wrapper. No additional text.
 
@@ -229,6 +230,7 @@ image_system_prompt: |
   - location.level_or_elevation = "Не определено"
   - content_summary = ""
   - detailed_description = ""
+  - verification_recommendations = ""
   - key_entities = []
 
   JSON schema:
@@ -241,6 +243,7 @@ image_system_prompt: |
     },
     "content_summary": "string",
     "detailed_description": "string",
+    "verification_recommendations": "string",
     "key_entities": ["string"]
   }
 
@@ -251,14 +254,11 @@ image_system_prompt: |
   - location.level_or_elevation: only visible level, floor, elevation mark, or height values from this fragment.
   - content_summary: 1-3 factual sentences in Russian briefly explaining what this image fragment contains.
   - detailed_description:
-    Write a very detailed description in Russian of everything visible in the image.
-    No sentence count limit.
+    Write a very detailed factual description in Russian of everything visible in the image.
+    No sentence count limit. Do NOT include verification recommendations here — they go into verification_recommendations.
     The main goal is to describe in maximum detail what exactly is shown in the image.
     Describe the fragment composition, main groups of elements, symbols, devices, lines, connections, arrows, callouts, hatching, labels, technical values, tables, formulas, notes, graphical elements, and visible relationships between elements.
     If the image relates to multiple types simultaneously, describe each visually distinct content type separately and sequentially, without mixing graphical parts, text parts, tables, schematics, formulas, and title block sections.
-    Also indicate what exactly should be carefully checked when looking for errors in this image, but formulate such items only as verification recommendations, not as statements of error presence.
-    Use formulations like: "Стоит проверить ...", "Следует обратить внимание ...", "Важно сопоставить ...", "Нужно проверить соответствие ...".
-    Recommend only those checks that are logically justified by what is actually visible in the image.
 
     For floor plans or architectural plans: separately describe coordinate axes, rooms and their names, room boundaries, walls, partitions, openings, doors, windows, stairs, elevator shafts, shafts, dimensions, elevations, callouts, symbols, and other visible architectural elements.
     For engineering network plans: separately describe network routes, routing directions, risers, branches, connection points, pipe/cable/duct/tray marks, diameters, cross-sections, slopes, elevations, fittings, equipment, intersections, axis references, and other visible technical elements.
@@ -276,7 +276,13 @@ image_system_prompt: |
     For formulas, calculations, or mathematical expressions: separately describe visible variables, coefficients, indices, exponents, fractions, operation signs, equalities, inequalities, quantity references, value substitutions, intermediate calculations, final results, units, and other visible mathematical or calculated elements.
     For general data sheets: separately describe visible notes, general instructions, normative document references, symbols, technical requirements, tables, lists, and other visible text and tabular elements.
     For title blocks or revision tables: separately describe stamp type, cell layout, document code, project name, sheet name, stage, sheet number, total sheets, organization, signatures, dates, revisions, and other visible requisites.
-    For any image type: describe in detail what is visible, how elements relate to each other, what labels and technical parameters are readable, and what deserves attention when checking this fragment for errors, inconsistencies, omissions, clashes, and coordination risks, without fabricating what is not in the image.
+    For any image type: describe in detail what is visible, how elements relate to each other, what labels and technical parameters are readable, without fabricating what is not in the image.
+  - verification_recommendations:
+    Write in Russian what should be carefully checked when reviewing this fragment for possible design, calculation, coordination, or formatting errors.
+    Use formulations: "Стоит проверить ...", "Следует обратить внимание ...", "Важно сопоставить ...", "Нужно проверить соответствие ...".
+    Only recommend checks that are logically justified by what is actually visible in the image.
+    Do not state errors as fact — only recommend verification.
+    If no checks are warranted, return an empty string.
   - key_entities:
     List up to 100 unique visible entities only from this fragment.
     Include exact visible designations, panel names, equipment marks, cable marks, circuit breaker designations, current values, power values, short-circuit currents, room names, axes, elevations, dimensions, formulas, coefficients, specification positions, document codes, and other short technical identifiers exactly as shown in the image.
@@ -297,61 +303,30 @@ image_user_prompt: |
   4) If any labels, values, formulas, or inscriptions are placed vertically or rotated, mentally rotate them and read in the correct orientation before extracting.
   5) This is especially important for single-line electrical diagrams, engineering schematics, vertical labels of outgoing lines, cable marks, tables, formulas, and technical notes.
   6) Write content_summary.
-  7) Write detailed_description with no sentence count limit:
-     - first, describe in detail what is shown in the image;
-     - then explain the visible structure and relationships between elements;
-     - then indicate what deserves special attention when checking this fragment for possible design, calculation, coordination, or formatting errors.
-  8) Extract key_entities with the most important readable designations, labels, markings, dimensions, formulas, values, and technical identifiers.
-  9) Do not guess illegible fragments.
-  10) Do not use neighboring fragments, document memory, or standard solutions to fabricate missing content.
+  7) Write detailed_description: factual description only, no verification recommendations.
+  8) Write verification_recommendations: separately list what should be checked for errors.
+  9) Extract key_entities with the most important readable designations, labels, markings, dimensions, formulas, values, and technical identifiers.
+  10) Do not guess illegible fragments.
+  11) Do not use neighboring fragments, document memory, or standard solutions to fabricate missing content.
+  12) Axis labels must use Cyrillic (А, Б, В, Г...), never Latin lookalikes (A, B, C...).
 
   Return exactly one JSON object matching the system schema.
 
 # -- STAMP blocks --
 stamp_system_prompt: |
-  You extract structured fields from one title block (основная надпись / штамп) of Russian construction project documentation.
-  Accuracy of structured fields is more important than prose. Field-level precision is critical.
-
-  Evidence priority:
-  1) Image only: cell boundaries, row alignment, printed text, handwriting, signatures, handwritten dates, revision marks.
-
-  Mandatory rule for reading rotated text:
-  - If any text in the stamp is rotated, placed vertically, or at an angle, mentally rotate it and read in the correct orientation before mapping to fields.
-  - Title blocks may contain vertical text in narrow cells, rotated dates, or angled signatures.
-
-  Rules:
-  - Preserve text exactly as written: Russian, Latin, digits, symbols, punctuation.
-  - Do not translate, normalize, expand abbreviations, or correct spelling.
-  - Do not guess document codes, sheet numbers, surnames, dates, total sheets, or revisions.
-  - Use null for any field that is missing, cropped, hidden, illegible, or ambiguous.
-  - Carefully distinguish between printed and handwritten content — both are valid sources.
-  - Pay attention to cell boundaries to correctly assign text to the right field (e.g., do not confuse project_name with sheet_name).
-  - For signatures: extract role from the left column, surname from the middle, date from the right. If a cell is empty or contains only a signature mark without readable text, use null.
-  - For revisions: extract change number, document number, and date from the revision table rows. Only include rows that have at least one non-empty visible field.
-  - Return exactly one JSON object. No Markdown. No explanations. No wrapper.
+  Extract structured fields from a Russian construction title block (штамп).
+  Return exactly one JSON object. No Markdown, no explanations, no wrapper, no reasoning.
 
   JSON schema:
-  {
-    "document_code": "string|null",
-    "project_name": "string|null",
-    "sheet_name": "string|null",
-    "stage": "string|null",
-    "sheet_number": "string|null",
-    "total_sheets": "string|null",
-    "organization": "string|null",
-    "signatures": [{"role": "string|null", "surname": "string|null", "date": "string|null"}],
-    "revisions": [{"change_num": "string|null", "doc_num": "string|null", "date": "string|null"}]
-  }
+  {"document_code":"string|null","project_name":"string|null","sheet_name":"string|null","stage":"string|null","sheet_number":"string|null","total_sheets":"string|null","organization":"string|null","signatures":[{"role":"string|null","surname":"string|null","date":"string|null"}],"revisions":[{"change_num":"string|null","doc_num":"string|null","date":"string|null"}]}
 
-  Field rules:
-  - document_code: exact printed or handwritten code (e.g., "01-2345-АР", "ЭОМ-01"). No correction beyond obvious character disambiguation.
-  - project_name: exact project/object name as written in the stamp.
-  - sheet_name: exact sheet/drawing name as written (наименование чертежа).
-  - organization: exact organization name as written.
-  - stage: exact visible stage mark (П, Р, РД, И), only if visible. Do not infer from document code.
-  - sheet_number / total_sheets: keep as strings exactly as shown (e.g., "3", "15", "3а").
-  - signatures: include only visible rows with at least one readable field. Use "surname" key for the person's name.
-  - revisions: include only visible revision entries. Use "change_num" for the change/revision number, "doc_num" for the associated document number.
+  Rules:
+  - Preserve text exactly: Russian, Latin, digits, symbols. No translation, no normalization.
+  - Use null for missing, cropped, illegible, or ambiguous fields.
+  - Rotate text mentally if vertical or angled. Read printed and handwritten content.
+  - Use cell boundaries to assign text to the correct field.
+  - signatures: only rows with at least one readable field (role, surname, date).
+  - revisions: only rows with at least one non-empty field (change_num, doc_num, date).
 
 stamp_user_prompt: |
   <context>
@@ -360,16 +335,6 @@ stamp_user_prompt: |
   BLOCK_ID: {BLOCK_ID}
   </context>
 
-  Analyze the attached image of one construction title block (штамп / основная надпись).
-
-  Mandatory actions:
-  1) Identify cell boundaries and row structure of the stamp.
-  2) Map visible stamp content to the JSON fields using cell position as the primary guide.
-  3) Read all text — printed and handwritten — in its correct orientation (rotate mentally if needed).
-  4) Extract handwritten surnames and dates only if they are legible.
-  5) If a field is cropped, hidden, partially visible, or ambiguous, return null for that field.
-  6) For signatures: extract role, surname, and date from their respective columns.
-  7) For revisions: extract change_num, doc_num, and date from revision table rows.
-  8) Do not guess content that is not clearly visible in the image.
-
-  Return exactly one JSON object matching the system schema.
+  Extract stamp fields from this title block image into JSON.
+  Read all text in correct orientation. Use null for illegible/missing fields.
+  Return exactly one JSON object matching the schema.

@@ -96,10 +96,29 @@ def parse_ocr_json(ocr_text: Optional[str]) -> Optional[Dict]:
     return None
 
 
+def is_stamp_block(block_or_dict) -> bool:
+    """Проверка штампа: поддерживает и Block-объекты, и dict.
+
+    Проверяет block_type == "stamp" / BlockType.STAMP
+    и category_code == "stamp" (legacy формат).
+    """
+    if isinstance(block_or_dict, dict):
+        return (
+            block_or_dict.get("block_type") == "stamp"
+            or block_or_dict.get("category_code") == "stamp"
+        )
+    from rd_core.models.enums import BlockType
+
+    return (
+        getattr(block_or_dict, "block_type", None) == BlockType.STAMP
+        or getattr(block_or_dict, "category_code", None) == "stamp"
+    )
+
+
 def find_page_stamp(blocks: List) -> Optional[Dict]:
-    """Найти данные штампа на странице (из блока с category_code='stamp')."""
+    """Найти данные штампа на странице (из блока-штампа)."""
     for block in blocks:
-        if getattr(block, "category_code", None) == "stamp":
+        if is_stamp_block(block):
             stamp_data = parse_ocr_json(block.ocr_text)
             if stamp_data:
                 return stamp_data
@@ -324,6 +343,7 @@ def extract_image_ocr_data(data: dict) -> Dict[str, Any]:
     # Описания
     result["content_summary"] = data.get("content_summary", "")
     result["detailed_description"] = data.get("detailed_description", "")
+    result["verification_recommendations"] = data.get("verification_recommendations", "")
 
     # Ключевые сущности
     key_entities = data.get("key_entities", [])
@@ -346,6 +366,30 @@ def is_image_ocr_json(data: dict) -> bool:
         key in data or (data.get("analysis") and key in data["analysis"])
         for key in image_fields
     )
+
+
+# Латинские символы, визуально похожие на кириллические обозначения осей
+_LATIN_AXIS_LOOKALIKES = set("ABCEHKMPТX")
+
+
+def has_latin_axis_lookalikes(text: str) -> bool:
+    """Проверить, содержит ли текст латинские lookalike-символы вместо кириллицы.
+
+    Используется для проверки grid_lines / key_entities.
+    Если обнаружены одиночные латинские буквы, похожие на кириллические
+    обозначения осей (A вместо А, B вместо Б, C вместо С, ...) — сигнал
+    для retry с усиленным anti-transliteration промтом.
+    """
+    if not text:
+        return False
+    # Ищем одиночные латинские буквы-двойники: A, B, C, H, K, M, P, T, X
+    # Контекст: оси записываются как "А-1", "Б/2", "A - B" и т.п.
+    import re
+    # Одиночная латинская буква (не часть слова), которая является lookalike
+    for match in re.finditer(r'(?<![a-zA-Zа-яА-ЯёЁ])([A-Z])(?![a-zA-Zа-яА-ЯёЁ])', text):
+        if match.group(1) in _LATIN_AXIS_LOOKALIKES:
+            return True
+    return False
 
 
 def is_qwen_ocr_json(data: dict) -> bool:
@@ -436,7 +480,7 @@ def format_stamp_parts(stamp_data: Dict) -> List[tuple]:
 def find_page_stamp_dict(page: Dict) -> Optional[Dict]:
     """Найти JSON штампа на странице (для dict структуры)."""
     for blk in page.get("blocks", []):
-        if blk.get("block_type") == "image" and blk.get("category_code") == "stamp":
+        if is_stamp_block(blk):
             return blk.get("ocr_json")
     return None
 

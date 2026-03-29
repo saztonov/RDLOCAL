@@ -11,7 +11,7 @@ from PIL import Image
 
 from ..logging_config import get_logger
 from ..manifest_models import CropManifestEntry
-from ..ocr_constants import make_error
+from ..ocr_constants import is_error, make_error
 from .pass2_shared import (
     CANCELLED_SENTINEL,
     Pass2Context,
@@ -156,6 +156,17 @@ async def _process_one_block(
             if not should_retry_ocr(text, f"block {entry.block_id}", attempt, _max_retries):
                 break
 
+        # Anti-transliteration: одноразовый retry для image блоков
+        if (
+            text
+            and text is not CANCELLED_SENTINEL
+            and entry.block_type == "image"
+            and not is_error(text)
+        ):
+            text = await _check_axis_transliteration(
+                text, entry, block, ctx, backend, prompt_data, use_pdf, cancel_event,
+            )
+
         # Сохраняем результат (под lock для безопасности при параллелизме)
         if text and text is not CANCELLED_SENTINEL:
             async with ctx.processed_lock:
@@ -197,6 +208,85 @@ async def _process_one_block(
         await ctx.update_progress(f"{entry.block_type.capitalize()} (error)")
 
     gc.collect()
+
+
+async def _check_axis_transliteration(
+    text: str,
+    entry: CropManifestEntry,
+    block,
+    ctx: Pass2Context,
+    backend,
+    prompt_data,
+    use_pdf: bool,
+    cancel_event: asyncio.Event,
+) -> str:
+    """Проверить image OCR на латинские lookalike-символы в осях.
+
+    Если обнаружены (A вместо А, B вместо Б, ...) — выполняет один retry
+    с усиленным anti-transliteration указанием.
+    """
+    import json as json_module
+
+    from rd_core.ocr.generator_common import has_latin_axis_lookalikes, parse_ocr_json
+
+    parsed = parse_ocr_json(text)
+    if not parsed:
+        return text
+
+    grid_lines = ""
+    loc = parsed.get("location")
+    if isinstance(loc, dict):
+        grid_lines = loc.get("grid_lines", "")
+
+    entities_str = " ".join(str(e) for e in (parsed.get("key_entities") or []))
+
+    if not has_latin_axis_lookalikes(grid_lines) and not has_latin_axis_lookalikes(entities_str):
+        return text
+
+    logger.warning(
+        f"PASS2: {entry.block_id} обнаружены латинские lookalike-символы в осях, retry"
+    )
+
+    # Усиленный retry с добавлением anti-transliteration инструкции
+    enhanced_prompt = None
+    if prompt_data and isinstance(prompt_data, dict):
+        enhanced_prompt = dict(prompt_data)
+        suffix = (
+            "\n\nCRITICAL: The previous attempt used Latin letters for axis labels. "
+            "Russian construction axes MUST use Cyrillic: А (not A), Б (not B), В (not V), "
+            "Г, Д, Е, Ж, И, К (not K), Л, М (not M), Н (not H), П, Р (not P), С (not C), "
+            "Т (not T), У, Ф, Х (not X). Fix all axis labels to Cyrillic."
+        )
+        enhanced_prompt["user"] = enhanced_prompt.get("user", "") + suffix
+
+    if cancel_event.is_set() or ctx.is_paused():
+        return text
+
+    if not await ctx.rate_limiter.acquire_async():
+        return text
+
+    try:
+        if use_pdf:
+            retry_text = await cancellable_recognize(
+                ctx, backend, None, enhanced_prompt or prompt_data, None, entry.pdf_crop_path,
+            )
+        else:
+            crop = await asyncio.to_thread(Image.open, entry.crop_path)
+            try:
+                retry_text = await cancellable_recognize(
+                    ctx, backend, crop, enhanced_prompt or prompt_data,
+                )
+            finally:
+                crop.close()
+        if retry_text and retry_text is not CANCELLED_SENTINEL and not is_error(retry_text):
+            logger.info(f"PASS2: {entry.block_id} anti-transliteration retry успешен")
+            return retry_text
+    except Exception as e:
+        logger.warning(f"PASS2: {entry.block_id} anti-transliteration retry ошибка: {e}")
+    finally:
+        await ctx.rate_limiter.release_async()
+
+    return text
 
 
 async def run_blocks_phase(

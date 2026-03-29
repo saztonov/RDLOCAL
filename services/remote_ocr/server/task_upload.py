@@ -39,7 +39,7 @@ def _load_blocks_metadata(work_dir: Path) -> tuple:
                 block_type = blk.get("block_type", "")
 
                 # Собираем ID штампов
-                if block_type == "image" and blk.get("category_code") == "stamp":
+                if block_type == "stamp" or (block_type == "image" and blk.get("category_code") == "stamp"):
                     stamp_ids.add(block_id)
 
                 # Собираем метаданные для всех блоков
@@ -159,7 +159,8 @@ def copy_crops_to_final(work_dir: Path, blocks) -> None:
     blocks_by_id = {b.id: b for b in blocks}
 
     # ID блоков-штампов для исключения
-    stamp_ids = {b.id for b in blocks if getattr(b, "category_code", None) == "stamp"}
+    from rd_core.ocr.generator_common import is_stamp_block
+    stamp_ids = {b.id for b in blocks if is_stamp_block(b)}
 
     for pdf_file in images_subdir.glob("*.pdf"):
         try:

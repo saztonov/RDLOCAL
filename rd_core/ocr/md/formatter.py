@@ -57,6 +57,10 @@ def format_image_ocr_md(data: dict) -> str:
     if img_data.get("detailed_description"):
         parts.append(f"**Описание:** {img_data['detailed_description']}")
 
+    # Рекомендации по верификации
+    if img_data.get("verification_recommendations"):
+        parts.append(f"**Что стоит проверить:** {img_data['verification_recommendations']}")
+
     # Ключевые сущности - через запятую, без backticks
     if img_data.get("key_entities"):
         entities = ", ".join(img_data["key_entities"])

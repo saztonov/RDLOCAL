@@ -8,17 +8,14 @@ from typing import Any, Dict, List
 
 from .generator_common import (
     HTML_FOOTER,
-    INHERITABLE_STAMP_FIELDS,
-    collect_inheritable_stamp_data,
     contains_html,
     extract_image_ocr_data,
     extract_qwen_html,
-    find_page_stamp,
-    format_stamp_parts,
     get_block_armor_id,
     get_html_header,
     is_image_ocr_json,
     is_qwen_ocr_json,
+    is_stamp_block,
     sanitize_html,
     strip_code_fence,
 )
@@ -123,6 +120,10 @@ def _format_image_ocr_html(data: dict) -> str:
     # Детальное описание
     if img_data.get("detailed_description"):
         parts.append(f"<p><b>Описание:</b> {_escape_html(img_data['detailed_description'])}</p>")
+
+    # Рекомендации по верификации
+    if img_data.get("verification_recommendations"):
+        parts.append(f"<p><b>Что стоит проверить:</b> {_escape_html(img_data['verification_recommendations'])}</p>")
 
     # Ключевые сущности - через запятую
     if img_data.get("key_entities"):
@@ -276,38 +277,14 @@ def generate_html_from_pages(
         # Используем общий HTML шаблон
         html_parts = [get_html_header(title)]
 
-        # Собираем общие данные штампа для страниц без штампа
-        inherited_stamp_data = collect_inheritable_stamp_data(pages)
-        inherited_stamp_html = (
-            _format_inherited_stamp_html(inherited_stamp_data)
-            if inherited_stamp_data
-            else ""
-        )
-
         total_blocks = sum(len(p.blocks) for p in pages)
         excluded_stamp = 0
         block_count = 0
 
         for page in pages:
-            # Находим данные штампа для этой страницы
-            page_stamp = find_page_stamp(page.blocks)
-            if page_stamp:
-                # Мержим с inherited: заполняем пустые поля из унаследованных
-                merged_stamp = dict(page_stamp)
-                if inherited_stamp_data:
-                    for field in INHERITABLE_STAMP_FIELDS:
-                        if not merged_stamp.get(field):
-                            if inherited_stamp_data.get(field):
-                                merged_stamp[field] = inherited_stamp_data[field]
-                stamp_html = _format_stamp_html(merged_stamp)
-            elif inherited_stamp_data:
-                stamp_html = inherited_stamp_html
-            else:
-                stamp_html = ""
-
             for idx, block in enumerate(page.blocks):
                 # Пропускаем блоки штампа
-                if getattr(block, "category_code", None) == "stamp":
+                if is_stamp_block(block):
                     excluded_stamp += 1
                     continue
 
@@ -335,10 +312,6 @@ def generate_html_from_pages(
                 created_at = getattr(block, "created_at", None)
                 if created_at:
                     html_parts.append(f"<p><b>Created:</b> {created_at}</p>")
-
-                # Информация о штампе
-                if stamp_html:
-                    html_parts.append(stamp_html)
 
                 # Для IMAGE блоков добавляем ссылку на изображение
                 if block.block_type == BlockType.IMAGE and block.image_file:

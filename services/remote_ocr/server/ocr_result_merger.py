@@ -12,6 +12,7 @@ from rd_core.ocr.generator_common import (
     format_stamp_parts,
     get_block_armor_id,
     get_html_header,
+    is_stamp_block,
     parse_ocr_json,
     propagate_stamp_data,
     sanitize_html,
@@ -107,7 +108,7 @@ def enrich_annotation_dict(
                     blk["ocr_json"] = parsed_json
 
                 # Добавляем ссылку на кроп (кроме штампов)
-                if blk.get("category_code") != "stamp":
+                if not is_stamp_block(blk):
                     if project_name:
                         blk["crop_url"] = _build_crop_url(
                             bid, r2_public_url, project_name
@@ -117,7 +118,7 @@ def enrich_annotation_dict(
                         blk["crop_url"] = f"{r2_public_url}/crops/{crop_name}"
 
             # Stamp-блоки хранят данные в ocr_json, не в ocr_html
-            if blk.get("category_code") == "stamp":
+            if is_stamp_block(blk):
                 continue
             if blk["ocr_html"]:
                 matched += 1
@@ -179,18 +180,17 @@ def regenerate_html_from_result(
 
         for idx, blk in enumerate(page.get("blocks", [])):
             # Пропускаем блоки штампа
-            if blk.get("category_code") == "stamp":
+            if is_stamp_block(blk):
                 excluded_stamp += 1
                 continue
 
             block_id = blk.get("id", "")
             block_type = blk.get("block_type", "text")
             ocr_html = blk.get("ocr_html", "")
-            stamp_data = blk.get("stamp_data")
             created_at = blk.get("created_at")
 
             # Блок отображается если есть контент ИЛИ метаданные
-            if not ocr_html and not stamp_data and not created_at:
+            if not ocr_html and not created_at:
                 continue
 
             block_count += 1
@@ -211,15 +211,6 @@ def regenerate_html_from_result(
             # Created - в шапку
             if created_at:
                 html_parts.append(f"<p><b>Created:</b> {created_at}</p>")
-
-            # Stamp info - в шапку
-            if stamp_data:
-                parts = format_stamp_parts(stamp_data)
-                if parts:
-                    stamp_html_parts = [f"<b>{key}:</b> {value}" for key, value in parts]
-                    html_parts.append(
-                        '<div class="stamp-info">' + " | ".join(stamp_html_parts) + "</div>"
-                    )
 
             # Для IMAGE блоков добавляем ссылку на кроп
             if block_type == "image" and blk.get("crop_url"):

@@ -115,14 +115,21 @@ def run_local_ocr(
 
         # ── Create backends ──────────────────────────────────────
         from rd_core.ocr import create_ocr_engine
+        from services.remote_ocr.server.backend_factory import (
+            _build_chandra_config,
+            _build_qwen_config,
+            _build_stamp_config,
+        )
+        from services.remote_ocr.server.settings import settings
 
-        chandra_url = chandra_base_url or "http://localhost:1234"
-        qwen_url = qwen_base_url or chandra_url
+        chandra_url = chandra_base_url or settings.chandra_base_url or "http://localhost:1234"
+        qwen_url = qwen_base_url or settings.qwen_base_url or chandra_url
 
         text_backend = create_ocr_engine(
             "chandra",
             base_url=chandra_url,
-            http_timeout=chandra_http_timeout,
+            http_timeout=settings.chandra_http_timeout,
+            model_config=_build_chandra_config(),
         )
         try:
             text_backend.preload()
@@ -132,12 +139,14 @@ def run_local_ocr(
         image_backend = create_ocr_engine(
             "qwen",
             base_url=qwen_url,
-            http_timeout=qwen_http_timeout,
+            http_timeout=settings.qwen_http_timeout,
+            model_config=_build_qwen_config(),
         )
         stamp_backend = create_ocr_engine(
             "qwen",
             base_url=qwen_url,
-            http_timeout=qwen_http_timeout,
+            http_timeout=settings.stamp_http_timeout,
+            model_config=_build_stamp_config(),
         )
 
         # Deadline для бэкендов
@@ -237,13 +246,16 @@ def run_local_ocr(
             )
         )
 
-        if manifest:
-            cleanup_manifest_files(manifest)
-
         if _is_cancelled():
             return LocalOcrResult(status="error", error_message="Отменено")
 
-        _progress(0.9, "Распознавание завершено")
+        _progress(0.88, "Распознавание завершено")
+
+        # ── Копируем PDF кропы в crops_final (до cleanup) ──
+        from services.remote_ocr.server.task_upload import copy_crops_to_final
+        copy_crops_to_final(work_dir, blocks)
+
+        _progress(0.9, "Кропы подготовлены")
 
         # ── Выгрузить Qwen перед верификацией (чтобы Chandra не грузилась поверх) ──
         if image_backend and hasattr(image_backend, "unload_model"):
@@ -262,6 +274,10 @@ def run_local_ocr(
             deadline=deadline,
             node_id=node_id,
         )
+
+        # ── Очистка PNG кропов (PDF кропы в crops_final остаются для R2 upload) ──
+        if manifest:
+            cleanup_manifest_files(manifest)
 
         _progress(0.98, "Результаты сохранены")
 
@@ -415,17 +431,24 @@ def _generate_local_results(
     html_stats = None
     md_stats = None
 
+    # project_name для R2 ссылок: node_id (если есть), иначе None (без ссылок)
+    r2_project_name = node_id or None
+
     # HTML
     html_path = output_dir / f"{pdf_stem}_ocr.html"
     try:
-        _, html_stats = generate_html_from_pages(pages, str(html_path), doc_name=doc_name)
+        _, html_stats = generate_html_from_pages(
+            pages, str(html_path), doc_name=doc_name, project_name=r2_project_name
+        )
     except Exception as e:
         logger.warning(f"HTML generation error: {e}")
 
     # Markdown
     md_path = output_dir / f"{pdf_stem}_document.md"
     try:
-        _, md_stats = generate_md_from_pages(pages, str(md_path), doc_name=doc_name)
+        _, md_stats = generate_md_from_pages(
+            pages, str(md_path), doc_name=doc_name, project_name=r2_project_name
+        )
     except Exception as e:
         logger.warning(f"MD generation error: {e}")
 
@@ -444,7 +467,7 @@ def _generate_local_results(
             if html_path.exists():
                 with open(html_path, "r", encoding="utf-8") as f:
                     html_text = f.read()
-            enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name=doc_name)
+            enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name=r2_project_name)
 
             # Верификация и повторное распознавание пропущенных блоков
             enriched_dict = verify_and_retry_missing_blocks(
@@ -490,10 +513,12 @@ def _generate_local_results(
         logger.warning(f"Export report generation error: {e}")
 
     # Sync артефактов в tree_docs/{node_id} (если запуск с node_id)
-    _sync_results_to_tree(node_id, pdf_stem, output_dir)
+    _sync_results_to_tree(node_id, pdf_stem, output_dir, work_dir)
 
 
-def _sync_results_to_tree(node_id: str | None, pdf_stem: str, output_dir: Path) -> None:
+def _sync_results_to_tree(
+    node_id: str | None, pdf_stem: str, output_dir: Path, work_dir: Path | None = None,
+) -> None:
     """Загрузить свежие OCR-артефакты в R2 и обновить node_files."""
     if not node_id:
         return
@@ -526,6 +551,25 @@ def _sync_results_to_tree(node_id: str | None, pdf_stem: str, output_dir: Path) 
                 mime_type=mime,
             )
             invalidate_r2_cache(r2_key)
+
+        # Загрузка crop PDF в R2 (из crops_final)
+        crops_final = work_dir / "crops_final" if work_dir else None
+        if crops_final and crops_final.exists():
+            crop_count = 0
+            for crop_file in crops_final.glob("*.pdf"):
+                r2_key = f"{r2_prefix}/crops/{crop_file.name}"
+                r2.upload_file(str(crop_file), r2_key, content_type="application/pdf")
+                tc.upsert_node_file(
+                    node_id=node_id,
+                    file_type=FileType.CROP,
+                    r2_key=r2_key,
+                    file_name=crop_file.name,
+                    file_size=crop_file.stat().st_size,
+                    mime_type="application/pdf",
+                )
+                crop_count += 1
+            if crop_count:
+                logger.info(f"Uploaded {crop_count} crop PDFs to R2: {r2_prefix}/crops/")
 
         invalidate_r2_cache(f"{r2_prefix}/", prefix=True)
         logger.info(f"Synced OCR results to tree: node_id={node_id}")

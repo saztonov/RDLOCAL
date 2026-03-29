@@ -5,11 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..generator_common import (
-    collect_inheritable_stamp_data,
-    find_page_stamp,
     get_block_armor_id,
+    is_stamp_block,
 )
-from .formatter import format_stamp_md, process_ocr_content
+from .formatter import process_ocr_content
 from .html_converter import html_to_markdown
 from .link_collector import (
     collect_image_text_links_from_pages,
@@ -47,9 +46,6 @@ def generate_md_from_pages(
 
         title = doc_name or "OCR Result"
 
-        # Собираем данные штампа
-        inherited_stamp_data = collect_inheritable_stamp_data(pages)
-
         # Собираем связи IMAGE→TEXT для объединения
         image_to_text = collect_image_text_links_from_pages(pages)
 
@@ -68,13 +64,6 @@ def generate_md_from_pages(
         md_parts.append(f"# {title}")
         md_parts.append("")
         md_parts.append(f"Сгенерировано: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-
-        # Штамп документа
-        if inherited_stamp_data:
-            stamp_str = format_stamp_md(inherited_stamp_data)
-            if stamp_str:
-                md_parts.append(f"**Штамп:** {stamp_str}")
-
         md_parts.append("")
         md_parts.append("---")
         md_parts.append("")
@@ -90,9 +79,8 @@ def generate_md_from_pages(
             page_num = page.page_number + 1 if page.page_number is not None else 0
 
             # Проверяем есть ли блоки кроме штампов
-            non_stamp_blocks = [b for b in page.blocks if getattr(b, "category_code", None) != "stamp"]
+            non_stamp_blocks = [b for b in page.blocks if not is_stamp_block(b)]
             if not non_stamp_blocks:
-                # Считаем исключённые штампы даже на пропущенных страницах
                 excluded_stamp += len(page.blocks) - len(non_stamp_blocks)
                 continue
 
@@ -100,28 +88,11 @@ def generate_md_from_pages(
             if page_num != current_page_num:
                 current_page_num = page_num
                 md_parts.append(f"## СТРАНИЦА {page_num}")
-
-                # Добавляем информацию из штампа страницы (лист, наименование)
-                page_stamp = find_page_stamp(page.blocks)
-                if page_stamp:
-                    sheet_num = page_stamp.get("sheet_number", "")
-                    total_sheets = page_stamp.get("total_sheets", "")
-                    sheet_name = page_stamp.get("sheet_name", "")
-
-                    if sheet_num or total_sheets:
-                        if total_sheets:
-                            md_parts.append(f"**Лист:** {sheet_num} (из {total_sheets})")
-                        else:
-                            md_parts.append(f"**Лист:** {sheet_num}")
-
-                    if sheet_name:
-                        md_parts.append(f"**Наименование листа:** {sheet_name}")
-
                 md_parts.append("")
 
             for block in page.blocks:
                 # Пропускаем блоки штампа
-                if getattr(block, "category_code", None) == "stamp":
+                if is_stamp_block(block):
                     excluded_stamp += 1
                     continue
 
@@ -207,22 +178,6 @@ def generate_md_from_result(
     md_parts.append(f"# {doc_name}")
     md_parts.append("")
     md_parts.append(f"Сгенерировано: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-
-    # Собираем данные штампа из первого блока
-    first_stamp = None
-    for page in result.get("pages", []):
-        for blk in page.get("blocks", []):
-            if blk.get("stamp_data"):
-                first_stamp = blk["stamp_data"]
-                break
-        if first_stamp:
-            break
-
-    if first_stamp:
-        stamp_str = format_stamp_md(first_stamp)
-        if stamp_str:
-            md_parts.append(f"**Штамп:** {stamp_str}")
-
     md_parts.append("")
     md_parts.append("---")
     md_parts.append("")
@@ -255,7 +210,7 @@ def generate_md_from_result(
         page_num = page.get("page_number", 0)
 
         # Проверяем есть ли блоки кроме штампов
-        non_stamp_blocks = [b for b in page.get("blocks", []) if b.get("category_code") != "stamp"]
+        non_stamp_blocks = [b for b in page.get("blocks", []) if not is_stamp_block(b)]
         if not non_stamp_blocks:
             excluded_stamp += len(page.get("blocks", [])) - len(non_stamp_blocks)
             continue
@@ -264,33 +219,11 @@ def generate_md_from_result(
         if page_num != current_page_num:
             current_page_num = page_num
             md_parts.append(f"## СТРАНИЦА {page_num}")
-
-            # Ищем штамп на странице для получения информации о листе
-            page_stamp = None
-            for blk in page.get("blocks", []):
-                if blk.get("category_code") == "stamp":
-                    page_stamp = blk.get("stamp_data") or blk.get("ocr_json")
-                    break
-
-            if page_stamp:
-                sheet_num = page_stamp.get("sheet_number", "")
-                total_sheets = page_stamp.get("total_sheets", "")
-                sheet_name = page_stamp.get("sheet_name", "")
-
-                if sheet_num or total_sheets:
-                    if total_sheets:
-                        md_parts.append(f"**Лист:** {sheet_num} (из {total_sheets})")
-                    else:
-                        md_parts.append(f"**Лист:** {sheet_num}")
-
-                if sheet_name:
-                    md_parts.append(f"**Наименование листа:** {sheet_name}")
-
             md_parts.append("")
 
         for blk in page.get("blocks", []):
             # Пропускаем блоки штампа
-            if blk.get("category_code") == "stamp":
+            if is_stamp_block(blk):
                 excluded_stamp += 1
                 continue
 
