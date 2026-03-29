@@ -4,6 +4,8 @@
 1. filter_mixed_text_output — удаляет image-артефакты из Chandra TEXT блоков
    (модель fine-tuned с промптом, описывающим изображения, поэтому генерирует
    <img alt="..."> и описания картинок даже в TEXT блоках).
+   Также удаляет plain-text image-narrative (описания фотографий, рендеров,
+   печатей, подписей на английском языке).
 2. classify_text_output — определяет подозрительные результаты
    (layout-dump, JSON bbox/table-dump вместо HTML) для fallback retry.
    Делегирует shared helper is_suspicious_output() из rd_core.ocr_result.
@@ -31,11 +33,60 @@ _IMG_TAG_RE = re.compile(r'<img\b[^>]*/?\s*>', re.IGNORECASE)
 _MULTI_WHITESPACE_RE = re.compile(r'\n{3,}')
 _MULTI_SPACE_RE = re.compile(r'[ \t]{2,}')
 
+# Допустимые engine для фильтрации (Chandra через LM Studio или напрямую)
+_CHANDRA_ENGINES = {"chandra", "lmstudio"}
+
+# Ключевые слова image-narrative (английские описания фотографий/рендеров/печатей)
+_IMAGE_NARRATIVE_KEYWORDS = re.compile(
+    r'\b(?:rendering|illustration|photograph|showing|depicting|'
+    r'foreground|background|residential|architectural|aerial\s+view|'
+    r'perspective|round\s+seal|handwritten\s+signature|'
+    r'watercolor|sketch|drawing\s+of|image\s+of|photo\s+of|'
+    r'panoramic|bird.s.eye|facade|elevation\s+view)\b',
+    re.IGNORECASE,
+)
+
+# Блок латинского текста (30+ символов, 3+ слов) перед кириллицей или в конце строки
+_LATIN_BLOCK_RE = re.compile(
+    r'(?<![a-zA-Z])'                    # не часть большего Latin-слова
+    r'([A-Z][a-zA-Z,.\-\s]{29,}?)'     # 30+ Latin символов, начинается с заглавной
+    r'(?=[А-ЯЁа-яё]|\s*$|\s*<)',       # перед кириллицей, концом строки или тегом
+)
+
+
+def _strip_image_narrative(text: str) -> Tuple[str, int]:
+    """Удалить блоки английского текста, являющиеся описаниями изображений.
+
+    Ищет фрагменты латинского текста (30+ символов), содержащие ключевые слова
+    описаний фотографий/рендеров/печатей, и удаляет их.
+
+    Returns:
+        (cleaned_text, removed_count)
+    """
+    removed = 0
+
+    def _check_and_remove(match: re.Match) -> str:
+        nonlocal removed
+        segment = match.group(1)
+        if _IMAGE_NARRATIVE_KEYWORDS.search(segment):
+            removed += 1
+            preview = segment[:80].replace('\n', ' ')
+            logger.info(
+                f"filter_mixed_text: удалён image-narrative ({len(segment)} симв.): "
+                f"{preview!r}..."
+            )
+            return ''
+        return segment
+
+    result = _LATIN_BLOCK_RE.sub(_check_and_remove, text)
+    return result, removed
+
 
 def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
-    """Удалить image-артефакты из TEXT OCR результата Chandra.
+    """Удалить image-артефакты из TEXT OCR результата Chandra/LMStudio.
 
-    Применяется ТОЛЬКО к engine='chandra'. Для других engine возвращает текст без изменений.
+    Применяется к engine='chandra' и engine='lmstudio'.
+    Для других engine возвращает текст без изменений.
 
     Args:
         ocr_text: OCR результат (HTML строка)
@@ -48,7 +99,7 @@ def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
     """
     meta = {"removed_chars": 0, "removed_image_segments": 0}
 
-    if engine != "chandra" or not ocr_text:
+    if engine not in _CHANDRA_ENGINES or not ocr_text:
         return ocr_text, meta
 
     original_len = len(ocr_text)
@@ -66,7 +117,11 @@ def filter_mixed_text_output(ocr_text: str, engine: str) -> Tuple[str, dict]:
         meta["removed_image_segments"] += len(img_tags)
         result = _IMG_TAG_RE.sub('', result)
 
-    # 3. Нормализовать пробелы
+    # 3. Удалить plain-text image-narrative (английские описания картинок)
+    result, narrative_count = _strip_image_narrative(result)
+    meta["removed_image_segments"] += narrative_count
+
+    # 4. Нормализовать пробелы
     result = _MULTI_WHITESPACE_RE.sub('\n\n', result)
     result = _MULTI_SPACE_RE.sub(' ', result)
     result = result.strip()

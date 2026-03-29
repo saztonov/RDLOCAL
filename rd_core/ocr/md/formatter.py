@@ -15,15 +15,34 @@ from .html_converter import html_to_markdown
 
 
 def format_stamp_md(stamp_data: Dict) -> str:
-    """Форматировать данные штампа в компактную Markdown строку."""
+    """Форматировать данные штампа в компактную Markdown строку.
+
+    Канонический порядок полей:
+    Шифр | Стадия | Лист N (из M) | Объект | Наименование | Организация
+    """
     parts = []
 
     if stamp_data.get("document_code"):
         parts.append(f"Шифр: {stamp_data['document_code']}")
     if stamp_data.get("stage"):
         parts.append(f"Стадия: {stamp_data['stage']}")
+
+    # Лист (page-level, может отсутствовать для inherited stamp)
+    sheet_num = stamp_data.get("sheet_number", "")
+    total_sheets = stamp_data.get("total_sheets", "")
+    if sheet_num:
+        if total_sheets:
+            parts.append(f"Лист: {sheet_num} (из {total_sheets})")
+        else:
+            parts.append(f"Лист: {sheet_num}")
+
     if stamp_data.get("project_name"):
         parts.append(f"Объект: {stamp_data['project_name']}")
+
+    # Наименование листа (page-level)
+    if stamp_data.get("sheet_name"):
+        parts.append(f"Наименование: {stamp_data['sheet_name']}")
+
     if stamp_data.get("organization"):
         parts.append(f"Организация: {stamp_data['organization']}")
 

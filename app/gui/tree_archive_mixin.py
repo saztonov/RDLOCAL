@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import posixpath
+import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import PurePosixPath
@@ -148,9 +150,31 @@ class TreeArchiveMixin:
     def _on_archive_finished(self, zip_path: str):
         self._archive_progress.close()
         QMessageBox.information(self, "Готово", f"Архив сохранён:\n{zip_path}")
+        _reveal_in_explorer(zip_path)
 
     def _on_archive_error(self, error_msg: str):
         self._archive_progress.close()
         QMessageBox.critical(
             self, "Ошибка", f"Ошибка создания архива:\n{error_msg}"
         )
+
+
+def _reveal_in_explorer(path: str) -> None:
+    """Открыть файловый менеджер с выделением указанного файла."""
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path)])
+    except Exception:
+        # Fallback: просто открыть папку
+        try:
+            folder = os.path.dirname(path)
+            if sys.platform == "win32":
+                os.startfile(folder)
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            logger.warning(f"Не удалось открыть папку: {path}", exc_info=True)

@@ -25,7 +25,7 @@ Guidelines:
 * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
 * Tables: Use colspan and rowspan attributes to match table structure.
 * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
-* Images: Ignore any images, diagrams, or illustrations entirely. Do not include <img> tags in the output. Focus only on text content.
+* Images: If the image contains photographs, architectural renderings, illustrations, diagrams, stamps, seals, or handwritten signatures, do NOT describe them in any language. Do not write sentences describing what is shown (e.g., "A modern building...", "An architectural rendering...", "A round seal with..."). Do not include <img> tags or data-label="Image" divs. Extract ONLY the text characters visible in the image. If a portion contains only a picture with no text overlay, skip it entirely and produce no output for it.
 * Forms: Mark checkboxes and radio buttons properly.
 * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
 * Use the simplest possible HTML structure that accurately represents the content of the block.
@@ -36,7 +36,8 @@ CHANDRA_DEFAULT_SYSTEM = (
     "(GOST, SNiP, SP, TU). You process technical specifications, working drawings, "
     "and Stage P documents. Preserve all dimensions, units of measurement, "
     "reference numbers, and table structures with absolute accuracy. "
-    "Output clean HTML."
+    "Never describe images, photographs, seals, or visual scenes. "
+    "Output only recognized text as HTML."
 )
 
 DEFAULT_BASE_URL = "http://localhost:1234"
@@ -138,11 +139,55 @@ def _try_extract_structured_ocr(text: str) -> Optional[str]:
     return None
 
 
+# ── Извлечение заголовка из reasoning-прозы перед HTML ──────────────
+
+# Явные паттерны, в которых модель называет заголовок таблицы/секции
+_TITLE_IN_REASONING_RE = re.compile(
+    r'(?:'
+    r'[Tt]he\s+title\s+is\s+["\u201c\'](.+?)["\u201d\']'       # The title is "..."
+    r'|[Tt]itle:\s*["\u201c\']?(.+?)["\u201d\']?\s*[.\n]'       # Title: ...
+    r'|[Hh]eader:\s*["\u201c\']?(.+?)["\u201d\']?\s*[.\n]'      # Header: ...
+    r'|\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a:\s*[\xab"\u201c]?(.+?)[\xbb"\u201d]?\s*[.\n]'  # Заголовок: ...
+    r'|\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435:\s*[\xab"\u201c]?(.+?)[\xbb"\u201d]?\s*[.\n]'        # Название: ...
+    r')',
+    re.IGNORECASE,
+)
+
+# HTML начинается с таблицы (опционально обёрнутой в div)
+_TABLE_START_RE = re.compile(
+    r'^\s*(?:<div\b[^>]*>\s*)?<table\b',
+    re.IGNORECASE,
+)
+
+# Наличие h1-h6 в HTML
+_HEADING_IN_HTML_RE = re.compile(r'<h[1-6]\b', re.IGNORECASE)
+
+
+def _extract_title_from_reasoning(reasoning: str) -> Optional[str]:
+    """Извлечь явно указанный заголовок из reasoning-прозы.
+
+    Ищет только explicit patterns: 'The title is "..."', 'Title: ...', и т.д.
+    НЕ пытается превращать произвольную reasoning-прозу в OCR-контент.
+    """
+    m = _TITLE_IN_REASONING_RE.search(reasoning)
+    if not m:
+        return None
+    # Первая непустая группа
+    title = next((g for g in m.groups() if g), None)
+    if title and len(title.strip()) > 3:
+        return title.strip()
+    return None
+
+
 def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
     """Обрезать reasoning-текст перед HTML в reasoning_content ответе.
 
     Вызывается ТОЛЬКО для текста из reasoning_content (не content),
     поэтому любой текст до первого HTML-тега — гарантированно reasoning.
+
+    Если reasoning содержит явно названный заголовок (The title is "..."),
+    а HTML начинается с таблицы без h1-h6, заголовок восстанавливается
+    как <div data-label="Section-Header"><h1>...</h1></div>.
 
     Returns:
         (cleaned_text, stripped_chars) — очищенный текст и кол-во удалённых символов.
@@ -158,8 +203,26 @@ def _strip_reasoning_before_html(text: str) -> Tuple[str, int]:
     if not match:
         return "", len(text)  # нет HTML в reasoning_content → чистый reasoning
 
-    reasoning_len = match.start()
-    return text[match.start():], reasoning_len
+    reasoning_part = text[:match.start()]
+    html_part = text[match.start():]
+    reasoning_len = len(reasoning_part)
+
+    # Попытка спасти заголовок из reasoning, только если:
+    # 1. HTML начинается с таблицы (или div>table)
+    # 2. В HTML ещё нет h1-h6
+    if (_TABLE_START_RE.match(html_part)
+            and not _HEADING_IN_HTML_RE.search(html_part)):
+        title = _extract_title_from_reasoning(reasoning_part)
+        if title:
+            html_part = (
+                f'<div data-label="Section-Header"><h1>{title}</h1></div>\n'
+                + html_part
+            )
+            logger.info(
+                f"Chandra: спасён заголовок из reasoning: {title!r}"
+            )
+
+    return html_part, reasoning_len
 
 
 def _normalize_chandra_response(message: dict) -> Tuple[str, str]:

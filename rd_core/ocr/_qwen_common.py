@@ -25,7 +25,7 @@ DEFAULT_BASE_URL = "http://localhost:1234"
 # LM Studio native API: конфигурация загрузки модели
 QWEN_MODEL_KEY = os.getenv(
     "QWEN_MODEL_KEY",
-    "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q4_k_m",
+    "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m",
 )
 QWEN_LOAD_CONFIG = {
     "context_length": 32000,

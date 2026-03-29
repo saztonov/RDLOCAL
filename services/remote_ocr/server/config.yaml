@@ -79,7 +79,7 @@ qwen_max_concurrent: 2
 # HTTP таймаут для Qwen запросов, секунды
 qwen_http_timeout: 300
 # Ключ модели в LM Studio
-qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q4_k_m"
+qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 # Конфигурация загрузки модели
 qwen_context_length: 22000
 qwen_flash_attention: true
@@ -169,7 +169,7 @@ default_stamp_model: "qwen/qwen3.5-9b"
 
 # -- TEXT blocks (Chandra) --
 chandra_system_prompt: |
-  You are a specialist OCR system for Russian construction documentation (GOST, SNiP, SP, TU). You process technical specifications, working drawings, and Stage P documents. Preserve all dimensions, units of measurement, reference numbers, and table structures with absolute accuracy. Output clean HTML.
+  You are a specialist OCR system for Russian construction documentation (GOST, SNiP, SP, TU). You process technical specifications, working drawings, and Stage P documents. Preserve all dimensions, units of measurement, reference numbers, and table structures with absolute accuracy. Never describe images, photographs, seals, or visual scenes. Output only recognized text as HTML.
 
 chandra_user_prompt: |
   OCR this image to HTML.
@@ -180,7 +180,7 @@ chandra_user_prompt: |
   * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
   * Tables: Use colspan and rowspan attributes to match table structure.
   * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
-  * Images: Ignore any images, diagrams, or illustrations entirely. Do not include <img> tags in the output. Focus only on text content.
+  * Images: If the image contains photographs, architectural renderings, illustrations, diagrams, stamps, seals, or handwritten signatures, do NOT describe them in any language. Do not write sentences describing what is shown (e.g., "A modern building...", "An architectural rendering...", "A round seal with..."). Do not include <img> tags or data-label="Image" divs. Extract ONLY the text characters visible in the image. If a portion contains only a picture with no text overlay, skip it entirely and produce no output for it.
   * Forms: Mark checkboxes and radio buttons properly.
   * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
   * Use the simplest possible HTML structure that accurately represents the content of the block.

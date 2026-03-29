@@ -96,13 +96,29 @@ def generate_md_from_pages(
                 excluded_stamp += len(page.blocks) - len(non_stamp_blocks)
                 continue
 
+            # Штамп страницы для per-block metadata
+            page_stamp = find_page_stamp(page.blocks)
+
+            # Мержим page_stamp с inherited для per-block stamp строки
+            if page_stamp:
+                merged_stamp = dict(page_stamp)
+                if inherited_stamp_data:
+                    for field in ("document_code", "project_name", "stage", "organization"):
+                        if not merged_stamp.get(field) and inherited_stamp_data.get(field):
+                            merged_stamp[field] = inherited_stamp_data[field]
+            elif inherited_stamp_data:
+                merged_stamp = dict(inherited_stamp_data)
+            else:
+                merged_stamp = None
+
+            block_stamp_str = format_stamp_md(merged_stamp) if merged_stamp else ""
+
             # Заголовок страницы
             if page_num != current_page_num:
                 current_page_num = page_num
                 md_parts.append(f"## СТРАНИЦА {page_num}")
 
                 # Информация из штампа страницы (лист, наименование)
-                page_stamp = find_page_stamp(page.blocks)
                 if page_stamp:
                     sheet_num = page_stamp.get("sheet_number", "")
                     total_sheets = page_stamp.get("total_sheets", "")
@@ -149,6 +165,10 @@ def generate_md_from_pages(
                 md_parts.append(" ".join(header_parts))
                 if meta_parts:
                     md_parts.append(" ".join(meta_parts))
+
+                # Per-block stamp metadata
+                if block_stamp_str:
+                    md_parts.append(block_stamp_str)
 
                 # Содержимое блока
                 content = process_ocr_content(block.ocr_text)
@@ -321,6 +341,13 @@ def generate_md_from_result(
             md_parts.append(" ".join(header_parts))
             if meta_parts:
                 md_parts.append(" ".join(meta_parts))
+
+            # Per-block stamp metadata
+            blk_stamp = blk.get("stamp_data")
+            if blk_stamp:
+                blk_stamp_str = format_stamp_md(blk_stamp)
+                if blk_stamp_str:
+                    md_parts.append(blk_stamp_str)
 
             # Содержимое блока
             content = ""
