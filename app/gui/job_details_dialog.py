@@ -166,7 +166,7 @@ class JobDetailsDialog(QDialog):
             local_layout = QHBoxLayout()
 
             # Проверяем существование папки
-            folder_exists = os.path.exists(client_output_dir)
+            folder_exists = os.path.isdir(client_output_dir)
 
             if folder_exists:
                 local_label = QLabel(f"Локально: {client_output_dir}")
@@ -249,7 +249,13 @@ class JobDetailsDialog(QDialog):
             if not os.path.exists(path):
                 from PySide6.QtWidgets import QMessageBox
 
-                QMessageBox.warning(self, "Ошибка", f"Папка не найдена:\n{path}")
+                QMessageBox.warning(self, "Ошибка", f"Путь не найден:\n{path}")
+                return
+
+            if not os.path.isdir(path):
+                from PySide6.QtWidgets import QMessageBox
+
+                QMessageBox.warning(self, "Ошибка", f"Указанный путь не является папкой:\n{path}")
                 return
 
             if sys.platform == "win32":
