@@ -241,6 +241,13 @@ def regenerate_html_from_result(
                         f'<p><a href="{crop_url}" target="_blank"><b>🖼️ Открыть кроп изображения</b></a></p>'
                     )
 
+            # Defensive: ocr_html может содержать JSON-dump из старых данных
+            if ocr_html:
+                from rd_core.ocr_result import is_suspicious_output
+                suspicious, _ = is_suspicious_output(ocr_html, ocr_html)
+                if suspicious:
+                    ocr_html = ""
+
             # Санитизируем HTML от мусорных артефактов datalab
             if ocr_html:
                 html_parts.append(sanitize_html(ocr_html))

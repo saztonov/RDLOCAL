@@ -371,6 +371,13 @@ def generate_md_from_result(
                 if blk_stamp_str:
                     md_parts.append(blk_stamp_str)
 
+            # Defensive: ocr_html может содержать JSON-dump из старых данных
+            if ocr_html:
+                from rd_core.ocr_result import is_suspicious_output
+                suspicious, _ = is_suspicious_output(ocr_html, ocr_html)
+                if suspicious:
+                    ocr_html = ""
+
             # Содержимое блока
             content = ""
             if ocr_html:
