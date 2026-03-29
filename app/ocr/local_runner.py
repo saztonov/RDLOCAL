@@ -55,6 +55,12 @@ class LocalJob:
     total_blocks: int = 0
     output_dir: str = ""
     result_files: dict[str, str] = field(default_factory=dict)
+    # Двойные счётчики для correction mode
+    is_correction_mode: bool = False
+    processed_blocks: int = 0        # блоков обрабатывалось в этом запуске
+    recognized_processed: int = 0    # из них успешно распознано
+    document_total_blocks: int = 0   # всего блоков в документе
+    recognized_document: int = 0     # успешно распознано по всему документу
 
 
 class LocalOcrRunner(QObject):
@@ -195,6 +201,14 @@ class LocalOcrRunner(QObject):
             }
             if job.status in _TERMINAL_STATUSES:
                 payload["completed_at"] = now
+            # Сохранить счётчики блоков в block_stats JSONB
+            payload["block_stats"] = {
+                "processed_blocks": job.processed_blocks,
+                "recognized_processed": job.recognized_processed,
+                "document_total_blocks": job.document_total_blocks,
+                "recognized_document": job.recognized_document,
+                "is_correction_mode": job.is_correction_mode,
+            }
             # Upsert by id
             resp = httpx.post(
                 f"{url}/rest/v1/jobs",
@@ -226,6 +240,7 @@ class LocalOcrRunner(QObject):
         full_blocks_data: list[dict] | None = None,
     ) -> LocalJob:
         """Создать и запустить OCR задачу в отдельном процессе."""
+        doc_total = len(full_blocks_data) if full_blocks_data else len(blocks_data)
         job = LocalJob(
             pdf_path=pdf_path,
             document_name=Path(pdf_path).name,
@@ -234,6 +249,9 @@ class LocalOcrRunner(QObject):
             total_blocks=len(blocks_data),
             output_dir=output_dir,
             status_message="Запуск OCR...",
+            is_correction_mode=is_correction_mode,
+            processed_blocks=len(blocks_data),
+            document_total_blocks=doc_total,
         )
 
         self._jobs[job.id] = job
@@ -336,6 +354,12 @@ class LocalOcrRunner(QObject):
                     job.error_message = msg.get("error_message")
                     job.result_files = msg.get("result_files", {})
                     job.status_message = msg.get("status_message", "")
+                    # Двойные счётчики
+                    job.recognized_processed = msg.get("recognized_processed", job.recognized)
+                    job.recognized_document = msg.get("recognized_document", job.recognized)
+                    job.document_total_blocks = msg.get(
+                        "document_total_blocks", job.document_total_blocks
+                    )
                     self._save_job_to_supabase(job)
                     self.job_finished.emit(job)
                     finished_ids.append(job_id)
@@ -433,12 +457,26 @@ def _run_ocr_process(
         )
 
         # Status message
-        if result.status == "done":
-            status_msg = f"Готово: {result.recognized}/{result.total_blocks}"
-        elif result.status == "partial":
-            status_msg = f"Частично: {result.recognized}/{result.total_blocks}"
+        is_corr = kwargs.get("is_correction_mode", False)
+        full_bd = kwargs.get("full_blocks_data")
+        rec_doc = result.recognized_document
+        doc_total = result.document_total_blocks
+
+        if is_corr and doc_total:
+            if result.status in ("done", "partial"):
+                status_msg = (
+                    f"Корректировка: {result.recognized}/{result.total_blocks}"
+                    f" | Документ: {rec_doc}/{doc_total}"
+                )
+            else:
+                status_msg = result.error_message or "Ошибка"
         else:
-            status_msg = result.error_message or "Ошибка"
+            if result.status == "done":
+                status_msg = f"Готово: {result.recognized}/{result.total_blocks}"
+            elif result.status == "partial":
+                status_msg = f"Частично: {result.recognized}/{result.total_blocks}"
+            else:
+                status_msg = result.error_message or "Ошибка"
 
         progress_queue.put({
             "type": "result",
@@ -450,9 +488,15 @@ def _run_ocr_process(
             "result_files": result.result_files,
             "status_message": status_msg,
             "duration_seconds": result.duration_seconds,
+            # Двойные счётчики
+            "recognized_processed": result.recognized,
+            "recognized_document": rec_doc,
+            "document_total_blocks": doc_total,
         })
 
     except Exception as e:
+        full_bd = kwargs.get("full_blocks_data")
+        doc_total = len(full_bd) if full_bd else len(blocks_data)
         progress_queue.put({
             "type": "result",
             "status": "error",
@@ -463,4 +507,7 @@ def _run_ocr_process(
             "error_count": 0,
             "result_files": {},
             "duration_seconds": time.time(),
+            "recognized_processed": 0,
+            "recognized_document": 0,
+            "document_total_blocks": doc_total,
         })

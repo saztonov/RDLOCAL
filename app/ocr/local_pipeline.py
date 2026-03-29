@@ -32,6 +32,9 @@ class LocalOcrResult:
     error_message: Optional[str] = None
     duration_seconds: float = 0.0
     result_files: dict[str, str] = field(default_factory=dict)
+    # Документные цифры (для correction mode)
+    recognized_document: int = 0
+    document_total_blocks: int = 0
 
 
 # Callback types
@@ -302,9 +305,30 @@ def run_local_ocr(
             is_success as _is_success,
         )
 
+        # Счётчики по обработанному subset
         recognized = sum(1 for b in blocks if _is_success(b.ocr_text))
         error_count = sum(1 for b in blocks if _is_error(b.ocr_text))
         coverage = recognized / total_blocks if total_blocks > 0 else 0
+
+        # Документные счётчики (для correction mode — из merged annotation)
+        recognized_document = recognized
+        document_total_blocks = total_blocks
+        if is_correction_mode and full_blocks_data:
+            try:
+                ann_path = output_dir / "annotation.json"
+                if ann_path.exists():
+                    with open(ann_path, "r", encoding="utf-8") as _af:
+                        ann_data = json.load(_af)
+                    all_ann_blocks = []
+                    for pg in ann_data.get("pages", []):
+                        all_ann_blocks.extend(pg.get("blocks", []))
+                    document_total_blocks = len(all_ann_blocks)
+                    recognized_document = sum(
+                        1 for b in all_ann_blocks
+                        if _is_success(b.get("ocr_text", ""))
+                    )
+            except Exception as exc:
+                logger.warning(f"Failed to recount doc stats from annotation: {exc}")
 
         if recognized == 0:
             final_status = "error"
@@ -335,6 +359,8 @@ def run_local_ocr(
             error_count=error_count,
             duration_seconds=time.time() - start_time,
             result_files=result_files,
+            recognized_document=recognized_document,
+            document_total_blocks=document_total_blocks,
         )
 
     except Exception as e:
@@ -562,11 +588,94 @@ def _generate_local_results(
         logger.warning(f"Export report generation error: {e}")
 
     # Sync артефактов в tree_docs/{node_id} (если запуск с node_id)
-    _sync_results_to_tree(node_id, pdf_stem, output_dir, work_dir)
+    _sync_results_to_tree(
+        node_id, pdf_stem, output_dir, work_dir,
+        is_correction_mode=is_correction_mode,
+    )
+
+
+def _purge_ocr_artifacts(node_id: str, r2_prefix: str) -> None:
+    """Удалить OCR-артефакты узла (crop, ocr_html, result_md, crops_folder) из R2 и БД.
+
+    Не трогает исходный PDF и annotations.
+    Вызывается только при полном перераспознавании (не correction mode).
+    """
+    from app.services import get_r2, get_tree_client
+    from app.tree_models import FileType
+    from rd_core.r2_utils import invalidate_r2_cache
+
+    ocr_types = {
+        FileType.CROP.value, FileType.OCR_HTML.value,
+        FileType.RESULT_MD.value, FileType.CROPS_FOLDER.value,
+    }
+
+    r2 = get_r2()
+    tc = get_tree_client()
+
+    # 1. Получить все node_files для узла
+    try:
+        node_files = tc.get_node_files(node_id)
+    except Exception as e:
+        logger.warning(f"purge_ocr_artifacts: failed to get node_files: {e}")
+        node_files = []
+
+    # 2. Отфильтровать OCR-артефакты
+    r2_keys_to_delete = []
+    db_ids_to_delete = []
+    for nf in node_files:
+        ft = nf.file_type if isinstance(nf.file_type, str) else nf.file_type.value
+        if ft in ocr_types:
+            if nf.r2_key:
+                r2_keys_to_delete.append(nf.r2_key)
+            db_ids_to_delete.append(nf.id)
+
+    # 3. Удалить из R2 по собранным ключам
+    if r2_keys_to_delete:
+        try:
+            deleted_keys, errors = r2.delete_objects_batch(r2_keys_to_delete)
+            logger.info(
+                f"purge_ocr_artifacts: deleted {len(deleted_keys)} R2 objects "
+                f"from node_files keys"
+            )
+        except Exception as e:
+            logger.warning(f"purge_ocr_artifacts: R2 batch delete error: {e}")
+
+    # 4. Удалить orphan R2-объекты по префиксу crops/
+    crops_prefix = f"{r2_prefix}/crops/"
+    try:
+        deleted_orphans = r2.delete_by_prefix(crops_prefix)
+        if deleted_orphans:
+            logger.info(
+                f"purge_ocr_artifacts: deleted {deleted_orphans} orphan R2 crops "
+                f"by prefix {crops_prefix}"
+            )
+    except Exception as e:
+        logger.warning(f"purge_ocr_artifacts: R2 prefix delete error: {e}")
+
+    # 5. Удалить записи из БД
+    for file_id in db_ids_to_delete:
+        try:
+            tc.delete_node_file(file_id)
+        except Exception as e:
+            logger.warning(f"purge_ocr_artifacts: failed to delete DB record {file_id}: {e}")
+
+    if db_ids_to_delete:
+        logger.info(
+            f"purge_ocr_artifacts: deleted {len(db_ids_to_delete)} DB records "
+            f"for node_id={node_id}"
+        )
+
+    # 6. Инвалидировать кэш
+    invalidate_r2_cache(f"{r2_prefix}/", prefix=True)
 
 
 def _sync_results_to_tree(
-    node_id: str | None, pdf_stem: str, output_dir: Path, work_dir: Path | None = None,
+    node_id: str | None,
+    pdf_stem: str,
+    output_dir: Path,
+    work_dir: Path | None = None,
+    *,
+    is_correction_mode: bool = False,
 ) -> None:
     """Загрузить свежие OCR-артефакты в R2 и обновить node_files."""
     if not node_id:
@@ -579,6 +688,13 @@ def _sync_results_to_tree(
         r2 = get_r2()
         tc = get_tree_client()
         r2_prefix = f"tree_docs/{node_id}"
+
+        # При полном перераспознавании — очистить старые OCR-артефакты
+        if not is_correction_mode:
+            try:
+                _purge_ocr_artifacts(node_id, r2_prefix)
+            except Exception as e:
+                logger.warning(f"Pre-sync purge failed (non-fatal): {e}")
 
         files_to_sync = [
             (f"{pdf_stem}_ocr.html", FileType.OCR_HTML, "text/html"),

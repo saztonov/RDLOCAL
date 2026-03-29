@@ -133,6 +133,10 @@ class UnifiedNodeFilesDialog(QDialog):
         self.download_btn.clicked.connect(self._download_selected)
         btn_layout.addWidget(self.download_btn)
 
+        self.delete_btn = QPushButton("Удалить выбранные")
+        self.delete_btn.clicked.connect(self._delete_selected)
+        btn_layout.addWidget(self.delete_btn)
+
         self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.clicked.connect(self._load_files)
         btn_layout.addWidget(self.refresh_btn)
@@ -226,10 +230,11 @@ class UnifiedNodeFilesDialog(QDialog):
             else:
                 status = _STATUS_DB_ONLY
 
+            file_type = db.get("file_type", "") if db else self._guess_type(key)
             merged.append({
                 "r2_key": key,
                 "status": status,
-                "file_type": db.get("file_type", "") if db else self._guess_type(key),
+                "file_type": file_type,
                 "file_name": db.get("file_name", "") if db else posixpath.basename(key),
                 "r2_size": r2_size,
                 "db_size": db_size,
@@ -239,6 +244,9 @@ class UnifiedNodeFilesDialog(QDialog):
                     else ""
                 ),
                 "in_r2": bool(r2),
+                "in_db": bool(db),
+                "db_file_id": db.get("id") if db else None,
+                "deletable": file_type != "pdf",
             })
         return merged
 
@@ -308,6 +316,9 @@ class UnifiedNodeFilesDialog(QDialog):
         item.setToolTip(3, d["r2_key"])
         item.setData(0, Qt.UserRole, d["r2_key"])
         item.setData(0, Qt.UserRole + 1, d["in_r2"])
+        item.setData(0, Qt.UserRole + 2, d.get("db_file_id"))
+        item.setData(0, Qt.UserRole + 3, d.get("in_db", False))
+        item.setData(0, Qt.UserRole + 4, d.get("deletable", True))
         item.setTextAlignment(4, Qt.AlignRight | Qt.AlignVCenter)
         item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
 
@@ -406,10 +417,124 @@ class UnifiedNodeFilesDialog(QDialog):
             msg += f", ошибок: {fail}"
         QMessageBox.information(self, "Скачивание завершено", msg)
 
+    # ── Удаление ───────────────────────────────────────
+
+    def _get_selected_for_delete(self) -> list[dict]:
+        """Собрать данные о выбранных файлах для удаления."""
+        result = []
+        for it in self._get_all_file_items():
+            if it.checkState(0) == Qt.Checked:
+                r2_key = it.data(0, Qt.UserRole)
+                if r2_key:
+                    result.append({
+                        "r2_key": r2_key,
+                        "in_r2": it.data(0, Qt.UserRole + 1),
+                        "db_file_id": it.data(0, Qt.UserRole + 2),
+                        "in_db": it.data(0, Qt.UserRole + 3),
+                        "deletable": it.data(0, Qt.UserRole + 4),
+                        "file_name": it.text(2),
+                    })
+        return result
+
+    def _delete_selected(self):
+        items = self._get_selected_for_delete()
+        if not items:
+            QMessageBox.information(
+                self, "Удаление", "Выберите файлы для удаления."
+            )
+            return
+
+        # Проверить защищённые файлы (PDF)
+        protected = [it for it in items if not it["deletable"]]
+        deletable = [it for it in items if it["deletable"]]
+
+        if protected and not deletable:
+            QMessageBox.warning(
+                self, "Удаление невозможно",
+                "Выбранные файлы являются исходными PDF и защищены от удаления.\n"
+                "Удалять можно только OCR-артефакты (кропы, HTML, MD).",
+            )
+            return
+
+        warn_text = ""
+        if protected:
+            names = ", ".join(it["file_name"] for it in protected[:3])
+            warn_text = (
+                f"\n\nПропущены защищённые файлы ({len(protected)} шт.): {names}"
+            )
+
+        reply = QMessageBox.question(
+            self, "Подтверждение удаления",
+            f"Удалить {len(deletable)} файлов из R2 и/или базы данных?\n"
+            f"Это действие необратимо.{warn_text}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._set_busy(True)
+        try:
+            r2 = R2Storage()
+
+            # Удаление из R2
+            r2_keys = [it["r2_key"] for it in deletable if it["in_r2"]]
+            r2_ok = r2_fail = 0
+            if r2_keys:
+                try:
+                    deleted_keys, errors = r2.delete_objects_batch(r2_keys)
+                    r2_ok = len(deleted_keys)
+                    r2_fail = len(errors)
+                except Exception as e:
+                    logger.error(f"R2 batch delete error: {e}")
+                    r2_fail = len(r2_keys)
+
+            # Удаление из БД
+            db_ok = db_fail = 0
+            db_ids = [it["db_file_id"] for it in deletable if it["db_file_id"] and it["in_db"]]
+            for file_id in db_ids:
+                try:
+                    if self.client.delete_node_file(file_id):
+                        db_ok += 1
+                    else:
+                        db_fail += 1
+                except Exception as e:
+                    logger.error(f"DB delete error for {file_id}: {e}")
+                    db_fail += 1
+
+            # Инвалидировать R2 кэши
+            try:
+                from rd_core.r2_utils import invalidate_r2_cache
+                for prefix in self._get_r2_prefixes():
+                    invalidate_r2_cache(f"{prefix}/", prefix=True)
+            except Exception:
+                pass
+
+            # Обновить список
+            self._load_files()
+
+            msg = f"R2: удалено {r2_ok}"
+            if r2_fail:
+                msg += f", ошибок {r2_fail}"
+            msg += f"\nБД: удалено {db_ok}"
+            if db_fail:
+                msg += f", ошибок {db_fail}"
+            QMessageBox.information(self, "Удаление завершено", msg)
+
+        except Exception as e:
+            logger.error(f"Delete error: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при удалении:\n{e}")
+        finally:
+            self._set_busy(False)
+
+    def _set_busy(self, busy: bool):
+        self.download_btn.setEnabled(not busy)
+        self.delete_btn.setEnabled(not busy)
+        self.refresh_btn.setEnabled(not busy)
+        self.select_all_btn.setEnabled(not busy)
+
     def _set_downloading(self, downloading: bool):
-        self.download_btn.setEnabled(not downloading)
-        self.refresh_btn.setEnabled(not downloading)
-        self.select_all_btn.setEnabled(not downloading)
+        self._set_busy(downloading)
 
     # ── Утилиты ────────────────────────────────────────
 

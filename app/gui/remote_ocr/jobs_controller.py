@@ -444,7 +444,15 @@ class JobsController(QObject):
 
             from app.gui.toast import show_toast
 
-            if job.status == "partial":
+            is_corr = getattr(job, "is_correction_mode", False)
+            if is_corr:
+                rec_doc = getattr(job, "recognized_document", job.recognized)
+                doc_total = getattr(job, "document_total_blocks", job.total_blocks)
+                msg = (
+                    f"Корректировка: {job.recognized}/{job.total_blocks}"
+                    f" | Документ: {rec_doc}/{doc_total}"
+                )
+            elif job.status == "partial":
                 msg = f"OCR частично: {job.recognized}/{job.total_blocks}"
             else:
                 msg = f"OCR завершён: {job.recognized}/{job.total_blocks}"
