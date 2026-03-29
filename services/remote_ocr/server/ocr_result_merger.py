@@ -162,19 +162,25 @@ def regenerate_html_from_result(
     Регенерировать HTML файл из result.json с правильно разделёнными блоками.
     Использует ocr_html (уже разделённый по маркерам) вместо ocr_text.
     """
+    from rd_core.ocr.export_stats import ExportStats
+
     if not doc_name:
         doc_name = result.get("pdf_path", "OCR Result")
 
     # Используем общий HTML шаблон
     html_parts = [get_html_header(doc_name)]
 
+    total_blocks = sum(len(p.get("blocks", [])) for p in result.get("pages", []))
+    excluded_stamp = 0
     block_count = 0
+
     for page in result.get("pages", []):
         page_num = page.get("page_number", "")
 
         for idx, blk in enumerate(page.get("blocks", [])):
             # Пропускаем блоки штампа
             if blk.get("category_code") == "stamp":
+                excluded_stamp += 1
                 continue
 
             block_id = blk.get("id", "")
@@ -233,6 +239,11 @@ def regenerate_html_from_result(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(html_parts))
 
+    stats = ExportStats(
+        total_blocks=total_blocks,
+        excluded_stamp_blocks=excluded_stamp,
+        exported_blocks=block_count,
+    )
     logger.info(
-        f"HTML регенерирован из result.json: {output_path} ({block_count} блоков)"
+        f"HTML регенерирован: {output_path} ({stats.log_summary('HTML')})"
     )

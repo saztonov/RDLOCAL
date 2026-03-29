@@ -25,7 +25,7 @@ def generate_md_from_pages(
     output_path: str,
     doc_name: str | None = None,
     project_name: str | None = None,
-) -> str:
+) -> tuple[str, "ExportStats"]:
     """
     Генерация компактного Markdown файла (_document.md) из OCR результатов.
     Группировка по страницам, оптимизация для LLM.
@@ -37,8 +37,10 @@ def generate_md_from_pages(
         project_name: имя проекта (не используется в MD)
 
     Returns:
-        Путь к сохранённому файлу
+        (путь к сохранённому файлу, ExportStats)
     """
+    from rd_core.ocr.export_stats import ExportStats
+
     try:
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +80,9 @@ def generate_md_from_pages(
         md_parts.append("")
 
         # === БЛОКИ - группировка по страницам ===
+        total_blocks = sum(len(p.blocks) for p in pages)
+        excluded_stamp = 0
+        excluded_linked_text = 0
         block_count = 0
         current_page_num = None
 
@@ -87,6 +92,8 @@ def generate_md_from_pages(
             # Проверяем есть ли блоки кроме штампов
             non_stamp_blocks = [b for b in page.blocks if getattr(b, "category_code", None) != "stamp"]
             if not non_stamp_blocks:
+                # Считаем исключённые штампы даже на пропущенных страницах
+                excluded_stamp += len(page.blocks) - len(non_stamp_blocks)
                 continue
 
             # Заголовок страницы
@@ -115,10 +122,12 @@ def generate_md_from_pages(
             for block in page.blocks:
                 # Пропускаем блоки штампа
                 if getattr(block, "category_code", None) == "stamp":
+                    excluded_stamp += 1
                     continue
 
                 # Пропускаем TEXT блоки, которые встроены в IMAGE
                 if block.id in embedded_text_ids:
+                    excluded_linked_text += 1
                     continue
 
                 block_count += 1
@@ -163,8 +172,14 @@ def generate_md_from_pages(
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("\n".join(md_parts))
 
-        logger.info(f"MD файл сохранён: {output_file} ({block_count} блоков)")
-        return str(output_file)
+        stats = ExportStats(
+            total_blocks=total_blocks,
+            excluded_stamp_blocks=excluded_stamp,
+            excluded_linked_text_blocks=excluded_linked_text,
+            exported_blocks=block_count,
+        )
+        logger.info(f"MD файл сохранён: {output_file} ({stats.log_summary('MD')})")
+        return str(output_file), stats
 
     except Exception as e:
         logger.error(f"Ошибка генерации MD: {e}", exc_info=True)
@@ -228,6 +243,11 @@ def generate_md_from_result(
     embedded_text_ids = set(image_to_text.values())
 
     # === БЛОКИ - группировка по страницам ===
+    from rd_core.ocr.export_stats import ExportStats
+
+    total_blocks = sum(len(p.get("blocks", [])) for p in result.get("pages", []))
+    excluded_stamp = 0
+    excluded_linked_text = 0
     block_count = 0
     current_page_num = None
 
@@ -237,6 +257,7 @@ def generate_md_from_result(
         # Проверяем есть ли блоки кроме штампов
         non_stamp_blocks = [b for b in page.get("blocks", []) if b.get("category_code") != "stamp"]
         if not non_stamp_blocks:
+            excluded_stamp += len(page.get("blocks", [])) - len(non_stamp_blocks)
             continue
 
         # Заголовок страницы
@@ -270,12 +291,14 @@ def generate_md_from_result(
         for blk in page.get("blocks", []):
             # Пропускаем блоки штампа
             if blk.get("category_code") == "stamp":
+                excluded_stamp += 1
                 continue
 
             block_id = blk.get("id", "")
 
             # Пропускаем TEXT блоки, которые встроены в IMAGE
             if block_id in embedded_text_ids:
+                excluded_linked_text += 1
                 continue
 
             block_type = blk.get("block_type", "text").upper()
@@ -327,4 +350,10 @@ def generate_md_from_result(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_parts))
 
-    logger.info(f"MD регенерирован из result.json: {output_path} ({block_count} блоков)")
+    stats = ExportStats(
+        total_blocks=total_blocks,
+        excluded_stamp_blocks=excluded_stamp,
+        excluded_linked_text_blocks=excluded_linked_text,
+        exported_blocks=block_count,
+    )
+    logger.info(f"MD регенерирован: {output_path} ({stats.log_summary('MD')})")

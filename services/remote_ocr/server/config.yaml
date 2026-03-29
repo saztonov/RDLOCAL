@@ -43,12 +43,54 @@ chandra_max_concurrent: 2
 chandra_retry_delay: 2
 # HTTP таймаут для Chandra запросов, секунды
 chandra_http_timeout: 60
+# Ключ модели в LM Studio
+chandra_model_key: "chandra-ocr-2"
+# Конфигурация загрузки модели
+chandra_context_length: 8000
+chandra_flash_attention: true
+chandra_eval_batch_size: 2048
+chandra_offload_kv_cache: true
+# Максимальная сторона изображения (пиксели)
+chandra_max_image_size: 3072
+# Таймаут предзагрузки модели, секунды
+chandra_preload_timeout: 60
+# Retry: максимум попыток и задержки между ними (секунды)
+chandra_max_retries: 3
+chandra_retry_delays: [30, 60, 120]
+# Inference параметры
+chandra_max_tokens: 12384
+chandra_temperature: 0.1
+chandra_top_p: 0.95
+chandra_top_k: 40
+chandra_repetition_penalty: 1.1
+chandra_min_p: 0.05
 
 # ===== QWEN (LM Studio — IMAGE/STAMP) =====
 # Параллельных запросов к Qwen PER TASK
 qwen_max_concurrent: 2
 # HTTP таймаут для Qwen запросов, секунды
 qwen_http_timeout: 90
+# Ключ модели в LM Studio
+qwen_model_key: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
+# Конфигурация загрузки модели
+qwen_context_length: 32000
+qwen_flash_attention: true
+qwen_eval_batch_size: 1024
+qwen_offload_kv_cache: true
+# Максимальная сторона изображения (пиксели)
+qwen_max_image_size: 3072
+# Таймаут предзагрузки модели, секунды
+qwen_preload_timeout: 120
+# Retry: максимум попыток и задержки между ними (секунды)
+qwen_max_retries: 3
+qwen_retry_delays: [30, 60, 120]
+# Inference параметры
+qwen_max_tokens: 12384
+qwen_temperature: 0.1
+qwen_top_p: 0.95
+qwen_top_k: 40
+qwen_repetition_penalty: 1.1
+qwen_min_p: 0.05
 
 # ===== ВЕРИФИКАЦИЯ БЛОКОВ =====
 # Максимум блоков для retry верификации (0 = без лимита)
@@ -89,11 +131,37 @@ default_image_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 default_stamp_model: "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2@q5_k_m"
 
 # =====================================================
-# ПРОМПТЫ ДЛЯ OCR (IMAGE/STAMP)
+# ПРОМПТЫ ДЛЯ OCR
 # =====================================================
-# Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}
+
+# -- TEXT blocks (Chandra) --
+chandra_system_prompt: |
+  You are a specialist OCR system for Russian construction documentation (GOST, SNiP, SP, TU). You process technical specifications, working drawings, and Stage P documents. Preserve all dimensions, units of measurement, reference numbers, and table structures with absolute accuracy. Output clean HTML.
+
+chandra_user_prompt: |
+  OCR this image to HTML.
+
+  Only use these tags [p, h1, h2, h3, h4, h5, h6, table, thead, tbody, tr, th, td, ul, ol, li, br, sub, sup, div, span, math, mi, mo, mn, msup, msub, mfrac, msqrt, mrow, mover, munder, munderover, mtable, mtr, mtd, mtext, mspace, input], and these attributes [colspan, rowspan, type, checked, value, data-bbox, data-label].
+
+  Guidelines:
+  * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
+  * Tables: Use colspan and rowspan attributes to match table structure.
+  * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
+  * Images: Ignore any images, diagrams, or illustrations entirely. Do not include <img> tags in the output. Focus only on text content.
+  * Forms: Mark checkboxes and radio buttons properly.
+  * Text: join lines together properly into paragraphs using <p>...</p> tags. Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
+  * Use the simplest possible HTML structure that accurately represents the content of the block.
+  * Make sure the text is accurate and easy for a human to read and interpret. Reading order should be correct and natural.
+
+# -- Qwen default prompts (fallback если caller не передал prompt) --
+qwen_default_system_prompt: |
+  You are an expert OCR system. Extract all visible text and structure from the provided image. Output clean HTML.
+
+qwen_default_user_prompt: |
+  Recognize all content in this image and output as HTML.
 
 # -- IMAGE blocks (default category) --
+# Переменные: {DOC_NAME}, {PAGE_NUM}, {BLOCK_ID}
 image_system_prompt: |
   You are an expert in visual analysis of Russian construction documentation for multi-apartment residential building projects.
   This task requires deep visual analysis and engaged thinking. Before answering, carefully study the image: text orientation, symbols, lines, relationships between elements, technical labels, tables, legends, dimensions, elevations, calculated values, formulas, mathematical expressions, and other visible data.

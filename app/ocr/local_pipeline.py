@@ -327,7 +327,9 @@ def _generate_local_results(
     is_correction_mode: bool = False,
     deadline: float | None = None,
 ):
-    """Генерация файлов результатов (annotation.json, HTML, MD, result.json)."""
+    """Генерация файлов результатов (annotation.json, HTML, MD, export_report.json)."""
+    from datetime import datetime, timezone
+
     from rd_core.models import Block, Document, Page, ShapeType
     from rd_core.models.enums import BlockType
     from rd_core.ocr import generate_html_from_pages, generate_md_from_pages
@@ -388,35 +390,81 @@ def _generate_local_results(
     doc = Document(pdf_path=doc_name, pages=pages)
 
     # annotation.json → output_dir
+    ann_dict = doc.to_dict()
     annotation_path = output_dir / "annotation.json"
     with open(annotation_path, "w", encoding="utf-8") as f:
-        json.dump(doc.to_dict(), f, ensure_ascii=False, indent=2)
+        json.dump(ann_dict, f, ensure_ascii=False, indent=2)
 
     pdf_stem = pdf_path.stem
+    html_stats = None
+    md_stats = None
 
     # HTML
     html_path = output_dir / f"{pdf_stem}_ocr.html"
     try:
-        generate_html_from_pages(pages, str(html_path), doc_name=doc_name)
+        _, html_stats = generate_html_from_pages(pages, str(html_path), doc_name=doc_name)
     except Exception as e:
         logger.warning(f"HTML generation error: {e}")
 
     # Markdown
     md_path = output_dir / f"{pdf_stem}_document.md"
     try:
-        generate_md_from_pages(pages, str(md_path), doc_name=doc_name)
+        _, md_stats = generate_md_from_pages(pages, str(md_path), doc_name=doc_name)
     except Exception as e:
         logger.warning(f"MD generation error: {e}")
 
-    # Block verification (retry missing blocks)
-    result_path = output_dir / f"{pdf_stem}_result.json"
-    if text_backend and result_path.exists():
+    # Block verification (retry missing blocks via enriched dict)
+    if text_backend:
         try:
             from services.remote_ocr.server.block_verification import verify_and_retry_missing_blocks
+            from services.remote_ocr.server.ocr_result_merger import (
+                enrich_annotation_dict,
+                regenerate_html_from_result,
+                regenerate_md_from_result,
+            )
 
-            verify_and_retry_missing_blocks(
-                result_path, pdf_path, output_dir, text_backend,
+            # Обогащаем annotation dict (добавляем ocr_html, ocr_json, ocr_meta)
+            html_text = ""
+            if html_path.exists():
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html_text = f.read()
+            enriched_dict = enrich_annotation_dict(ann_dict, html_text)
+
+            # Верификация и повторное распознавание пропущенных блоков
+            enriched_dict = verify_and_retry_missing_blocks(
+                enriched_dict, pdf_path, work_dir, text_backend,
                 deadline=deadline,
             )
+
+            # Перегенерируем HTML/MD из обновлённого enriched dict
+            try:
+                regenerate_html_from_result(enriched_dict, html_path, doc_name=doc_name)
+            except Exception as e:
+                logger.warning(f"HTML regeneration after verification error: {e}")
+
+            try:
+                regenerate_md_from_result(enriched_dict, md_path, doc_name=doc_name)
+            except Exception as e:
+                logger.warning(f"MD regeneration after verification error: {e}")
+
         except Exception as e:
             logger.warning(f"Block verification error: {e}")
+
+    # Export report — машинно-читаемая статистика экспорта
+    try:
+        report = {
+            "pdf_name": doc_name,
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "output_dir": str(output_dir),
+        }
+        if html_stats:
+            report["html"] = html_stats.to_dict()
+        if md_stats:
+            report["md"] = md_stats.to_dict()
+
+        report_path = output_dir / f"{pdf_stem}_export_report.json"
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        logger.info(f"Export report: {report_path}")
+    except Exception as e:
+        logger.warning(f"Export report generation error: {e}")

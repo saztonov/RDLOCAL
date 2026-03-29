@@ -248,7 +248,7 @@ def _format_inherited_stamp_html(inherited_data: Dict) -> str:
 
 def generate_html_from_pages(
     pages: List, output_path: str, doc_name: str | None = None, project_name: str | None = None
-) -> str:
+) -> tuple[str, "ExportStats"]:
     """
     Генерация итогового HTML файла (ocr.html) из OCR результатов.
 
@@ -259,8 +259,10 @@ def generate_html_from_pages(
         project_name: имя проекта для ссылок на R2
 
     Returns:
-        Путь к сохранённому файлу
+        (путь к сохранённому файлу, ExportStats)
     """
+    from rd_core.ocr.export_stats import ExportStats
+
     try:
         from rd_core.models import BlockType
 
@@ -282,7 +284,10 @@ def generate_html_from_pages(
             else ""
         )
 
+        total_blocks = sum(len(p.blocks) for p in pages)
+        excluded_stamp = 0
         block_count = 0
+
         for page in pages:
             # Находим данные штампа для этой страницы
             page_stamp = find_page_stamp(page.blocks)
@@ -303,6 +308,7 @@ def generate_html_from_pages(
             for idx, block in enumerate(page.blocks):
                 # Пропускаем блоки штампа
                 if getattr(block, "category_code", None) == "stamp":
+                    excluded_stamp += 1
                     continue
 
                 block_count += 1
@@ -354,8 +360,13 @@ def generate_html_from_pages(
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("\n".join(html_parts))
 
-        logger.info(f"HTML файл сохранён: {output_file} ({block_count} блоков)")
-        return str(output_file)
+        stats = ExportStats(
+            total_blocks=total_blocks,
+            excluded_stamp_blocks=excluded_stamp,
+            exported_blocks=block_count,
+        )
+        logger.info(f"HTML файл сохранён: {output_file} ({stats.log_summary('HTML')})")
+        return str(output_file), stats
 
     except Exception as e:
         logger.error(f"Ошибка генерации HTML: {e}", exc_info=True)

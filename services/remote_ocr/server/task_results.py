@@ -134,8 +134,9 @@ def generate_results(
     # Генерация итогового HTML файла
     partial_failures = []
     html_path = work_dir / "ocr_result.html"
+    html_stats = None
     try:
-        generate_html_from_pages(
+        _, html_stats = generate_html_from_pages(
             pages, str(html_path), doc_name=doc_name, project_name=project_name
         )
         logger.info(f"HTML файл сгенерирован: {html_path}")
@@ -145,8 +146,9 @@ def generate_results(
 
     # Генерация компактного Markdown файла (оптимизирован для LLM)
     md_path = work_dir / "document.md"
+    md_stats = None
     try:
-        generate_md_from_pages(
+        _, md_stats = generate_md_from_pages(
             pages, str(md_path), doc_name=doc_name, project_name=project_name
         )
         if md_path.exists():
@@ -301,7 +303,7 @@ def _generate_correction_results(
         else:
             doc_name = pdf_path.name
 
-        generate_html_from_pages(temp_pages, str(temp_html_path), doc_name=doc_name)
+        generate_html_from_pages(temp_pages, str(temp_html_path), doc_name=doc_name)  # stats unused
 
         with open(temp_html_path, "r", encoding="utf-8") as f:
             new_html_text = f.read()

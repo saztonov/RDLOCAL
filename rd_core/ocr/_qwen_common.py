@@ -51,19 +51,31 @@ def init_base_url(base_url: Optional[str]) -> str:
     return url.rstrip("/")
 
 
-def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
+def build_payload(
+    model_id: str,
+    prompt: Optional[dict],
+    img_b64: str,
+    inference_params: Optional[dict] = None,
+) -> dict:
     """Собрать payload для Qwen LM Studio API.
 
-    В отличие от Chandra, Qwen принимает prompt из аргумента:
-    если prompt передан — использует prompt["system"] и prompt["user"],
-    иначе — дефолтные промпты.
+    Args:
+        model_id: ID модели в LM Studio.
+        prompt: dict с ключами "system" и "user" (из worker_prompts / config.yaml).
+        img_b64: base64-encoded PNG изображение.
+        inference_params: словарь с default_system_prompt, default_user_prompt,
+            max_tokens, temperature и пр. Если None — используются дефолты из модуля.
     """
+    params = inference_params or {}
+    default_sys = params.get("default_system_prompt", QWEN_DEFAULT_SYSTEM)
+    default_usr = params.get("default_user_prompt", QWEN_DEFAULT_PROMPT)
+
     if prompt and isinstance(prompt, dict):
-        system_prompt = prompt.get("system", QWEN_DEFAULT_SYSTEM)
-        user_prompt = prompt.get("user", QWEN_DEFAULT_PROMPT)
+        system_prompt = prompt.get("system", default_sys)
+        user_prompt = prompt.get("user", default_usr)
     else:
-        system_prompt = QWEN_DEFAULT_SYSTEM
-        user_prompt = QWEN_DEFAULT_PROMPT
+        system_prompt = default_sys
+        user_prompt = default_usr
 
     messages = []
     if system_prompt:
@@ -85,12 +97,12 @@ def build_payload(model_id: str, prompt: Optional[dict], img_b64: str) -> dict:
     return {
         "model": model_id,
         "messages": messages,
-        "max_tokens": 12384,
-        "temperature": 0.1,
-        "top_p": 0.95,
-        "top_k": 40,
-        "repetition_penalty": 1.1,
-        "min_p": 0.05,
+        "max_tokens": params.get("max_tokens", 12384),
+        "temperature": params.get("temperature", 0.1),
+        "top_p": params.get("top_p", 0.95),
+        "top_k": params.get("top_k", 40),
+        "repetition_penalty": params.get("repetition_penalty", 1.1),
+        "min_p": params.get("min_p", 0.05),
     }
 
 
