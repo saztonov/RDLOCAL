@@ -183,7 +183,7 @@ def generate_results(
                 on_verification_progress(0, 0)
 
             logger.info("Запуск верификации блоков...")
-            verify_and_retry_missing_blocks(
+            enriched_dict = verify_and_retry_missing_blocks(
                 enriched_dict,
                 pdf_path,
                 work_dir,

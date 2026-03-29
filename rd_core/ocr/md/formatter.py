@@ -117,6 +117,28 @@ def process_ocr_content(ocr_text: str) -> str:
                 # Image OCR JSON
                 if is_image_ocr_json(parsed):
                     return format_image_ocr_md(parsed)
+                # Canonical Chandra JSON {"ocr_html": "<...>"}
+                if "ocr_html" in parsed and isinstance(parsed["ocr_html"], str):
+                    html = parsed["ocr_html"].strip()
+                    return html_to_markdown(html) if html else ""
+            if isinstance(parsed, list) and parsed:
+                # Chandra JSON array: элементы с 'html' ключом
+                html_parts = [
+                    item["html"]
+                    for item in parsed
+                    if isinstance(item, dict)
+                    and isinstance(item.get("html"), str)
+                    and item["html"].strip()
+                ]
+                if html_parts:
+                    return html_to_markdown("\n".join(html_parts))
+                # Pure bbox dump без html — нет полезного контента
+                if all(isinstance(item, dict) for item in parsed):
+                    keys: set = set()
+                    for item in parsed:
+                        keys.update(item.keys())
+                    if keys & {"data-bbox", "data-label", "bbox", "label"}:
+                        return ""
             # Fallback для другого JSON
             return json_module.dumps(parsed, ensure_ascii=False, separators=(',', ':'))
         except json_module.JSONDecodeError:

@@ -172,14 +172,15 @@ default_stamp_model: "qwen/qwen3.5-9b"
 
 # -- TEXT blocks (Chandra) --
 chandra_system_prompt: |
-  You are a specialist OCR system for Russian construction documentation (GOST, SNiP, SP, TU). You process technical specifications, working drawings, and Stage P documents. Preserve all dimensions, units of measurement, reference numbers, and table structures with absolute accuracy. Never describe images, photographs, seals, or visual scenes. Output only recognized text as HTML.
+  You are a specialist OCR system for Russian construction documentation (GOST, SNiP, SP, TU). You process technical specifications, working drawings, and Stage P documents. Preserve all dimensions, units of measurement, reference numbers, and table structures with absolute accuracy. Never describe images, photographs, seals, or visual scenes. Output only recognized text as a JSON object: {"ocr_html": "<your HTML here>"}. Do not output anything outside the JSON object — no explanations, no markdown.
 
 chandra_user_prompt: |
-  OCR this image to HTML.
+  OCR this image. Return a single JSON object: {"ocr_html": "<HTML content>"}.
 
-  Only use these tags [p, h1, h2, h3, h4, h5, h6, table, thead, tbody, tr, th, td, ul, ol, li, br, sub, sup, div, span, math, mi, mo, mn, msup, msub, mfrac, msqrt, mrow, mover, munder, munderover, mtable, mtr, mtd, mtext, mspace, input], and these attributes [colspan, rowspan, type, checked, value, data-bbox, data-label].
+  The HTML inside ocr_html must use only these tags [p, h1, h2, h3, h4, h5, h6, table, thead, tbody, tr, th, td, ul, ol, li, br, sub, sup, div, span, math, mi, mo, mn, msup, msub, mfrac, msqrt, mrow, mover, munder, munderover, mtable, mtr, mtd, mtext, mspace, input], and these attributes [colspan, rowspan, type, checked, value, data-bbox, data-label].
 
   Guidelines:
+  * Output format: Return ONLY a valid JSON object {"ocr_html": "<...>"}. No explanations, no markdown, no text outside the JSON.
   * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
   * Tables: Use colspan and rowspan attributes to match table structure.
   * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.

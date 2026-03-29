@@ -22,11 +22,12 @@ ALLOWED_ATTRIBUTES = "colspan, rowspan, type, checked, value, data-bbox, data-la
 # Максимальная сторона изображения для Chandra OCR 2 (из chandra/model/util.py: 3072×2048)
 CHANDRA_MAX_IMAGE_SIZE = 3072
 
-CHANDRA_DEFAULT_PROMPT = f"""OCR this image to HTML.
+CHANDRA_DEFAULT_PROMPT = f"""OCR this image. Return a single JSON object: {{"ocr_html": "<HTML content>"}}.
 
-Only use these tags [{ALLOWED_TAGS}], and these attributes [{ALLOWED_ATTRIBUTES}].
+The HTML inside ocr_html must use only these tags [{ALLOWED_TAGS}], and these attributes [{ALLOWED_ATTRIBUTES}].
 
 Guidelines:
+* Output format: Return ONLY a valid JSON object {{"ocr_html": "<...>"}}. No explanations, no markdown, no text outside the JSON.
 * Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
 * Tables: Use colspan and rowspan attributes to match table structure.
 * Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
@@ -42,7 +43,8 @@ CHANDRA_DEFAULT_SYSTEM = (
     "and Stage P documents. Preserve all dimensions, units of measurement, "
     "reference numbers, and table structures with absolute accuracy. "
     "Never describe images, photographs, seals, or visual scenes. "
-    "Output only recognized text as HTML."
+    'Output only recognized text as a JSON object: {"ocr_html": "<your HTML here>"}. '
+    "Do not output anything outside the JSON object — no explanations, no markdown."
 )
 
 DEFAULT_BASE_URL = "http://localhost:1234"
@@ -116,7 +118,7 @@ def build_payload(
         )
         max_tokens = capped
 
-    return {
+    payload = {
         "model": model_id,
         "messages": messages,
         "max_tokens": max_tokens,
@@ -126,6 +128,13 @@ def build_payload(
         "repetition_penalty": params.get("repetition_penalty", 1.1),
         "min_p": params.get("min_p", 0.05),
     }
+
+    # Structured output: response_format (LM Studio json_object mode)
+    response_format = params.get("response_format")
+    if response_format:
+        payload["response_format"] = response_format
+
+    return payload
 
 
 # Regex для поиска первого HTML-тега в тексте (OCR-контент Chandra)
@@ -153,6 +162,61 @@ def _try_extract_structured_ocr(text: str) -> Optional[str]:
     except (_json.JSONDecodeError, ValueError):
         pass
     return None
+
+
+def _try_extract_structured_array(text: str) -> Optional[str]:
+    """Попытка извлечь OCR HTML из JSON-массива сегментов.
+
+    Chandra иногда возвращает контент как массив элементов:
+    [{"data-bbox": "...", "data-label": "...", "html": "..."}, ...]
+
+    Если каждый элемент содержит непустой 'html' ключ, собираем HTML,
+    оборачивая каждый фрагмент в <div> с атрибутами data-bbox/data-label.
+
+    Returns:
+        Реконструированный HTML или None если формат не подходит.
+    """
+    stripped = text.strip()
+    if not (stripped.startswith('[') and stripped.endswith(']')):
+        return None
+    try:
+        data = _json.loads(stripped)
+    except (_json.JSONDecodeError, ValueError):
+        return None
+
+    if not isinstance(data, list) or len(data) == 0:
+        return None
+
+    # Все элементы должны быть dict с непустым 'html' ключом
+    if not all(
+        isinstance(item, dict)
+        and isinstance(item.get("html"), str)
+        and item["html"].strip()
+        for item in data
+    ):
+        return None
+
+    parts: list = []
+    for item in data:
+        html_content = item["html"].strip()
+        bbox = item.get("data-bbox", "")
+        label = item.get("data-label", "")
+        if bbox or label:
+            attrs = ""
+            if bbox:
+                attrs += f' data-bbox="{bbox}"'
+            if label:
+                attrs += f' data-label="{label}"'
+            parts.append(f"<div{attrs}>{html_content}</div>")
+        else:
+            parts.append(html_content)
+
+    result = "\n".join(parts)
+    logger.info(
+        f"Chandra: JSON array с html ключами → восстановлен HTML "
+        f"({len(data)} элементов, {len(result)} симв.)"
+    )
+    return result
 
 
 # ── Извлечение заголовка из reasoning-прозы перед HTML ──────────────
@@ -267,6 +331,14 @@ def _normalize_chandra_response(message: dict) -> Tuple[str, str]:
                 f"Chandra: structured output из content ({len(extracted)} симв.)",
             )
             return extracted, "content"
+
+        # Попытка парсинга JSON array с html ключами (legacy format)
+        extracted_array = _try_extract_structured_array(content)
+        if extracted_array is not None:
+            logger.debug(
+                f"Chandra: structured array из content ({len(extracted_array)} симв.)",
+            )
+            return extracted_array, "content"
 
         # Очистка reasoning без <think> тегов в content
         content = strip_untagged_reasoning(content, backend_name="Chandra")

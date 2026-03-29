@@ -358,9 +358,18 @@ def verify_and_retry_missing_blocks(
                 crop.close()
 
                 if ocr_text and not is_error(ocr_text):
-                    # Обновляем блок в result.json
+                    # Нормализуем: structured JSON → HTML, fallback на raw text
                     from rd_core.ocr.generator_common import sanitize_html
-                    blk_data["ocr_html"] = sanitize_html(ocr_text)
+                    from rd_core.ocr._chandra_common import (
+                        _try_extract_structured_ocr,
+                        _try_extract_structured_array,
+                    )
+                    normalized = _try_extract_structured_ocr(ocr_text)
+                    if normalized is None:
+                        normalized = _try_extract_structured_array(ocr_text)
+                    if normalized is None:
+                        normalized = ocr_text
+                    blk_data["ocr_html"] = sanitize_html(normalized)
                     blk_data["ocr_text"] = ocr_text
                     blk_data["ocr_meta"] = {
                         "method": [f"{method_prefix}_{retry_engine}"],
@@ -382,7 +391,16 @@ def verify_and_retry_missing_blocks(
                             crop.close()
                             if ocr_text and not is_error(ocr_text):
                                 from rd_core.ocr.generator_common import sanitize_html
-                                blk_data["ocr_html"] = sanitize_html(ocr_text)
+                                from rd_core.ocr._chandra_common import (
+                                    _try_extract_structured_ocr,
+                                    _try_extract_structured_array,
+                                )
+                                normalized = _try_extract_structured_ocr(ocr_text)
+                                if normalized is None:
+                                    normalized = _try_extract_structured_array(ocr_text)
+                                if normalized is None:
+                                    normalized = ocr_text
+                                blk_data["ocr_html"] = sanitize_html(normalized)
                                 blk_data["ocr_text"] = ocr_text
                                 blk_data["ocr_meta"] = {
                                     "method": [f"retry_{engine_name}"],

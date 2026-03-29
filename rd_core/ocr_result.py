@@ -91,7 +91,7 @@ def needs_ocr(block) -> bool:
 # ── Валидация качества OCR-вывода ────────────────────────────────────
 
 # Ключи, указывающие на layout/bbox dump
-_BBOX_KEYS = frozenset({"data-bbox", "data-label"})
+_BBOX_KEYS = frozenset({"data-bbox", "data-label", "bbox", "label"})
 
 # Ключи, указывающие на table/structure dump (не HTML)
 _TABLE_STRUCTURE_KEYS = frozenset({
@@ -175,7 +175,9 @@ def _is_json_structure_dump(text: str) -> Tuple[bool, str]:
     _collect_keys(data, all_keys, depth=0)
 
     if all_keys & _BBOX_KEYS:
-        return True, "JSON layout-dump (bbox без HTML content)"
+        has_html = "html" in all_keys
+        reason = "JSON layout-dump (bbox с html ключами)" if has_html else "JSON layout-dump (bbox без HTML content)"
+        return True, reason
 
     if all_keys & _TABLE_STRUCTURE_KEYS:
         return True, "JSON table-structure dump (не HTML)"

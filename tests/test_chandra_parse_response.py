@@ -558,3 +558,150 @@ class TestTableMissingHeaderSuspicious:
         )
         suspicious, _ = is_suspicious_output(text)
         assert not suspicious
+
+
+# ── Тесты JSON-array и JSON-контракт (issue 9HPX-PTLF-J3L) ────────
+
+
+class TestJsonArrayResponse:
+    """Chandra возвращает JSON-массив вместо HTML (issue 9HPX-PTLF-J3L)."""
+
+    def test_json_array_with_html_keys_reconstructed(self):
+        """JSON array с data-bbox/data-label/html → реконструированный HTML."""
+        import json
+        content = json.dumps([
+            {"data-bbox": "310 26 628 49", "data-label": "Section-Header",
+             "html": "<h5>Общие сведения и указания</h5>"},
+            {"data-bbox": "17 61 988 985", "data-label": "List-Group",
+             "html": "<ul><li>1. Проект выполнен...</li></ul>"},
+        ])
+        resp = _make_response(content=content)
+        result = parse_response(resp)
+        assert not is_error(result)
+        assert "Общие сведения" in result
+        assert "Проект выполнен" in result
+        assert 'data-bbox="310 26 628 49"' in result
+        assert 'data-label="Section-Header"' in result
+
+    def test_json_array_without_html_not_extracted(self):
+        """JSON array без html ключа (pure bbox dump) → не извлекается как structured."""
+        import json
+        content = json.dumps([
+            {"label": "Section-Header", "bbox": "225 10 783 39"},
+            {"label": "Table", "bbox": "14 52 986 985"},
+        ])
+        resp = _make_response(content=content)
+        result = parse_response(resp)
+        # Этот JSON не содержит html ключей, поэтому _try_extract_structured_array
+        # его не обработает. strip_untagged_reasoning тоже не уберёт (нет reasoning patterns).
+        # Но is_suspicious_output должен его поймать.
+        from rd_core.ocr_result import is_suspicious_output
+        suspicious, reason = is_suspicious_output(content)
+        assert suspicious
+        assert "layout-dump" in reason
+
+    def test_canonical_json_object_ocr_html(self):
+        """Канонический JSON {"ocr_html": "..."} → чистый HTML."""
+        resp = _make_response(
+            content='{"ocr_html": "<p>Канонический OCR результат</p>"}',
+        )
+        result = parse_response(resp)
+        assert "<p>Канонический OCR результат</p>" in result
+        assert not is_error(result)
+        assert "ocr_html" not in result
+
+    def test_legacy_raw_html_still_works(self):
+        """Legacy plain HTML ответ — работает как раньше."""
+        resp = _make_response(
+            content='<div data-bbox="0 0 100 50"><p>Legacy HTML output</p></div>',
+        )
+        result = parse_response(resp)
+        assert "Legacy HTML output" in result
+        assert not is_error(result)
+
+
+class TestJsonArrayNormalization:
+    """Тесты _try_extract_structured_array напрямую."""
+
+    def test_valid_array(self):
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        import json
+        text = json.dumps([
+            {"data-bbox": "10 20 30 40", "data-label": "Text", "html": "<p>Hello</p>"},
+            {"data-bbox": "10 50 30 70", "data-label": "Text", "html": "<p>World</p>"},
+        ])
+        result = _try_extract_structured_array(text)
+        assert result is not None
+        assert "<p>Hello</p>" in result
+        assert "<p>World</p>" in result
+        assert 'data-bbox="10 20 30 40"' in result
+
+    def test_array_without_html_returns_none(self):
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        import json
+        text = json.dumps([{"label": "A", "bbox": "1 2 3 4"}])
+        assert _try_extract_structured_array(text) is None
+
+    def test_empty_array_returns_none(self):
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        assert _try_extract_structured_array("[]") is None
+
+    def test_not_json_returns_none(self):
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        assert _try_extract_structured_array("<p>HTML</p>") is None
+
+    def test_array_with_empty_html_returns_none(self):
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        import json
+        text = json.dumps([{"html": "", "data-bbox": "1 2 3 4"}])
+        assert _try_extract_structured_array(text) is None
+
+    def test_array_elements_without_bbox(self):
+        """Массив с html но без bbox/label → html извлекается без <div> обёртки."""
+        from rd_core.ocr._chandra_common import _try_extract_structured_array
+        import json
+        text = json.dumps([{"html": "<p>Just text</p>"}])
+        result = _try_extract_structured_array(text)
+        assert result is not None
+        assert result == "<p>Just text</p>"
+        assert "<div" not in result
+
+
+class TestExtendedBboxKeysDetection:
+    """Расширенная детекция bbox ключей (без data- префикса)."""
+
+    def test_data_bbox_array_suspicious(self):
+        from rd_core.ocr_result import is_suspicious_output
+        import json
+        text = json.dumps([
+            {"data-bbox": "310 26 628 49", "data-label": "Header",
+             "html": "<h5>Заголовок</h5>"}
+        ])
+        suspicious, reason = is_suspicious_output(text)
+        assert suspicious
+        assert "html" in reason.lower()
+
+    def test_label_bbox_without_prefix_suspicious(self):
+        from rd_core.ocr_result import is_suspicious_output
+        import json
+        text = json.dumps([
+            {"label": "Section-Header", "bbox": "225 10 783 39"},
+            {"label": "Table", "bbox": "14 52 986 985"},
+        ])
+        suspicious, reason = is_suspicious_output(text)
+        assert suspicious
+        assert "layout-dump" in reason
+
+    def test_reason_distinguishes_html_present(self):
+        from rd_core.ocr_result import is_suspicious_output
+        import json
+        with_html = json.dumps([
+            {"data-bbox": "1 2 3 4", "data-label": "A", "html": "<p>X</p>"}
+        ])
+        without_html = json.dumps([
+            {"data-bbox": "1 2 3 4", "data-label": "A"}
+        ])
+        _, reason_with = is_suspicious_output(with_html)
+        _, reason_without = is_suspicious_output(without_html)
+        assert "с html" in reason_with
+        assert "без HTML" in reason_without

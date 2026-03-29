@@ -174,10 +174,28 @@ def _extract_html_from_ocr_text(ocr_text: str) -> str:
                     if formatted:
                         return formatted
 
+                # Canonical Chandra JSON {"ocr_html": "<...>"}
+                if "ocr_html" in parsed and isinstance(parsed["ocr_html"], str):
+                    html = parsed["ocr_html"].strip()
+                    return sanitize_html(html) if html else ""
+
                 # Другой JSON со структурой html/children
                 html = _extract_html_from_parsed(parsed)
                 if html:
                     return sanitize_html(html)
+
+            if isinstance(parsed, list) and parsed:
+                # Chandra JSON array: извлекаем html из элементов
+                html = _extract_html_from_parsed(parsed)
+                if html:
+                    return sanitize_html(html)
+                # Pure bbox dump — пустая строка вместо <pre>garbage</pre>
+                if all(isinstance(item, dict) for item in parsed):
+                    keys: set = set()
+                    for item in parsed:
+                        keys.update(item.keys())
+                    if keys & {"data-bbox", "data-label", "bbox", "label"}:
+                        return ""
         except json_module.JSONDecodeError:
             pass
 
