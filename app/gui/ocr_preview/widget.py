@@ -7,8 +7,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtGui import QCursor, QDesktopServices
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,6 +27,24 @@ from .content_mixin import ContentMixin
 from .edit_mixin import EditMixin
 
 logger = logging.getLogger(__name__)
+
+
+class ExternalLinkPage(QWebEnginePage):
+    """Перехват кликов по ссылкам — открытие во внешнем браузере."""
+
+    def acceptNavigationRequest(self, url: QUrl, nav_type, is_main_frame: bool) -> bool:
+        if nav_type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
+            QDesktopServices.openUrl(url)
+            return False
+        return True
+
+    def createWindow(self, window_type):
+        """Перехват target='_blank' / new-window запросов."""
+        # Вместо создания нового окна — открываем URL во внешнем браузере.
+        # Возвращаем временную страницу, чтобы перехватить URL через urlChanged.
+        page = ExternalLinkPage(self)
+        page.urlChanged.connect(lambda url: QDesktopServices.openUrl(url))
+        return page
 
 
 class OcrPreviewWidget(ContentMixin, EditMixin, QWidget):
@@ -95,6 +114,7 @@ class OcrPreviewWidget(ContentMixin, EditMixin, QWidget):
 
         # HTML Preview (QWebEngineView для корректного рендеринга HTML/CSS)
         self.preview_edit = QWebEngineView()
+        self.preview_edit.setPage(ExternalLinkPage(self.preview_edit))
         self.preview_edit.setStyleSheet(
             """
             QWebEngineView {

@@ -98,10 +98,9 @@ class BlockRenderingMixin:
         label.setFont(font)
         label.setDefaultTextColor(QColor(255, 0, 0))
         label.setFlag(label.GraphicsItemFlag.ItemIgnoresTransformations, True)
-        # Позиционируем метку в правом верхнем углу блока с учетом масштаба
-        offset_x = 5 / self.zoom_factor  # Небольшой отступ внутрь блока
-        offset_y = 5 / self.zoom_factor
-        label.setPos(x2 - offset_x, y1 + offset_y)
+        # Позиционируем метку в правом верхнем углу блока с учётом ширины текста
+        lx, ly = self._compute_label_anchor(block, label)
+        label.setPos(lx, ly)
         self.scene.addItem(label)
         self.block_labels[block.id] = label
 
@@ -120,6 +119,72 @@ class BlockRenderingMixin:
             BlockType.STAMP: QColor(30, 144, 255),  # Dodger Blue
         }
         return colors.get(block.block_type, QColor(128, 128, 128))
+
+    def _compute_label_anchor(self, block: Block, label: QGraphicsTextItem) -> tuple:
+        """Вычислить позицию метки номера блока (правый верхний угол, внутрь).
+
+        Для прямоугольников: правый верхний угол с учётом ширины текста.
+        Для полигонов: scanline у верхней границы контура → правое пересечение,
+        сдвиг внутрь на ширину текста.
+        """
+        inset = 5 / self.zoom_factor
+        # Ширина текста в scene-координатах (ItemIgnoresTransformations)
+        text_w = label.boundingRect().width() / self.zoom_factor
+
+        x1, y1, x2, y2 = block.coords_px
+
+        if block.shape_type == ShapeType.POLYGON and block.polygon_points:
+            return self._polygon_label_anchor(
+                block.polygon_points, text_w, inset
+            )
+
+        # Прямоугольник: правый верхний угол внутрь
+        return (x2 - inset - text_w, y1 + inset)
+
+    @staticmethod
+    def _polygon_label_anchor(
+        points: list, text_w: float, inset: float
+    ) -> tuple:
+        """Anchor для метки полигона по scanline у верхнего контура.
+
+        1. Scanline на y = y_min + inset → пересечения с рёбрами → правое.
+        2. Fallback: правейшая вершина в верхних 20% высоты.
+        3. Fallback: bbox правый верхний угол.
+        """
+        ys = [p[1] for p in points]
+        xs = [p[0] for p in points]
+        y_min, y_max = min(ys), max(ys)
+        height = y_max - y_min
+
+        # Scanline чуть ниже верхней границы
+        scan_y = y_min + max(inset, height * 0.05)
+
+        # Пересечения scanline с рёбрами полигона
+        intersections = []
+        n = len(points)
+        for i in range(n):
+            ax, ay = points[i]
+            bx, by = points[(i + 1) % n]
+            # Ребро пересекает scanline?
+            if (ay <= scan_y < by) or (by <= scan_y < ay):
+                # Линейная интерполяция x на scanline
+                t = (scan_y - ay) / (by - ay)
+                ix = ax + t * (bx - ax)
+                intersections.append(ix)
+
+        if intersections:
+            right_x = max(intersections)
+            return (right_x - inset - text_w, scan_y)
+
+        # Fallback 1: правейшая вершина в верхних 20% высоты
+        top_band = y_min + height * 0.2
+        top_vertices = [(px, py) for px, py in points if py <= top_band]
+        if top_vertices:
+            rightmost = max(top_vertices, key=lambda p: p[0])
+            return (rightmost[0] - inset - text_w, rightmost[1] + inset)
+
+        # Fallback 2: bbox
+        return (max(xs) - inset - text_w, y_min + inset)
 
     def _redraw_blocks(self):
         """Перерисовать все блоки"""

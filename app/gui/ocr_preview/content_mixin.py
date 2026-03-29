@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Dict, Optional
 
+from rd_core.ocr.generator_common import extract_image_ocr_data, is_image_ocr_json
+from rd_core.ocr.html_generator import _format_image_ocr_html
 
 logger = logging.getLogger(__name__)
 
@@ -151,68 +154,72 @@ class ContentMixin:
         self.stamp_group.show()
 
     def _format_image_block(self, block_data: dict, html_content: str) -> str:
-        """Форматировать IMAGE блок с ocr_json и crop_url."""
+        """Форматировать IMAGE блок с crop link и OCR контентом.
+
+        Приоритет контента:
+        1. ocr_html (сохраняет ручное редактирование)
+        2. HTML из ocr_json через общий _format_image_ocr_html
+        3. Structured parse из ocr_text
+        4. <pre> fallback
+        """
         parts = []
 
-        # Ссылка на кроп
-        crop_url = block_data.get("crop_url")
-        if crop_url:
-            parts.append(
-                f'<p><a href="{crop_url}" target="_blank">📎 Открыть кроп</a></p>'
-            )
+        # Ссылка на кроп: crop_url приоритет, иначе image_file как file:///
+        crop_link = self._build_crop_link(block_data)
+        if crop_link:
+            parts.append(crop_link)
 
-        # ocr_json от модели
-        ocr_json = block_data.get("ocr_json")
-        if ocr_json:
-            parts.append(self._format_ocr_json(ocr_json))
-        elif html_content:
-            parts.append(html_content)
-        elif block_data.get("ocr_text"):
-            parts.append(f"<pre>{block_data['ocr_text']}</pre>")
+        # Контент по приоритету
+        content = ""
+
+        # 1. ocr_html — приоритет (сохраняет ручное редактирование)
+        if html_content:
+            content = html_content
+
+        # 2. ocr_json → общий formatter
+        if not content:
+            ocr_json = block_data.get("ocr_json")
+            if ocr_json and isinstance(ocr_json, dict):
+                if is_image_ocr_json(ocr_json):
+                    content = _format_image_ocr_html(ocr_json)
+
+        # 3. ocr_text → structured parse
+        if not content and block_data.get("ocr_text"):
+            ocr_text = block_data["ocr_text"]
+            try:
+                import json as json_module
+                parsed = json_module.loads(ocr_text.strip())
+                if isinstance(parsed, dict) and is_image_ocr_json(parsed):
+                    content = _format_image_ocr_html(parsed)
+            except (json_module.JSONDecodeError, AttributeError):
+                pass
+
+        # 4. Fallback: ocr_text как есть
+        if not content and block_data.get("ocr_text"):
+            content = f"<pre>{block_data['ocr_text']}</pre>"
+
+        if content:
+            parts.append(content)
 
         return "\n".join(parts) if parts else html_content
 
-    def _format_ocr_json(self, ocr_json: dict) -> str:
-        """Форматировать ocr_json в HTML."""
-        parts = []
+    @staticmethod
+    def _build_crop_link(block_data: dict) -> str:
+        """Построить HTML-ссылку на кроп (crop_url или image_file)."""
+        crop_url = block_data.get("crop_url")
+        if crop_url:
+            return f'<p><a href="{crop_url}" target="_blank">📎 Открыть кроп</a></p>'
 
-        # Тип фрагмента
-        if ocr_json.get("fragment_type"):
-            parts.append(f"<p><b>Тип фрагмента:</b> {ocr_json['fragment_type']}</p>")
+        image_file = block_data.get("image_file")
+        if image_file:
+            p = Path(image_file)
+            try:
+                file_url = p.as_uri()
+            except ValueError:
+                file_url = p.absolute().as_uri()
+            return f'<p><a href="{file_url}" target="_blank">📎 Открыть кроп (локальный)</a></p>'
 
-        # Описание
-        if ocr_json.get("content_summary"):
-            parts.append(f"<p><b>Описание:</b> {ocr_json['content_summary']}</p>")
-
-        if ocr_json.get("detailed_description"):
-            parts.append(f"<p>{ocr_json['detailed_description']}</p>")
-
-        # Локация
-        loc = ocr_json.get("location", {})
-        if loc:
-            zone = loc.get("zone_name", "—")
-            grid = loc.get("grid_lines", "—")
-            level = loc.get("level_or_elevation", "")
-            loc_str = f"<b>Зона:</b> {zone} | <b>Оси:</b> {grid}"
-            if level:
-                loc_str += f" | <b>Отм.:</b> {level}"
-            parts.append(f"<p>{loc_str}</p>")
-
-        # Ключевые сущности
-        entities = ocr_json.get("key_entities", [])
-        if entities:
-            entities_str = ", ".join(str(e) for e in entities[:50])
-            parts.append(f"<p><b>Сущности:</b> {entities_str}</p>")
-
-        # Если ничего не распознали — показываем JSON как есть
-        if not parts:
-            import json as json_module
-
-            parts.append(
-                f"<pre>{json_module.dumps(ocr_json, ensure_ascii=False, indent=2)}</pre>"
-            )
-
-        return "\n".join(parts)
+        return ""
 
     def _apply_preview_styles(self, html: str) -> str:
         """Добавить стили для preview (полноценный CSS для WebEngine)"""
