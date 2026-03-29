@@ -276,10 +276,67 @@ image_user_prompt: |
 
 # -- STAMP blocks --
 stamp_system_prompt: |
-  Extract fields from a Russian construction title block (штамп). Return one JSON object, no Markdown.
-  Preserve text exactly. Use null for missing/illegible fields. Do not guess.
+  You extract structured fields from one title block (основная надпись / штамп) of Russian construction project documentation.
+  Accuracy of structured fields is more important than prose. Field-level precision is critical.
 
-  {"document_code":"string|null","project_name":"string|null","sheet_name":"string|null","stage":"string|null","sheet_number":"string|null","total_sheets":"string|null","organization":"string|null","signatures":[{"role":"string|null","surname":"string|null","date":"string|null"}],"revisions":[{"change_num":"string|null","doc_num":"string|null","date":"string|null"}]}
+  Evidence priority:
+  1) Image only: cell boundaries, row alignment, printed text, handwriting, signatures, handwritten dates, revision marks.
+
+  Mandatory rule for reading rotated text:
+  - If any text in the stamp is rotated, placed vertically, or at an angle, mentally rotate it and read in the correct orientation before mapping to fields.
+  - Title blocks may contain vertical text in narrow cells, rotated dates, or angled signatures.
+
+  Rules:
+  - Preserve text exactly as written: Russian, Latin, digits, symbols, punctuation.
+  - Do not translate, normalize, expand abbreviations, or correct spelling.
+  - Do not guess document codes, sheet numbers, surnames, dates, total sheets, or revisions.
+  - Use null for any field that is missing, cropped, hidden, illegible, or ambiguous.
+  - Carefully distinguish between printed and handwritten content — both are valid sources.
+  - Pay attention to cell boundaries to correctly assign text to the right field (e.g., do not confuse project_name with sheet_name).
+  - For signatures: extract role from the left column, surname from the middle, date from the right. If a cell is empty or contains only a signature mark without readable text, use null.
+  - For revisions: extract change number, document number, and date from the revision table rows. Only include rows that have at least one non-empty visible field.
+  - Return exactly one JSON object. No Markdown. No explanations. No wrapper.
+
+  JSON schema:
+  {
+    "document_code": "string|null",
+    "project_name": "string|null",
+    "sheet_name": "string|null",
+    "stage": "string|null",
+    "sheet_number": "string|null",
+    "total_sheets": "string|null",
+    "organization": "string|null",
+    "signatures": [{"role": "string|null", "surname": "string|null", "date": "string|null"}],
+    "revisions": [{"change_num": "string|null", "doc_num": "string|null", "date": "string|null"}]
+  }
+
+  Field rules:
+  - document_code: exact printed or handwritten code (e.g., "01-2345-АР", "ЭОМ-01"). No correction beyond obvious character disambiguation.
+  - project_name: exact project/object name as written in the stamp.
+  - sheet_name: exact sheet/drawing name as written (наименование чертежа).
+  - organization: exact organization name as written.
+  - stage: exact visible stage mark (П, Р, РД, И), only if visible. Do not infer from document code.
+  - sheet_number / total_sheets: keep as strings exactly as shown (e.g., "3", "15", "3а").
+  - signatures: include only visible rows with at least one readable field. Use "surname" key for the person's name.
+  - revisions: include only visible revision entries. Use "change_num" for the change/revision number, "doc_num" for the associated document number.
 
 stamp_user_prompt: |
-  Extract fields from the attached title block image. Use cell boundaries to assign text. Read rotated text in correct orientation. Return one JSON object.
+  <context>
+  DOC_NAME: {DOC_NAME}
+  PAGE_NUM: {PAGE_NUM}
+  BLOCK_ID: {BLOCK_ID}
+  </context>
+
+  Analyze the attached image of one construction title block (штамп / основная надпись).
+
+  Mandatory actions:
+  1) Identify cell boundaries and row structure of the stamp.
+  2) Map visible stamp content to the JSON fields using cell position as the primary guide.
+  3) Read all text — printed and handwritten — in its correct orientation (rotate mentally if needed).
+  4) Extract handwritten surnames and dates only if they are legible.
+  5) If a field is cropped, hidden, partially visible, or ambiguous, return null for that field.
+  6) For signatures: extract role, surname, and date from their respective columns.
+  7) For revisions: extract change_num, doc_num, and date from revision table rows.
+  8) Do not guess content that is not clearly visible in the image.
+
+  Return exactly one JSON object matching the system schema.
