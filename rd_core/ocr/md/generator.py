@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from ..generator_common import (
     collect_inheritable_stamp_data,
+    extract_stamp_from_doc_name,
     find_page_stamp,
     get_block_armor_id,
     is_stamp_block,
@@ -48,8 +49,10 @@ def generate_md_from_pages(
 
         title = doc_name or "OCR Result"
 
-        # Собираем данные штампа
+        # Собираем данные штампа (fallback — из имени PDF)
         inherited_stamp_data = collect_inheritable_stamp_data(pages)
+        if not inherited_stamp_data:
+            inherited_stamp_data = extract_stamp_from_doc_name(doc_name)
 
         # Собираем связи IMAGE→TEXT для объединения
         image_to_text = collect_image_text_links_from_pages(pages)
@@ -228,7 +231,7 @@ def generate_md_from_result(
     md_parts.append("")
     md_parts.append(f"Сгенерировано: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-    # Собираем данные штампа из первого блока
+    # Собираем данные штампа из первого блока (fallback — из имени PDF)
     first_stamp = None
     for page in result.get("pages", []):
         for blk in page.get("blocks", []):
@@ -237,6 +240,9 @@ def generate_md_from_result(
                 break
         if first_stamp:
             break
+
+    if not first_stamp:
+        first_stamp = extract_stamp_from_doc_name(doc_name)
 
     if first_stamp:
         stamp_str = format_stamp_md(first_stamp)
@@ -342,8 +348,8 @@ def generate_md_from_result(
             if meta_parts:
                 md_parts.append(" ".join(meta_parts))
 
-            # Per-block stamp metadata
-            blk_stamp = blk.get("stamp_data")
+            # Per-block stamp metadata (fallback на first_stamp из doc_name)
+            blk_stamp = blk.get("stamp_data") or first_stamp
             if blk_stamp:
                 blk_stamp_str = format_stamp_md(blk_stamp)
                 if blk_stamp_str:

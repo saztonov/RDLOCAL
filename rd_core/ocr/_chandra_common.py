@@ -5,7 +5,10 @@ import os
 import re
 from typing import Optional, Tuple
 
-from rd_core.ocr_result import make_error, make_non_retriable
+from rd_core.ocr_result import make_error, make_non_retriable, is_error
+
+# Специальный маркер для length-truncation (не OCR ошибка, а сигнал для retry)
+LENGTH_TRUNCATED_PREFIX = "[LENGTH_TRUNCATED]"
 from rd_core.ocr.utils import extract_message_text, strip_think_tags, strip_untagged_reasoning
 
 logger = logging.getLogger(__name__)
@@ -319,18 +322,44 @@ def parse_response(response_json: dict) -> str:
     - Поддержку str и list форматов content
     - Автоматическую очистку reasoning-прозы из reasoning_content
     - Структурированное логирование источника ответа
+
+    При finish_reason="length" возвращает маркер LENGTH_TRUNCATED_PREFIX + partial text,
+    чтобы вызывающий код мог выполнить retry с повышенным max_tokens.
     """
     if "choices" not in response_json or not response_json["choices"]:
         err_msg = response_json.get("error", response_json)
         logger.error(f"Chandra: 'choices' missing: {err_msg}")
         return make_error(f"Chandra: некорректный ответ ({err_msg})")
 
-    message = response_json["choices"][0]["message"]
+    choice = response_json["choices"][0]
+    finish_reason = choice.get("finish_reason", "")
+
+    # Логируем usage-метрики
+    usage = response_json.get("usage", {})
+    if usage:
+        logger.info(
+            f"Chandra usage: prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}, "
+            f"reasoning_tokens={usage.get('reasoning_tokens', '?')}, "
+            f"finish_reason={finish_reason}"
+        )
+
+    message = choice["message"]
     text, source = _normalize_chandra_response(message)
 
     if not text:
         logger.warning("Chandra OCR: получен пустой ответ от модели")
         return make_error("Chandra: пустой ответ модели")
+
+    # finish_reason="length" → ответ обрезан по max_tokens
+    if finish_reason == "length":
+        logger.warning(
+            f"Chandra: finish_reason=length — ответ обрезан "
+            f"(completion_tokens={usage.get('completion_tokens', '?')}, "
+            f"source={source}, text_len={len(text)})"
+        )
+        return f"{LENGTH_TRUNCATED_PREFIX}{text}"
+
     return text
 
 

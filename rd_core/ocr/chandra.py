@@ -10,6 +10,7 @@ from rd_core.ocr._chandra_common import (
     CHANDRA_LOAD_CONFIG,
     CHANDRA_MAX_IMAGE_SIZE,
     CHANDRA_MODEL_KEY,
+    LENGTH_TRUNCATED_PREFIX,
     TRANSIENT_CODES,
     build_payload,
     check_non_retriable_error,
@@ -79,6 +80,10 @@ class ChandraBackend(LMStudioLifecycleMixin):
             ) if k in cfg
         }
 
+        # Length-retry: автоматический повтор при finish_reason="length"
+        self._length_retry_attempts = cfg.get("length_retry_attempts", 1)
+        self._length_retry_max_tokens = cfg.get("length_retry_max_tokens", 16384)
+
         self.base_url = init_base_url(base_url)
         self._model_id: Optional[str] = None
         self._model_lock = threading.Lock()
@@ -88,7 +93,13 @@ class ChandraBackend(LMStudioLifecycleMixin):
         self._deadline: Optional[float] = None
         self._cancel_event: Optional[threading.Event] = None
         self._http_timeout = http_timeout
-        logger.info(f"ChandraBackend инициализирован (base_url: {self.base_url})")
+        logger.info(
+            f"ChandraBackend инициализирован: base_url={self.base_url}, "
+            f"model_key={self._MODEL_KEY}, "
+            f"context_length={self._LOAD_CONFIG.get('context_length', '?')}, "
+            f"max_tokens={self._inference_params.get('max_tokens', 'default')}, "
+            f"length_retry={self._length_retry_attempts}x{self._length_retry_max_tokens}"
+        )
 
     def supports_pdf_input(self) -> bool:
         return False
@@ -178,6 +189,13 @@ class ChandraBackend(LMStudioLifecycleMixin):
                 return make_error(f"Chandra API: {response.status_code}")
 
             text = parse_response(response.json())
+
+            # Length-retry: ответ обрезан по max_tokens → повтор с повышенным лимитом
+            if text.startswith(LENGTH_TRUNCATED_PREFIX):
+                text = self._handle_length_retry(
+                    model_id, prompt, img_b64, text,
+                )
+
             if not is_error(text):
                 logger.debug(f"Chandra OCR: распознано {len(text)} символов")
             return text
@@ -185,3 +203,69 @@ class ChandraBackend(LMStudioLifecycleMixin):
         except Exception as e:
             logger.error(f"Ошибка Chandra OCR: {e}", exc_info=True)
             return make_error(f"Chandra OCR: {e}")
+
+    def _handle_length_retry(
+        self,
+        model_id: str,
+        prompt: Optional[dict],
+        img_b64: str,
+        truncated_result: str,
+    ) -> str:
+        """Авто-retry при finish_reason='length' с повышенным max_tokens."""
+        partial_text = truncated_result[len(LENGTH_TRUNCATED_PREFIX):]
+
+        for retry in range(self._length_retry_attempts):
+            retry_max = self._length_retry_max_tokens
+            logger.info(
+                f"Chandra length-retry {retry + 1}/{self._length_retry_attempts}: "
+                f"повтор с max_tokens={retry_max}"
+            )
+
+            retry_params = dict(self._inference_params) if self._inference_params else {}
+            retry_params["max_tokens"] = retry_max
+            retry_payload = build_payload(
+                model_id, prompt, img_b64,
+                inference_params=retry_params,
+            )
+
+            try:
+                resp = self.session.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers={"Content-Type": "application/json"},
+                    json=retry_payload, timeout=self._http_timeout,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"Chandra length-retry: HTTP {resp.status_code}"
+                    )
+                    continue
+
+                text = parse_response(resp.json())
+
+                # Если опять length-truncated — продолжаем retry
+                if text.startswith(LENGTH_TRUNCATED_PREFIX):
+                    partial_text = text[len(LENGTH_TRUNCATED_PREFIX):]
+                    logger.warning(
+                        f"Chandra length-retry {retry + 1}: снова length-truncated"
+                    )
+                    continue
+
+                if not is_error(text):
+                    logger.info(
+                        f"Chandra length-retry: успех, {len(text)} символов"
+                    )
+                return text
+
+            except Exception as e:
+                logger.warning(f"Chandra length-retry error: {e}")
+                continue
+
+        # Все retry исчерпаны — возвращаем ошибку вместо partial text
+        logger.error(
+            f"Chandra: все {self._length_retry_attempts} length-retry исчерпаны, "
+            f"частичный текст ({len(partial_text)} симв.) отклонён"
+        )
+        return make_error(
+            f"Chandra: ответ обрезан (finish_reason=length) "
+            f"после {self._length_retry_attempts} повторов"
+        )

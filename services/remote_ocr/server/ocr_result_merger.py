@@ -9,6 +9,7 @@ from typing import Optional
 from rd_core.ocr.generator_common import (
     HTML_FOOTER,
     collect_inheritable_stamp_data_dict,
+    extract_stamp_from_doc_name,
     format_stamp_parts,
     get_block_armor_id,
     get_html_header,
@@ -125,8 +126,12 @@ def enrich_annotation_dict(
             else:
                 missing.append(bid)
 
-    # Собираем общие данные штампа
+    # Собираем общие данные штампа (fallback — из имени PDF)
     inherited_stamp = collect_inheritable_stamp_data_dict(result.get("pages", []))
+    if not inherited_stamp:
+        pdf_path = result.get("pdf_path", "")
+        doc_name_for_stamp = Path(pdf_path).stem if pdf_path else None
+        inherited_stamp = extract_stamp_from_doc_name(doc_name_for_stamp)
 
     # Распространение данных штампа
     for page in result.get("pages", []):

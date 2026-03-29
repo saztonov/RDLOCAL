@@ -13,6 +13,7 @@ from .generator_common import (
     contains_html,
     extract_image_ocr_data,
     extract_qwen_html,
+    extract_stamp_from_doc_name,
     find_page_stamp,
     format_stamp_parts,
     get_block_armor_id,
@@ -281,8 +282,10 @@ def generate_html_from_pages(
         # Используем общий HTML шаблон
         html_parts = [get_html_header(title)]
 
-        # Собираем общие данные штампа для страниц без штампа
+        # Собираем общие данные штампа для страниц без штампа (fallback — из имени PDF)
         inherited_stamp_data = collect_inheritable_stamp_data(pages)
+        if not inherited_stamp_data:
+            inherited_stamp_data = extract_stamp_from_doc_name(doc_name)
         inherited_stamp_html = (
             _format_inherited_stamp_html(inherited_stamp_data)
             if inherited_stamp_data

@@ -66,7 +66,10 @@ chandra_preload_timeout: 60
 chandra_max_retries: 3
 chandra_retry_delays: [30, 60, 120]
 # Inference параметры
-chandra_max_tokens: 2048
+chandra_max_tokens: 8192
+# Length-retry: повтор при обрезании ответа (finish_reason="length")
+chandra_length_retry_attempts: 1
+chandra_length_retry_max_tokens: 16384
 chandra_temperature: 0.1
 chandra_top_p: 0.95
 chandra_top_k: 40

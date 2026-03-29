@@ -151,6 +151,27 @@ def collect_inheritable_stamp_data(pages: List) -> Optional[Dict]:
     return inherited if inherited else None
 
 
+def extract_stamp_from_doc_name(doc_name: Optional[str]) -> Optional[Dict]:
+    """Fallback: извлечь шифр документа из имени PDF-файла.
+
+    Если STAMP-блоки не размечены, пытаемся извлечь document_code из имени файла.
+    Примеры имён: 'СТ26-01-14-КЖ1-2.2-Изм.3.pdf', '133/23-ГК-ВК1.pdf'
+
+    Returns:
+        Dict с полем document_code, или None если не удалось извлечь.
+    """
+    if not doc_name:
+        return None
+
+    # Убираем расширение .pdf
+    name = re.sub(r'\.pdf$', '', doc_name, flags=re.IGNORECASE).strip()
+    if not name:
+        return None
+
+    # Шифр — это весь стем имени файла (без расширения)
+    return {"document_code": name}
+
+
 # Паттерн для мусорных img тегов от datalab (хеш_img.ext)
 DATALAB_IMG_PATTERN = re.compile(
     r'<img[^>]*src=["\']?[a-f0-9]{20,}_img(?:\.[a-z]{3,4})?["\']?[^>]*/?>',

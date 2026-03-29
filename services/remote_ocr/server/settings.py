@@ -139,6 +139,8 @@ class Settings:
     chandra_min_p: float = _cfg("chandra_min_p", "CHANDRA_MIN_P", float)
     chandra_system_prompt: str = _cfg("chandra_system_prompt", "CHANDRA_SYSTEM_PROMPT")
     chandra_user_prompt: str = _cfg("chandra_user_prompt", "CHANDRA_USER_PROMPT")
+    chandra_length_retry_attempts: int = _cfg("chandra_length_retry_attempts", "CHANDRA_LENGTH_RETRY_ATTEMPTS", int)
+    chandra_length_retry_max_tokens: int = _cfg("chandra_length_retry_max_tokens", "CHANDRA_LENGTH_RETRY_MAX_TOKENS", int)
 
     # ===== QWEN (LM Studio — IMAGE/STAMP) =====
     qwen_max_concurrent: int = _cfg("qwen_max_concurrent", "QWEN_MAX_CONCURRENT", int)
