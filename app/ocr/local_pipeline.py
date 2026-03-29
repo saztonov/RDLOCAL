@@ -58,6 +58,7 @@ def run_local_ocr(
     check_cancelled: CancelCheck | None = None,
     is_correction_mode: bool = False,
     node_id: str | None = None,
+    full_blocks_data: list[dict] | None = None,
 ) -> LocalOcrResult:
     """
     Запускает полный OCR pipeline локально.
@@ -273,6 +274,7 @@ def run_local_ocr(
             is_correction_mode=is_correction_mode,
             deadline=deadline,
             node_id=node_id,
+            full_blocks_data=full_blocks_data,
         )
 
         # ── Очистка PNG кропов (PDF кропы в crops_final остаются для R2 upload) ──
@@ -358,6 +360,7 @@ def _generate_local_results(
     is_correction_mode: bool = False,
     deadline: float | None = None,
     node_id: str | None = None,
+    full_blocks_data: list[dict] | None = None,
 ):
     """Генерация файлов результатов (annotation.json, HTML, MD, export_report.json)."""
     from datetime import datetime, timezone
@@ -383,6 +386,31 @@ def _generate_local_results(
             suspicious, reason = is_suspicious_output(block.ocr_text)
             if suspicious:
                 block.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
+
+    # Correction mode: merge OCR results from the processed subset into
+    # the full block set so that HTML/MD export contains ALL blocks.
+    if is_correction_mode and full_blocks_data:
+        ocr_results = {b.id: b.ocr_text for b in blocks if b.ocr_text}
+
+        full_blocks = [Block.from_dict(b, migrate_ids=False)[0] for b in full_blocks_data]
+
+        for fb in full_blocks:
+            if fb.id in ocr_results:
+                fb.ocr_text = ocr_results[fb.id]
+
+        # Apply text filtering only to freshly OCR'd blocks in the full set
+        for fb in full_blocks:
+            if fb.id in ocr_results and fb.block_type == BlockType.TEXT and fb.ocr_text:
+                fb.ocr_text, _ = filter_mixed_text_output(fb.ocr_text, engine)
+                suspicious, reason = is_suspicious_output(fb.ocr_text)
+                if suspicious:
+                    fb.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
+
+        logger.info(
+            f"Correction mode: merged {len(ocr_results)} OCR results "
+            f"into {len(full_blocks)} total blocks"
+        )
+        blocks = full_blocks
 
     # Group blocks by page
     blocks_by_page: dict[int, list[tuple[int, object]]] = {}

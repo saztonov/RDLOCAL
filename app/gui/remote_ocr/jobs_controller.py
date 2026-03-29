@@ -170,6 +170,13 @@ class JobsController(QObject):
         # Serialize blocks для передачи в subprocess
         blocks_data = [b.to_dict() for b in selected_blocks]
 
+        # В correction mode: передаём ВСЕ блоки для полной генерации HTML/MD.
+        # _clear_ocr_text_in_memory уже очистила ocr_text для корректируемых блоков,
+        # поэтому full_blocks_data содержит старые ocr_text для успешных + None для новых.
+        full_blocks_data = (
+            [b.to_dict() for b in all_blocks] if self._is_correction_mode else None
+        )
+
         output_dir = dialog.output_dir or str(Path(pdf_path).parent)
 
         from app.gui.toast import show_toast
@@ -194,6 +201,7 @@ class JobsController(QObject):
             is_correction_mode=self._is_correction_mode,
             node_id=node_id,
             task_name=task_name,
+            full_blocks_data=full_blocks_data,
         )
 
     def cancel_job(self, job_id: str) -> None:

@@ -242,6 +242,18 @@ def build_segments_from_html(
         fragment = fragment.strip()
 
         if not fragment:
+            # Block matched by marker but content empty after cleaning —
+            # still register so downstream knows the marker was found.
+            logger.debug(
+                f"Block {block_id}: marker found but content empty after cleaning"
+            )
+            if block_id not in segments:
+                segments[block_id] = ""
+                meta[block_id] = {
+                    "method": ["marker_empty"],
+                    "match_score": marker["score"],
+                    "marker_text_sample": marker["marker_text"],
+                }
             continue
 
         if block_id in segments:

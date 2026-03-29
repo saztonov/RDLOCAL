@@ -223,6 +223,7 @@ class LocalOcrRunner(QObject):
         is_correction_mode: bool = False,
         node_id: str | None = None,
         task_name: str = "",
+        full_blocks_data: list[dict] | None = None,
     ) -> LocalJob:
         """Создать и запустить OCR задачу в отдельном процессе."""
         job = LocalJob(
@@ -265,6 +266,7 @@ class LocalOcrRunner(QObject):
                 "timeout_seconds": timeout_seconds,
                 "is_correction_mode": is_correction_mode,
                 "node_id": node_id,
+                "full_blocks_data": full_blocks_data,
             },
             daemon=True,
         )

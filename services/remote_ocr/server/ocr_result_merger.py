@@ -197,10 +197,11 @@ def regenerate_html_from_result(
             block_id = blk.get("id", "")
             block_type = blk.get("block_type", "text")
             ocr_html = blk.get("ocr_html", "")
+            ocr_text = blk.get("ocr_text", "")
             created_at = blk.get("created_at")
 
             # Блок отображается если есть контент ИЛИ метаданные
-            if not ocr_html and not created_at:
+            if not ocr_html and not created_at and not ocr_text:
                 continue
 
             block_count += 1
@@ -243,6 +244,12 @@ def regenerate_html_from_result(
             # Санитизируем HTML от мусорных артефактов datalab
             if ocr_html:
                 html_parts.append(sanitize_html(ocr_html))
+            elif ocr_text:
+                from rd_core.ocr.html_generator import _extract_html_from_ocr_text
+
+                fallback_html = _extract_html_from_ocr_text(ocr_text)
+                if fallback_html:
+                    html_parts.append(fallback_html)
             html_parts.append("</div></div>")
 
     html_parts.append(HTML_FOOTER)
