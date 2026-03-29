@@ -170,3 +170,65 @@ def classify_text_output(ocr_text: str, ocr_html: str = "") -> dict:
         return {"quality": "suspicious", "reason": reason}
 
     return {"quality": "ok", "reason": ""}
+
+
+def classify_image_output(ocr_text: str, ocr_json: dict | None = None) -> dict:
+    """Классифицировать качество IMAGE OCR результата.
+
+    Args:
+        ocr_text: OCR результат (сырой текст/JSON из бэкенда)
+        ocr_json: распарсенный JSON (из enriched dict)
+
+    Returns:
+        dict с полями:
+            quality: 'ok' | 'suspicious' | 'empty' | 'api_error'
+            reason: описание причины
+    """
+    if not ocr_text or not ocr_text.strip():
+        if not ocr_json:
+            return {"quality": "empty", "reason": "пустой ocr_text и ocr_json"}
+        return {"quality": "ok", "reason": ""}
+
+    if is_error(ocr_text):
+        if is_non_retriable(ocr_text):
+            return {"quality": "api_error", "reason": "неповторяемая ошибка API"}
+        return {"quality": "api_error", "reason": "ошибка API"}
+
+    if ocr_json is None:
+        return {"quality": "suspicious", "reason": "ocr_json не распарсен при непустом ocr_text"}
+
+    if isinstance(ocr_json, (dict, list)) and not ocr_json:
+        return {"quality": "suspicious", "reason": "ocr_json пустой"}
+
+    return {"quality": "ok", "reason": ""}
+
+
+def classify_stamp_output(ocr_text: str, stamp_data: dict | None = None) -> dict:
+    """Классифицировать качество STAMP OCR результата.
+
+    Args:
+        ocr_text: OCR результат (сырой текст/JSON из бэкенда)
+        stamp_data: распарсенные данные штампа (из enriched dict)
+
+    Returns:
+        dict с полями:
+            quality: 'ok' | 'suspicious' | 'empty' | 'api_error'
+            reason: описание причины
+    """
+    if not ocr_text or not ocr_text.strip():
+        if not stamp_data:
+            return {"quality": "empty", "reason": "пустой ocr_text и stamp_data"}
+        return {"quality": "ok", "reason": ""}
+
+    if is_error(ocr_text):
+        if is_non_retriable(ocr_text):
+            return {"quality": "api_error", "reason": "неповторяемая ошибка API"}
+        return {"quality": "api_error", "reason": "ошибка API"}
+
+    if stamp_data is None:
+        return {"quality": "suspicious", "reason": "stamp_data не распарсен при непустом ocr_text"}
+
+    if isinstance(stamp_data, dict) and not stamp_data:
+        return {"quality": "suspicious", "reason": "stamp_data пустой"}
+
+    return {"quality": "ok", "reason": ""}

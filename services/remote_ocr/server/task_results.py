@@ -20,8 +20,12 @@ def generate_results(
     work_dir: Path,
     ocr_backend=None,
     text_fallback_backend=None,
+    image_backend=None,
+    stamp_backend=None,
     on_verification_progress: Callable[[int, int], None] = None,
     verification_deadline: float | None = None,
+    before_stamp_phase: Callable = None,
+    before_image_phase: Callable = None,
 ) -> str:
     """Генерация результатов OCR (enriched annotation dict + HTML + MD)"""
     from rd_core.models import Block, Document, Page, ShapeType
@@ -189,9 +193,13 @@ def generate_results(
                 work_dir,
                 ocr_backend,
                 text_fallback_backend=text_fallback_backend,
+                image_backend=image_backend,
+                stamp_backend=stamp_backend,
                 on_progress=on_verification_progress,
                 job_id=job.id,
                 deadline=verification_deadline,
+                before_stamp_phase=before_stamp_phase,
+                before_image_phase=before_image_phase,
             )
         except Exception as e:
             logger.warning(f"Ошибка верификации блоков: {e}", exc_info=True)

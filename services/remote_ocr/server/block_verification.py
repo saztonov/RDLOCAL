@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import copy
+import json as _json
 import time
 from pathlib import Path
-from typing import Callable
-
+from typing import Callable, Optional
 
 from .logging_config import get_logger
 
@@ -86,116 +86,533 @@ def _wait_for_backend(backend, max_wait: int = 300, check_interval: int = 15) ->
     return False
 
 
+# ── Коллекторы проблемных блоков по типам ──────────────────────────
+
+
+def _collect_missing_text_blocks(pages: list[dict]) -> list[dict]:
+    """Найти TEXT блоки с пустым/ошибочным/подозрительным результатом."""
+    from .text_ocr_quality import classify_text_output
+
+    missing = []
+    for page in pages:
+        for blk in page.get("blocks", []):
+            block_type = blk.get("block_type", "text")
+            if block_type != "text":
+                continue
+            # Пропускаем штампы по category_code
+            if blk.get("category_code", "") == "stamp":
+                continue
+            ocr_text = blk.get("ocr_text", "")
+            if is_non_retriable(ocr_text):
+                continue
+
+            ocr_html = blk.get("ocr_html", "").strip()
+            reason = None
+            if not ocr_html or is_error(ocr_text):
+                reason = "api_error" if is_error(ocr_text) else "empty"
+            else:
+                quality = classify_text_output(ocr_text, ocr_html)
+                if quality["quality"] == "suspicious":
+                    reason = "suspicious_output"
+                    logger.info(
+                        f"Блок {blk.get('id', '')}: suspicious text output — {quality['reason']}"
+                    )
+
+            if reason:
+                missing.append({
+                    "block": blk,
+                    "page_index": blk.get("page_index", 1) - 1,
+                    "reason": reason,
+                })
+    return missing
+
+
+def _collect_missing_stamp_blocks(pages: list[dict]) -> list[dict]:
+    """Найти STAMP блоки с пустым/ошибочным/подозрительным результатом."""
+    from .text_ocr_quality import classify_stamp_output
+
+    missing = []
+    for page in pages:
+        for blk in page.get("blocks", []):
+            block_type = blk.get("block_type", "text")
+            category_code = blk.get("category_code", "")
+            # STAMP: block_type == "image" с category_code == "stamp", или block_type == "stamp"
+            is_stamp = category_code == "stamp" or block_type == "stamp"
+            if not is_stamp:
+                continue
+            ocr_text = blk.get("ocr_text", "")
+            if is_non_retriable(ocr_text):
+                continue
+
+            stamp_data = blk.get("stamp_data")
+            quality = classify_stamp_output(ocr_text, stamp_data)
+            if quality["quality"] in ("empty", "api_error", "suspicious"):
+                reason = quality["quality"] if quality["quality"] != "suspicious" else "suspicious_output"
+                if reason == "api_error" and not is_error(ocr_text):
+                    reason = "empty"
+                logger.info(
+                    f"Блок {blk.get('id', '')}: stamp {quality['quality']} — {quality['reason']}"
+                )
+                missing.append({
+                    "block": blk,
+                    "page_index": blk.get("page_index", 1) - 1,
+                    "reason": reason,
+                })
+    return missing
+
+
+def _collect_missing_image_blocks(pages: list[dict]) -> list[dict]:
+    """Найти IMAGE блоки (не штампы) с пустым/ошибочным/подозрительным результатом."""
+    from .text_ocr_quality import classify_image_output
+
+    missing = []
+    for page in pages:
+        for blk in page.get("blocks", []):
+            block_type = blk.get("block_type", "text")
+            category_code = blk.get("category_code", "")
+            # IMAGE: block_type == "image" без category_code == "stamp"
+            if block_type != "image" or category_code == "stamp":
+                continue
+            ocr_text = blk.get("ocr_text", "")
+            if is_non_retriable(ocr_text):
+                continue
+
+            ocr_json = blk.get("ocr_json")
+            quality = classify_image_output(ocr_text, ocr_json)
+            if quality["quality"] in ("empty", "api_error", "suspicious"):
+                reason = quality["quality"] if quality["quality"] != "suspicious" else "suspicious_output"
+                if reason == "api_error" and not is_error(ocr_text):
+                    reason = "empty"
+                logger.info(
+                    f"Блок {blk.get('id', '')}: image {quality['quality']} — {quality['reason']}"
+                )
+                missing.append({
+                    "block": blk,
+                    "page_index": blk.get("page_index", 1) - 1,
+                    "reason": reason,
+                })
+    return missing
+
+
+# ── Post-process callbacks для разных типов ──────────────────────────
+
+
+def _process_text_result(ocr_text: str, blk_data: dict, method_prefix: str, engine_name: str) -> bool:
+    """Обработать результат retry TEXT блока: structured OCR → sanitized HTML."""
+    from rd_core.ocr.generator_common import sanitize_html
+    from rd_core.ocr._chandra_common import (
+        _try_extract_structured_ocr,
+        _try_extract_structured_array,
+    )
+    from rd_core.ocr_result import is_suspicious_output
+
+    normalized = _try_extract_structured_ocr(ocr_text)
+    if normalized is None:
+        normalized = _try_extract_structured_array(ocr_text)
+    if normalized is None:
+        normalized = ocr_text
+    sanitized = sanitize_html(normalized)
+
+    suspicious, sus_reason = is_suspicious_output(ocr_text, sanitized)
+    if suspicious:
+        logger.warning(f"Блок {blk_data['id']}: retry результат подозрительный — {sus_reason}")
+        return False
+
+    blk_data["ocr_html"] = sanitized
+    blk_data["ocr_text"] = ocr_text
+    blk_data["ocr_meta"] = {
+        "method": [f"{method_prefix}_{engine_name}"],
+        "match_score": 100.0,
+        "marker_text_sample": "",
+    }
+    return True
+
+
+def _process_stamp_result(ocr_text: str, blk_data: dict, method_prefix: str, engine_name: str) -> bool:
+    """Обработать результат retry STAMP блока: парсинг stamp JSON."""
+    from .pdf_twopass.pass2_images import _parse_stamp_json
+
+    stamp_obj = _parse_stamp_json(ocr_text)
+    if stamp_obj is None:
+        logger.warning(f"Блок {blk_data['id']}: retry stamp — невалидный JSON")
+        return False
+
+    blk_data["ocr_text"] = _json.dumps(stamp_obj, ensure_ascii=False)
+    blk_data["stamp_data"] = stamp_obj
+    blk_data["ocr_json"] = stamp_obj
+    blk_data["ocr_meta"] = {
+        "method": [f"{method_prefix}_{engine_name}"],
+        "match_score": 100.0,
+        "marker_text_sample": "",
+    }
+    return True
+
+
+def _process_image_result(ocr_text: str, blk_data: dict, method_prefix: str, engine_name: str) -> bool:
+    """Обработать результат retry IMAGE блока: парсинг JSON."""
+    try:
+        obj = _json.loads(ocr_text)
+    except (_json.JSONDecodeError, TypeError):
+        logger.warning(f"Блок {blk_data['id']}: retry image — невалидный JSON")
+        return False
+
+    if not obj:
+        logger.warning(f"Блок {blk_data['id']}: retry image — пустой JSON")
+        return False
+
+    blk_data["ocr_text"] = ocr_text
+    blk_data["ocr_json"] = obj
+    blk_data["ocr_meta"] = {
+        "method": [f"{method_prefix}_{engine_name}"],
+        "match_score": 100.0,
+        "marker_text_sample": "",
+    }
+    return True
+
+
+# ── Построение промпта для IMAGE/STAMP retry ──────────────────────
+
+
+def _build_retry_prompt(blk_data: dict, pdf_path: Path) -> Optional[dict]:
+    """Построить промпт для IMAGE/STAMP retry из данных блока."""
+    from .worker_prompts import fill_image_prompt_variables
+
+    prompt_data = blk_data.get("prompt")
+    block_id = blk_data.get("id", "")
+    page_index = blk_data.get("page_index", 1) - 1  # enriched dict хранит 1-based
+    category_code = blk_data.get("category_code", "")
+    doc_name = Path(pdf_path).name
+
+    return fill_image_prompt_variables(
+        prompt_data=prompt_data,
+        doc_name=doc_name,
+        page_index=page_index,
+        block_id=block_id,
+        category_code=category_code or None,
+        engine=None,
+    )
+
+
+# ── Общий retry-цикл для фазы ──────────────────────────────────
+
+
+_VERIFICATION_RESERVE = 60
+MAX_CONSECUTIVE_FAILURES = 10
+MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK = 3
+
+
+def _retry_block_phase(
+    missing_blocks: list[dict],
+    retry_backend,
+    fallback_backend,
+    processor,
+    retry_crops_dir: Path,
+    phase_name: str,
+    post_process: Callable[[str, dict, str, str], bool],
+    *,
+    pdf_path: Path,
+    deadline: float | None,
+    timeout_min: float,
+    start_time: float,
+    job_id: str | None,
+    on_progress: Callable[[int, int], None] | None,
+    progress_offset: int,
+    total_all_phases: int,
+    use_prompt: bool = False,
+) -> tuple[int, str | None]:
+    """Общий retry-цикл для одной фазы верификации.
+
+    Args:
+        missing_blocks: список {block, page_index, reason}
+        retry_backend: основной бэкенд для retry
+        fallback_backend: fallback бэкенд (для TEXT suspicious_output)
+        processor: StreamingPDFProcessor (открытый)
+        retry_crops_dir: директория для сохранения кропов
+        phase_name: "text" | "stamp" | "image"
+        post_process: callback(ocr_text, blk_data, method_prefix, engine_name) -> bool
+        pdf_path: путь к PDF
+        deadline: абсолютное время deadline
+        timeout_min: таймаут верификации в минутах
+        start_time: время начала верификации (monotonic)
+        job_id: ID задачи
+        on_progress: callback прогресса
+        progress_offset: смещение для progress callback
+        total_all_phases: общее кол-во блоков во всех фазах
+        use_prompt: передавать ли промпт бэкенду (для IMAGE/STAMP)
+
+    Returns:
+        (successful_retries, stopped_reason)
+    """
+    from rd_core.models import Block
+
+    if not missing_blocks or not retry_backend:
+        return 0, None
+
+    engine_name = _get_engine_name(retry_backend)
+    fallback_engine_name = _get_engine_name(fallback_backend) if fallback_backend else None
+    is_lmstudio = _is_lmstudio_backend(retry_backend)
+    base_delay = _get_chandra_retry_delay()
+
+    successful_retries = 0
+    consecutive_failures = 0
+    consecutive_budget_exhausted = 0
+    primary_backend_disabled = False
+    stopped_reason = None
+
+    # Для LM Studio: ждём доступности бэкенда перед началом retry
+    if is_lmstudio:
+        if not _wait_for_backend(retry_backend, max_wait=300, check_interval=15):
+            logger.warning(f"{phase_name}: бэкенд недоступен, начинаем с надеждой на восстановление")
+
+    for idx, item in enumerate(missing_blocks):
+        # Проверка таймаута
+        if timeout_min > 0:
+            elapsed_min = (time.monotonic() - start_time) / 60
+            if elapsed_min > timeout_min:
+                stopped_reason = f"таймаут ({elapsed_min:.1f} мин > {timeout_min} мин)"
+                logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                break
+
+        # Проверка серии ошибок подряд
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            if is_lmstudio:
+                logger.warning(
+                    f"{phase_name}: {consecutive_failures} ошибок подряд, проверяем доступность..."
+                )
+                if _wait_for_backend(retry_backend, max_wait=180, check_interval=15):
+                    consecutive_failures = 0
+                    logger.info(f"{phase_name}: бэкенд восстановлен, продолжаем")
+                else:
+                    stopped_reason = f"бэкенд недоступен после {MAX_CONSECUTIVE_FAILURES} ошибок"
+                    logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                    break
+            else:
+                stopped_reason = f"{MAX_CONSECUTIVE_FAILURES} ошибок подряд (backend недоступен)"
+                logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                break
+
+        # Callback прогресса
+        if on_progress:
+            on_progress(progress_offset + idx, total_all_phases)
+
+        # Гарантируем отправку обновлений каждые 5 блоков
+        if job_id and idx % 5 == 0:
+            try:
+                from .debounced_updater import get_debounced_updater
+                get_debounced_updater(job_id).flush()
+            except Exception:
+                pass
+
+        blk_data = item["block"]
+        block_id = blk_data["id"]
+        reason = item["reason"]
+
+        # Выбор бэкенда
+        use_fallback = (
+            (reason == "suspicious_output" and fallback_backend)
+            or (primary_backend_disabled and fallback_backend)
+        )
+        if use_fallback:
+            current_backend = fallback_backend
+            current_engine = fallback_engine_name
+            method_prefix = "fallback"
+        else:
+            current_backend = retry_backend
+            current_engine = engine_name
+            method_prefix = "retry"
+
+        logger.info(
+            f"[{phase_name}][{idx+1}/{len(missing_blocks)}] Повторное распознавание блока "
+            f"{block_id} ({reason}), engine: {current_engine}"
+        )
+
+        # Пауза с exponential backoff (для LM Studio)
+        if _is_lmstudio_backend(current_backend) and idx > 0:
+            if consecutive_failures > 0:
+                backoff_delay = min(base_delay * (2 ** consecutive_failures), 120)
+                if deadline is not None and time.time() + backoff_delay > deadline - _VERIFICATION_RESERVE:
+                    stopped_reason = f"deadline задачи (до sleep {backoff_delay}с)"
+                    logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                    break
+                logger.info(f"Backoff delay: {backoff_delay}с (consecutive_failures={consecutive_failures})")
+                time.sleep(backoff_delay)
+            else:
+                if deadline is not None and time.time() + base_delay > deadline - _VERIFICATION_RESERVE:
+                    stopped_reason = "deadline задачи (до sleep base_delay)"
+                    logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                    break
+                time.sleep(base_delay)
+
+        # Промежуточная проверка доступности
+        if _is_lmstudio_backend(current_backend) and consecutive_failures > 0 and consecutive_failures % 3 == 0:
+            if not _check_backend_available(current_backend):
+                logger.info(f"{phase_name}: бэкенд недоступен, ожидание 60с...")
+                time.sleep(60)
+
+        try:
+            block_obj, _ = Block.from_dict(blk_data, migrate_ids=False)
+            block_obj.page_index = item["page_index"]
+
+            crop = processor.crop_block_image(block_obj, padding=5)
+            if not crop:
+                logger.warning(f"Не удалось создать кроп для блока {block_id}")
+                consecutive_failures += 1
+                continue
+
+            crop_path = retry_crops_dir / f"{block_id}.png"
+            crop.save(crop_path, "PNG")
+
+            # Распознавание — с промптом или без
+            if use_prompt:
+                prompt = _build_retry_prompt(blk_data, pdf_path)
+                ocr_text = current_backend.recognize(crop, prompt=prompt)
+            else:
+                ocr_text = current_backend.recognize(crop)
+            crop.close()
+
+            if ocr_text and not is_error(ocr_text):
+                if post_process(ocr_text, blk_data, method_prefix, current_engine):
+                    successful_retries += 1
+                    consecutive_failures = 0
+                    logger.info(
+                        f"Блок {block_id} успешно распознан {method_prefix} ({len(ocr_text)} символов)"
+                    )
+                else:
+                    consecutive_failures += 1
+            else:
+                # Для TEXT suspicious_output: если fallback не помог, попробовать primary
+                if (
+                    phase_name == "text"
+                    and reason == "suspicious_output"
+                    and current_backend is fallback_backend
+                ):
+                    logger.info(f"Блок {block_id}: fallback не помог, пробуем primary backend")
+                    crop = processor.crop_block_image(block_obj, padding=5)
+                    if crop:
+                        ocr_text = retry_backend.recognize(crop)
+                        crop.close()
+                        if ocr_text and not is_error(ocr_text):
+                            if post_process(ocr_text, blk_data, "retry", engine_name):
+                                successful_retries += 1
+                                consecutive_failures = 0
+                                logger.info(
+                                    f"Блок {block_id} успешно распознан primary retry ({len(ocr_text)} символов)"
+                                )
+                                continue
+
+                consecutive_failures += 1
+                # Детекция "time budget exhausted"
+                if ocr_text and "budget exhausted" in ocr_text:
+                    consecutive_budget_exhausted += 1
+                    if (
+                        consecutive_budget_exhausted >= MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK
+                        and not primary_backend_disabled
+                    ):
+                        if fallback_backend:
+                            primary_backend_disabled = True
+                            consecutive_failures = 0
+                            consecutive_budget_exhausted = 0
+                            logger.warning(
+                                f"{phase_name}: primary backend ({engine_name}) отключён после "
+                                f"{MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK} 'budget exhausted' ошибок, "
+                                f"переключение на fallback ({fallback_engine_name})"
+                            )
+                        else:
+                            stopped_reason = (
+                                f"primary backend budget exhausted × {consecutive_budget_exhausted}, "
+                                "fallback недоступен"
+                            )
+                            logger.warning(f"{phase_name} верификация прервана: {stopped_reason}")
+                            break
+                else:
+                    consecutive_budget_exhausted = 0
+                logger.warning(
+                    f"Блок {block_id} не распознан при retry: "
+                    f"{ocr_text[:100] if ocr_text else 'пусто'}"
+                )
+
+        except Exception as e:
+            consecutive_failures += 1
+            logger.error(f"Ошибка обработки блока {block_id}: {e}", exc_info=True)
+            continue
+
+    return successful_retries, stopped_reason
+
+
+# ── Главная функция верификации ──────────────────────────────────
+
+
 def verify_and_retry_missing_blocks(
     enriched_ann: dict,
     pdf_path: Path,
     work_dir: Path,
     ocr_backend,
     text_fallback_backend=None,
+    image_backend=None,
+    stamp_backend=None,
     on_progress: Callable[[int, int], None] = None,
     job_id: str = None,
     deadline: float | None = None,
+    before_stamp_phase: Callable = None,
+    before_image_phase: Callable = None,
 ) -> dict:
     """
     Верификация блоков после OCR и повторное распознавание пропущенных.
+
+    Обрабатывает все типы блоков в три фазы: TEXT → STAMP → IMAGE.
 
     Args:
         enriched_ann: enriched annotation dict (результат OCR)
         pdf_path: путь к PDF файлу
         work_dir: рабочая директория
-        ocr_backend: OCR backend для повторного распознавание (любой OCRBackend)
-        text_fallback_backend: fallback OCR backend для suspicious_output retry
+        ocr_backend: OCR backend для TEXT блоков (Chandra)
+        text_fallback_backend: fallback OCR backend для TEXT suspicious_output
+        image_backend: OCR backend для IMAGE блоков (Qwen 27b)
+        stamp_backend: OCR backend для STAMP блоков (Qwen 9b)
         on_progress: callback (current, total) для обновления прогресса
-        deadline: абсолютное время (time.time()) до которого нужно завершить верификацию.
-            Если задан — заменяет verification_timeout_minutes.
+        job_id: ID задачи
+        deadline: абсолютное время (time.time()) до которого нужно завершить верификацию
+        before_stamp_phase: callback для model swap перед STAMP фазой
+        before_image_phase: callback для model swap перед IMAGE фазой
 
     Returns:
         Обновлённый dict с результатами повторного распознавания
     """
-    from .text_ocr_quality import classify_text_output
-
     result = copy.deepcopy(enriched_ann)
+    pages = result.get("pages", [])
 
-    engine_name = _get_engine_name(ocr_backend)
+    # ── Сбор проблемных блоков по типам ──
+    missing_text = _collect_missing_text_blocks(pages)
+    missing_stamp = _collect_missing_stamp_blocks(pages) if stamp_backend else []
+    missing_image = _collect_missing_image_blocks(pages) if image_backend else []
 
-    # Находим блоки без OCR результата, с ошибками API, или с подозрительным output
-    missing_blocks = []
-    for page in result.get("pages", []):
-        for blk in page.get("blocks", []):
-            block_type = blk.get("block_type", "text")
-            block_id = blk.get("id", "")
-            ocr_html = blk.get("ocr_html", "").strip()
-            ocr_text = blk.get("ocr_text", "")
-            category_code = blk.get("category_code", "")
-
-            # Пропускаем штампы и image блоки (они обрабатываются отдельно)
-            if category_code == "stamp" or block_type == "image":
-                continue
-
-            # Проверяем только текстовые и табличные блоки
-            if block_type != "text":
-                continue
-
-            # Неповторяемые ошибки (context exceeded, невалидные координаты) — не ретраим
-            if is_non_retriable(ocr_text):
-                continue
-
-            # Определяем reason для retry
-            reason = None
-            if not ocr_html or is_error(ocr_text):
-                reason = "api_error" if is_error(ocr_text) else "empty"
-            else:
-                # Проверка suspicious output (layout-dump, bbox JSON, etc.)
-                quality = classify_text_output(ocr_text, ocr_html)
-                if quality["quality"] == "suspicious":
-                    reason = "suspicious_output"
-                    logger.info(
-                        f"Блок {block_id}: suspicious output — {quality['reason']}"
-                    )
-
-            if reason:
-                missing_blocks.append({
-                    "block": blk,
-                    "page_index": blk.get("page_index", 1) - 1,  # Конвертируем в 0-based
-                    "reason": reason,
-                })
-
-    if not missing_blocks:
-        logger.info("Все текстовые блоки распознаны")
+    total_missing = len(missing_text) + len(missing_stamp) + len(missing_image)
+    if total_missing == 0:
+        logger.info("Все блоки распознаны корректно")
         return result
 
-    total_found = len(missing_blocks)
-    error_count = sum(1 for b in missing_blocks if b["reason"] == "api_error")
-    empty_count = sum(1 for b in missing_blocks if b["reason"] == "empty")
-    suspicious_count = sum(1 for b in missing_blocks if b["reason"] == "suspicious_output")
     logger.warning(
-        f"Найдено {total_found} нераспознанных текстовых блоков "
-        f"(пустых: {empty_count}, ошибок API: {error_count}, "
-        f"подозрительных: {suspicious_count}), engine: {engine_name}",
+        f"Найдено {total_missing} нераспознанных блоков "
+        f"(text: {len(missing_text)}, stamp: {len(missing_stamp)}, image: {len(missing_image)})",
         extra={
             "event": "verification_missing_blocks",
             "job_id": job_id,
-            "total_blocks": total_found,
-            "block_count": error_count,
-            "suspicious_count": suspicious_count,
-            "backend": engine_name,
+            "total_blocks": total_missing,
+            "text_count": len(missing_text),
+            "stamp_count": len(missing_stamp),
+            "image_count": len(missing_image),
         },
     )
 
-    # Лимиты верификации из конфигурации
+    # ── Лимиты верификации ──
     from .settings import settings
-    max_blocks = settings.max_retry_blocks  # default 0 (без лимита)
-    timeout_min = settings.verification_timeout_minutes  # default 30
+    max_blocks = settings.max_retry_blocks
+    timeout_min = settings.verification_timeout_minutes
 
     is_lmstudio = _is_lmstudio_backend(ocr_backend)
-
-    # Для LM Studio: гарантируем минимальный таймаут 30 мин
     if is_lmstudio:
         timeout_min = max(timeout_min, 30)
 
-    # Если передан deadline задачи — используем его вместо timeout_min.
-    # Резервируем 60с на сохранение результатов и upload.
-    _VERIFICATION_RESERVE = 60
     if deadline is not None:
         remaining = deadline - time.time() - _VERIFICATION_RESERVE
         if remaining <= 0:
@@ -203,275 +620,135 @@ def verify_and_retry_missing_blocks(
                 f"Верификация пропущена: до deadline задачи осталось {remaining + _VERIFICATION_RESERVE:.0f}с"
             )
             return result
-        # Пересчитываем timeout_min на основе deadline
         timeout_min = remaining / 60
         logger.info(
             f"Верификация: deadline задачи через {remaining:.0f}с ({timeout_min:.1f} мин)"
         )
 
-    # Обновляем deadline для backend (Chandra) — иначе _is_budget_exhausted сразу True
+    # Обновляем deadline для бэкендов
     if deadline is not None:
         verification_deadline = deadline - _VERIFICATION_RESERVE
-        if hasattr(ocr_backend, "set_deadline"):
-            ocr_backend.set_deadline(verification_deadline)
-        if text_fallback_backend and hasattr(text_fallback_backend, "set_deadline"):
-            text_fallback_backend.set_deadline(verification_deadline)
+        for backend in (ocr_backend, text_fallback_backend, image_backend, stamp_backend):
+            if backend and hasattr(backend, "set_deadline"):
+                backend.set_deadline(verification_deadline)
 
-    if max_blocks > 0 and len(missing_blocks) > max_blocks:
-        logger.warning(
-            f"Ограничение верификации: {len(missing_blocks)} -> {max_blocks} блоков"
-        )
-        missing_blocks = missing_blocks[:max_blocks]
+    # Применяем лимит блоков (пропорционально по фазам)
+    if max_blocks > 0 and total_missing > max_blocks:
+        logger.warning(f"Ограничение верификации: {total_missing} -> {max_blocks} блоков")
+        # Пропорционально сокращаем каждую фазу
+        ratio = max_blocks / total_missing
+        missing_text = missing_text[:max(1, int(len(missing_text) * ratio))]
+        missing_stamp = missing_stamp[:max(1, int(len(missing_stamp) * ratio))] if missing_stamp else []
+        missing_image = missing_image[:max(1, int(len(missing_image) * ratio))] if missing_image else []
+        total_missing = len(missing_text) + len(missing_stamp) + len(missing_image)
 
-    # Создаём директорию для кропов
     retry_crops_dir = work_dir / "retry_crops"
     retry_crops_dir.mkdir(exist_ok=True)
 
-    # Обрабатываем каждый блок отдельно
     from .pdf_streaming_core import StreamingPDFProcessor
-    from rd_core.models import Block
 
-    successful_retries = 0
-    consecutive_failures = 0
-    consecutive_budget_exhausted = 0  # счётчик "time budget exhausted" ошибок подряд
-    MAX_CONSECUTIVE_FAILURES = 10
-    MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK = 3  # после 3 budget exhausted — переключаемся на fallback
     start_time = time.monotonic()
-    stopped_reason = None
-    base_delay = _get_chandra_retry_delay()
-    primary_backend_disabled = False  # True если primary отказал, используем только fallback
-
-    fallback_engine_name = _get_engine_name(text_fallback_backend) if text_fallback_backend else None
-
-    # Для LM Studio: ждём доступности бэкенда перед началом retry
-    if is_lmstudio:
-        if not _wait_for_backend(ocr_backend, max_wait=300, check_interval=15):
-            logger.warning("Бэкенд недоступен, начинаем верификацию с надеждой на восстановление")
+    total_successful = 0
+    all_stopped_reasons = []
 
     with StreamingPDFProcessor(str(pdf_path)) as processor:
-        for idx, item in enumerate(missing_blocks):
-            # Проверка таймаута верификации
-            if timeout_min > 0:
-                elapsed_min = (time.monotonic() - start_time) / 60
-                if elapsed_min > timeout_min:
-                    stopped_reason = f"таймаут ({elapsed_min:.1f} мин > {timeout_min} мин)"
-                    logger.warning(f"Верификация прервана: {stopped_reason}")
-                    break
 
-            # Проверка серии ошибок подряд — ждём восстановления бэкенда
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                if is_lmstudio:
-                    logger.warning(
-                        f"{consecutive_failures} ошибок подряд, проверяем доступность бэкенда..."
-                    )
-                    if _wait_for_backend(ocr_backend, max_wait=180, check_interval=15):
-                        consecutive_failures = 0
-                        logger.info("Бэкенд восстановлен, продолжаем верификацию")
-                    else:
-                        stopped_reason = f"бэкенд недоступен после {MAX_CONSECUTIVE_FAILURES} ошибок"
-                        logger.warning(f"Верификация прервана: {stopped_reason}")
-                        break
-                else:
-                    stopped_reason = f"{MAX_CONSECUTIVE_FAILURES} ошибок подряд (backend недоступен)"
-                    logger.warning(f"Верификация прервана: {stopped_reason}")
-                    break
-
-            # Вызываем callback прогресса перед обработкой блока
-            if on_progress:
-                on_progress(idx, len(missing_blocks))
-
-            # Гарантируем отправку обновлений каждые 5 блоков
-            if job_id and idx % 5 == 0:
-                from .debounced_updater import get_debounced_updater
-                get_debounced_updater(job_id).flush()
-
-            blk_data = item["block"]
-            block_id = blk_data["id"]
-            reason = item["reason"]
-
-            # Выбор бэкенда: suspicious_output или primary disabled → fallback
-            use_fallback = (
-                (reason == "suspicious_output" and text_fallback_backend)
-                or (primary_backend_disabled and text_fallback_backend)
+        # ── ФАЗА 1: TEXT блоки ──
+        if missing_text:
+            logger.info(f"Верификация TEXT фазы: {len(missing_text)} блоков")
+            success, stopped = _retry_block_phase(
+                missing_text,
+                retry_backend=ocr_backend,
+                fallback_backend=text_fallback_backend,
+                processor=processor,
+                retry_crops_dir=retry_crops_dir,
+                phase_name="text",
+                post_process=_process_text_result,
+                pdf_path=pdf_path,
+                deadline=deadline,
+                timeout_min=timeout_min,
+                start_time=start_time,
+                job_id=job_id,
+                on_progress=on_progress,
+                progress_offset=0,
+                total_all_phases=total_missing,
+                use_prompt=False,
             )
-            if use_fallback:
-                retry_backend = text_fallback_backend
-                retry_engine = fallback_engine_name
-                method_prefix = "fallback"
-            else:
-                retry_backend = ocr_backend
-                retry_engine = engine_name
-                method_prefix = "retry"
+            total_successful += success
+            if stopped:
+                all_stopped_reasons.append(f"text: {stopped}")
 
-            logger.info(
-                f"[{idx+1}/{len(missing_blocks)}] Повторное распознавание блока "
-                f"{block_id} ({reason}), engine: {retry_engine}"
+        # ── ФАЗА 2: STAMP блоки ──
+        if missing_stamp:
+            # Model swap перед STAMP фазой
+            if before_stamp_phase:
+                try:
+                    logger.info("Верификация: model swap → stamp backend")
+                    before_stamp_phase()
+                except Exception as e:
+                    logger.warning(f"Model swap to stamp failed: {e}")
+
+            logger.info(f"Верификация STAMP фазы: {len(missing_stamp)} блоков")
+            success, stopped = _retry_block_phase(
+                missing_stamp,
+                retry_backend=stamp_backend,
+                fallback_backend=None,
+                processor=processor,
+                retry_crops_dir=retry_crops_dir,
+                phase_name="stamp",
+                post_process=_process_stamp_result,
+                pdf_path=pdf_path,
+                deadline=deadline,
+                timeout_min=timeout_min,
+                start_time=start_time,
+                job_id=job_id,
+                on_progress=on_progress,
+                progress_offset=len(missing_text),
+                total_all_phases=total_missing,
+                use_prompt=True,
             )
+            total_successful += success
+            if stopped:
+                all_stopped_reasons.append(f"stamp: {stopped}")
 
-            # Пауза перед retry с exponential backoff при ошибках
-            # (только для LM Studio primary backend)
-            if _is_lmstudio_backend(retry_backend) and idx > 0:
-                if consecutive_failures > 0:
-                    backoff_delay = min(base_delay * (2 ** consecutive_failures), 120)
-                    # Проверяем deadline ПЕРЕД sleep — избегаем SoftTimeLimitExceeded
-                    if deadline is not None and time.time() + backoff_delay > deadline - _VERIFICATION_RESERVE:
-                        stopped_reason = f"deadline задачи (до sleep {backoff_delay}с)"
-                        logger.warning(f"Верификация прервана: {stopped_reason}")
-                        break
-                    logger.info(
-                        f"Backoff delay: {backoff_delay}с "
-                        f"(consecutive_failures={consecutive_failures})"
-                    )
-                    time.sleep(backoff_delay)
-                else:
-                    if deadline is not None and time.time() + base_delay > deadline - _VERIFICATION_RESERVE:
-                        stopped_reason = "deadline задачи (до sleep base_delay)"
-                        logger.warning(f"Верификация прервана: {stopped_reason}")
-                        break
-                    time.sleep(base_delay)
+        # ── ФАЗА 3: IMAGE блоки ──
+        if missing_image:
+            # Model swap перед IMAGE фазой
+            if before_image_phase:
+                try:
+                    logger.info("Верификация: model swap → image backend")
+                    before_image_phase()
+                except Exception as e:
+                    logger.warning(f"Model swap to image failed: {e}")
 
-            # Промежуточная проверка доступности при множественных ошибках
-            if _is_lmstudio_backend(retry_backend) and consecutive_failures > 0 and consecutive_failures % 3 == 0:
-                if not _check_backend_available(retry_backend):
-                    logger.info("Бэкенд недоступен, ожидание 60с...")
-                    time.sleep(60)
+            logger.info(f"Верификация IMAGE фазы: {len(missing_image)} блоков")
+            success, stopped = _retry_block_phase(
+                missing_image,
+                retry_backend=image_backend,
+                fallback_backend=None,
+                processor=processor,
+                retry_crops_dir=retry_crops_dir,
+                phase_name="image",
+                post_process=_process_image_result,
+                pdf_path=pdf_path,
+                deadline=deadline,
+                timeout_min=timeout_min,
+                start_time=start_time,
+                job_id=job_id,
+                on_progress=on_progress,
+                progress_offset=len(missing_text) + len(missing_stamp),
+                total_all_phases=total_missing,
+                use_prompt=True,
+            )
+            total_successful += success
+            if stopped:
+                all_stopped_reasons.append(f"image: {stopped}")
 
-            try:
-                # Создаём Block объект для crop
-                block_obj, _ = Block.from_dict(blk_data, migrate_ids=False)
-                # result.json хранит page_index в 1-based, Block ожидает 0-based
-                block_obj.page_index = item["page_index"]
-
-                # Вырезаем кроп
-                crop = processor.crop_block_image(block_obj, padding=5)
-                if not crop:
-                    logger.warning(f"Не удалось создать кроп для блока {block_id}")
-                    consecutive_failures += 1
-                    continue
-
-                # Сохраняем кроп для отладки
-                crop_path = retry_crops_dir / f"{block_id}.png"
-                crop.save(crop_path, "PNG")
-
-                # Отправляем на распознавание
-                ocr_text = retry_backend.recognize(crop)
-                crop.close()
-
-                if ocr_text and not is_error(ocr_text):
-                    # Нормализуем: structured JSON → HTML, fallback на raw text
-                    from rd_core.ocr.generator_common import sanitize_html
-                    from rd_core.ocr._chandra_common import (
-                        _try_extract_structured_ocr,
-                        _try_extract_structured_array,
-                    )
-                    from rd_core.ocr_result import is_suspicious_output
-                    normalized = _try_extract_structured_ocr(ocr_text)
-                    if normalized is None:
-                        normalized = _try_extract_structured_array(ocr_text)
-                    if normalized is None:
-                        normalized = ocr_text
-                    sanitized = sanitize_html(normalized)
-                    # Проверка: retry результат может быть suspicious (layout-dump и пр.)
-                    suspicious, sus_reason = is_suspicious_output(ocr_text, sanitized)
-                    if suspicious:
-                        logger.warning(
-                            f"Блок {block_id}: retry результат подозрительный — {sus_reason}"
-                        )
-                        consecutive_failures += 1
-                        continue
-                    blk_data["ocr_html"] = sanitized
-                    blk_data["ocr_text"] = ocr_text
-                    blk_data["ocr_meta"] = {
-                        "method": [f"{method_prefix}_{retry_engine}"],
-                        "match_score": 100.0,
-                        "marker_text_sample": "",
-                    }
-                    successful_retries += 1
-                    consecutive_failures = 0
-                    logger.info(f"Блок {block_id} успешно распознан {method_prefix} ({len(ocr_text)} символов)")
-                else:
-                    # Для suspicious_output: если fallback не помог, попробовать primary один раз
-                    if reason == "suspicious_output" and retry_backend is text_fallback_backend:
-                        logger.info(
-                            f"Блок {block_id}: fallback не помог, пробуем primary backend"
-                        )
-                        crop = processor.crop_block_image(block_obj, padding=5)
-                        if crop:
-                            ocr_text = ocr_backend.recognize(crop)
-                            crop.close()
-                            if ocr_text and not is_error(ocr_text):
-                                from rd_core.ocr.generator_common import sanitize_html
-                                from rd_core.ocr._chandra_common import (
-                                    _try_extract_structured_ocr,
-                                    _try_extract_structured_array,
-                                )
-                                from rd_core.ocr_result import is_suspicious_output
-                                normalized = _try_extract_structured_ocr(ocr_text)
-                                if normalized is None:
-                                    normalized = _try_extract_structured_array(ocr_text)
-                                if normalized is None:
-                                    normalized = ocr_text
-                                sanitized = sanitize_html(normalized)
-                                suspicious, sus_reason = is_suspicious_output(ocr_text, sanitized)
-                                if suspicious:
-                                    logger.warning(
-                                        f"Блок {block_id}: primary retry подозрительный — {sus_reason}"
-                                    )
-                                    break  # не принимаем, выходим из fallback
-                                blk_data["ocr_html"] = sanitized
-                                blk_data["ocr_text"] = ocr_text
-                                blk_data["ocr_meta"] = {
-                                    "method": [f"retry_{engine_name}"],
-                                    "match_score": 100.0,
-                                    "marker_text_sample": "",
-                                }
-                                successful_retries += 1
-                                consecutive_failures = 0
-                                logger.info(f"Блок {block_id} успешно распознан primary retry ({len(ocr_text)} символов)")
-                                continue
-
-                    consecutive_failures += 1
-                    # Детектируем "time budget exhausted" — бесполезные retry
-                    if ocr_text and "budget exhausted" in ocr_text:
-                        consecutive_budget_exhausted += 1
-                        if (
-                            consecutive_budget_exhausted >= MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK
-                            and not primary_backend_disabled
-                        ):
-                            if text_fallback_backend:
-                                primary_backend_disabled = True
-                                consecutive_failures = 0
-                                consecutive_budget_exhausted = 0
-                                logger.warning(
-                                    f"Primary backend ({engine_name}) отключён после "
-                                    f"{MAX_BUDGET_EXHAUSTED_BEFORE_FALLBACK} 'budget exhausted' ошибок, "
-                                    f"переключение на fallback ({fallback_engine_name})"
-                                )
-                            else:
-                                stopped_reason = (
-                                    f"primary backend budget exhausted × {consecutive_budget_exhausted}, "
-                                    "fallback недоступен"
-                                )
-                                logger.warning(f"Верификация прервана: {stopped_reason}")
-                                break
-                    else:
-                        consecutive_budget_exhausted = 0
-                    logger.warning(f"Блок {block_id} не распознан при retry: {ocr_text[:100] if ocr_text else 'пусто'}")
-
-            except Exception as e:
-                consecutive_failures += 1
-                logger.error(f"Ошибка обработки блока {block_id}: {e}", exc_info=True)
-                continue
-
-    if successful_retries > 0:
-        logger.info(f"Верификация: {successful_retries} блоков обновлено в dict")
-
+    # ── Итоговый лог ──
     elapsed_total = (time.monotonic() - start_time) / 60
-    status_parts = [f"{successful_retries}/{len(missing_blocks)} блоков восстановлено"]
-    if total_found > len(missing_blocks):
-        status_parts.append(f"из {total_found} найденных")
-    if stopped_reason:
-        status_parts.append(f"прервано: {stopped_reason}")
+    status_parts = [f"{total_successful}/{total_missing} блоков восстановлено"]
+    if all_stopped_reasons:
+        status_parts.append(f"прервано: {'; '.join(all_stopped_reasons)}")
     status_parts.append(f"за {elapsed_total:.1f} мин")
 
     logger.info(
@@ -479,12 +756,9 @@ def verify_and_retry_missing_blocks(
         extra={
             "event": "verification_completed",
             "job_id": job_id,
-            "recognized_count": successful_retries,
-            "total_blocks": len(missing_blocks),
+            "recognized_count": total_successful,
+            "total_blocks": total_missing,
             "duration_ms": int((time.monotonic() - start_time) * 1000),
-            "backend": engine_name,
         },
     )
     return result
-
-

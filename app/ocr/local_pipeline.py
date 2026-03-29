@@ -258,12 +258,21 @@ def run_local_ocr(
 
         _progress(0.9, "Кропы подготовлены")
 
-        # ── Выгрузить Qwen перед верификацией (чтобы Chandra не грузилась поверх) ──
-        if image_backend and hasattr(image_backend, "unload_model"):
+        # ── Model swap: вернуться к text backend перед верификацией ──
+        def _swap_to_text():
+            """image/stamp model → chandra (для TEXT верификации)"""
+            if qwen_url == chandra_url:
+                logger.info("Model swap: qwen → chandra (верификация)")
+                try:
+                    image_backend.unload_model()
+                except Exception:
+                    pass
             try:
-                image_backend.unload_model()
+                text_backend.preload()
             except Exception:
                 pass
+
+        _swap_to_text()
 
         # ── Generate results ─────────────────────────────────────
         _progress(0.92, "Генерация результатов...")
@@ -271,6 +280,10 @@ def run_local_ocr(
         _generate_local_results(
             pdf_path, blocks, work_dir, output_dir,
             text_backend=text_backend,
+            image_backend=image_backend,
+            stamp_backend=stamp_backend,
+            before_stamp_phase=_swap_to_stamp,
+            before_image_phase=_swap_to_image,
             is_correction_mode=is_correction_mode,
             deadline=deadline,
             node_id=node_id,
@@ -357,6 +370,10 @@ def _generate_local_results(
     output_dir: Path,
     *,
     text_backend=None,
+    image_backend=None,
+    stamp_backend=None,
+    before_stamp_phase=None,
+    before_image_phase=None,
     is_correction_mode: bool = False,
     deadline: float | None = None,
     node_id: str | None = None,
@@ -500,7 +517,11 @@ def _generate_local_results(
             # Верификация и повторное распознавание пропущенных блоков
             enriched_dict = verify_and_retry_missing_blocks(
                 enriched_dict, pdf_path, work_dir, text_backend,
+                image_backend=image_backend,
+                stamp_backend=stamp_backend,
                 deadline=deadline,
+                before_stamp_phase=before_stamp_phase,
+                before_image_phase=before_image_phase,
             )
 
             # Перезаписать annotation.json из enriched_dict (после верификации)

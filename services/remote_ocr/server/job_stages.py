@@ -272,12 +272,43 @@ def generate_and_upload(ctx: JobContext) -> str:
     _soft_timeout, _ = _calc_timeout(ctx.total_blocks)
     _verification_deadline = ctx.start_time + _soft_timeout
 
+    # Model swap callbacks для верификации IMAGE/STAMP блоков
+    same_instance = ctx.backends.needs_lmstudio
+
+    def _verif_swap_to_stamp():
+        if same_instance:
+            logger.info("Верификация: model swap → stamp")
+            try:
+                ctx.backends.text.unload_model()
+            except Exception:
+                pass
+        try:
+            ctx.backends.stamp.preload()
+        except Exception:
+            pass
+
+    def _verif_swap_to_image():
+        if same_instance:
+            logger.info("Верификация: model swap → image")
+            try:
+                ctx.backends.stamp.unload_model()
+            except Exception:
+                pass
+        try:
+            ctx.backends.image.preload()
+        except Exception:
+            pass
+
     r2_prefix = generate_results(
         ctx.job, ctx.pdf_path, ctx.blocks, ctx.work_dir,
         ctx.backends.text,
         text_fallback_backend=ctx.backends.text_fallback,
+        image_backend=ctx.backends.image,
+        stamp_backend=ctx.backends.stamp,
         on_verification_progress=on_verification_progress,
         verification_deadline=_verification_deadline,
+        before_stamp_phase=_verif_swap_to_stamp,
+        before_image_phase=_verif_swap_to_image,
     )
 
     # Upload
