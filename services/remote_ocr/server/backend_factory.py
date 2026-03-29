@@ -81,7 +81,20 @@ def _build_chandra_config() -> dict:
         "min_p": settings.chandra_min_p,
         "length_retry_attempts": settings.chandra_length_retry_attempts,
         "length_retry_max_tokens": settings.chandra_length_retry_max_tokens,
-        "response_format": {"type": "json_object"},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "chandra_text_ocr",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "ocr_html": {"type": "string"},
+                    },
+                    "required": ["ocr_html"],
+                },
+            },
+        },
     }
 
 
