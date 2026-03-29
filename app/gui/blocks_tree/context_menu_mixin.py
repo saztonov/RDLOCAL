@@ -62,6 +62,25 @@ class ContextMenuMixin:
                             )
                         )
 
+        # Принудительно распознать (один блок, tree-документ)
+        if len(selected_blocks) == 1:
+            block = self._get_block(selected_blocks[0])
+            node_id = getattr(self.parent, "_current_node_id", None)
+            controller = getattr(self.parent, "jobs_controller", None)
+            locked = getattr(self.parent, "_current_node_locked", False)
+            if (
+                block
+                and node_id
+                and controller
+                and not controller._has_active_jobs
+                and not locked
+            ):
+                menu.addSeparator()
+                action = menu.addAction("🔄 Принудительно распознать")
+                action.triggered.connect(
+                    lambda checked, bid=block.id: controller.force_recognize_block(bid)
+                )
+
         menu.exec_(tree.viewport().mapToGlobal(position))
 
     def create_linked_block(self, block_data: dict, target_type: BlockType):

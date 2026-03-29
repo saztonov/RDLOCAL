@@ -204,6 +204,103 @@ class JobsController(QObject):
             full_blocks_data=full_blocks_data,
         )
 
+    def force_recognize_block(self, block_id: str) -> None:
+        """Принудительно пере-распознать один блок через correction pipeline.
+
+        V1: только для документов из дерева проектов (node_id есть).
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        mw = self.main_window
+
+        # ── Валидация ────────────────────────────────────────────────
+        if not mw.pdf_document or not mw.annotation_document:
+            QMessageBox.warning(mw, "Ошибка", "Откройте PDF документ")
+            return
+
+        node_id = getattr(mw, "_current_node_id", None) or None
+        if not node_id:
+            QMessageBox.warning(
+                mw, "Ошибка",
+                "Принудительное распознавание доступно только\n"
+                "для документов из дерева проектов.",
+            )
+            return
+
+        if getattr(mw, "_current_node_locked", False):
+            QMessageBox.warning(mw, "Документ заблокирован",
+                                "Снимите блокировку перед распознаванием.")
+            return
+
+        if self._has_active_jobs:
+            QMessageBox.warning(mw, "OCR занят",
+                                "Дождитесь завершения текущей OCR-задачи.")
+            return
+
+        pdf_path = mw.annotation_document.pdf_path
+        if not pdf_path or not Path(pdf_path).exists():
+            if getattr(mw, "_current_pdf_path", None):
+                pdf_path = mw._current_pdf_path
+            else:
+                QMessageBox.warning(mw, "Ошибка", "PDF файл не найден")
+                return
+
+        # ── Найти блок ───────────────────────────────────────────────
+        target_block = None
+        for page in mw.annotation_document.pages:
+            for block in page.blocks:
+                if block.id == block_id:
+                    target_block = block
+                    break
+            if target_block:
+                break
+
+        if not target_block:
+            logger.warning(f"Block {block_id} not found for force recognize")
+            return
+
+        # ── Flush autosave ───────────────────────────────────────────
+        self._flush_autosave(node_id)
+
+        # ── Очистить старые OCR-поля целевого блока ──────────────────
+        target_block.ocr_text = None
+        target_block.ocr_html = None
+        target_block.ocr_json = None
+        target_block.ocr_meta = None
+        target_block.is_correction = True
+
+        # ── Подготовка данных ────────────────────────────────────────
+        blocks_data = [target_block.to_dict()]
+        all_blocks = self._get_selected_blocks()
+        full_blocks_data = [b.to_dict() for b in all_blocks]
+
+        output_dir = str(Path(pdf_path).parent)
+        task_name = f"Блок {block_id[:9]}"
+
+        chandra_url = os.getenv("CHANDRA_BASE_URL", "http://localhost:1234")
+        chandra_url = chandra_url.replace("host.docker.internal", "localhost")
+        qwen_url = os.getenv("QWEN_BASE_URL", "") or chandra_url
+        qwen_url = qwen_url.replace("host.docker.internal", "localhost")
+
+        # ── Запуск ───────────────────────────────────────────────────
+        self._is_correction_mode = True
+
+        from app.gui.toast import show_toast
+        show_toast(mw, f"Принудительное OCR блока {block_id[:9]}...", duration=2000)
+
+        self._runner.submit_job(
+            pdf_path=pdf_path,
+            blocks_data=blocks_data,
+            output_dir=output_dir,
+            engine="lmstudio",
+            chandra_base_url=chandra_url,
+            qwen_base_url=qwen_url,
+            is_correction_mode=True,
+            node_id=node_id,
+            task_name=task_name,
+            full_blocks_data=full_blocks_data,
+        )
+
     def cancel_job(self, job_id: str) -> None:
         """Отменить задачу."""
         self._runner.cancel_job(job_id)
@@ -357,6 +454,22 @@ class JobsController(QObject):
             show_toast(self.main_window, f"OCR ошибка: {job.error_message or 'неизвестная'}", duration=5000)
 
     # ══════════════════════════════════════════════════════════════════
+    # INTERNAL: Autosave helpers
+    # ══════════════════════════════════════════════════════════════════
+
+    def _flush_autosave(self, node_id: str | None = None) -> None:
+        """Синхронный flush AnnotationCache перед стартом OCR."""
+        try:
+            from app.gui.annotation_cache import get_annotation_cache
+
+            cache = get_annotation_cache()
+            nid = node_id or getattr(self.main_window, "_current_node_id", None)
+            if nid:
+                cache.flush_for_ocr(nid)
+        except Exception as e:
+            logger.debug(f"Flush autosave failed (non-fatal): {e}")
+
+    # ══════════════════════════════════════════════════════════════════
     # INTERNAL: Block helpers
     # ══════════════════════════════════════════════════════════════════
 
@@ -402,7 +515,7 @@ class JobsController(QObject):
     # ══════════════════════════════════════════════════════════════════
 
     def _reload_annotation_from_result(self, extract_dir: str) -> None:
-        """Обновить ocr_text в блоках из результата OCR."""
+        """Обновить OCR-поля в блоках из результата pipeline."""
         try:
             pdf_path = getattr(self.main_window, "_current_pdf_path", None)
             if not pdf_path:
@@ -444,19 +557,28 @@ class JobsController(QObject):
             if not current_doc:
                 return
 
-            # Собираем ocr_text по ID блоков из результата
-            ocr_results = {}
+            # Собираем все OCR-поля по ID блоков из результата
+            ocr_results: dict[str, dict] = {}
             for page in loaded_doc.pages:
                 for block in page.blocks:
                     if block.ocr_text:
-                        ocr_results[block.id] = block.ocr_text
+                        ocr_results[block.id] = {
+                            "ocr_text": block.ocr_text,
+                            "ocr_html": getattr(block, "ocr_html", None),
+                            "ocr_json": getattr(block, "ocr_json", None),
+                            "ocr_meta": getattr(block, "ocr_meta", None),
+                        }
 
-            # Обновляем только ocr_text в существующих блоках
+            # Обновляем все OCR-поля в существующих блоках
             updated_count = 0
             for page in current_doc.pages:
                 for block in page.blocks:
                     if block.id in ocr_results:
-                        block.ocr_text = ocr_results[block.id]
+                        result = ocr_results[block.id]
+                        block.ocr_text = result["ocr_text"]
+                        block.ocr_html = result["ocr_html"]
+                        block.ocr_json = result["ocr_json"]
+                        block.ocr_meta = result["ocr_meta"]
                         if block.is_correction:
                             block.is_correction = False
                         updated_count += 1

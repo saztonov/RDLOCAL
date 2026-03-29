@@ -180,6 +180,29 @@ class BlockOperationsMixin:
         if hasattr(main_window, "blocks_tree_manager"):
             main_window.blocks_tree_manager.update_blocks_tree()
 
+    def _trigger_force_recognize(self, block_data: dict):
+        """Запустить принудительное пере-распознавание одного блока."""
+        main_window = self.parent().window()
+        if (
+            not hasattr(main_window, "annotation_document")
+            or not main_window.annotation_document
+        ):
+            return
+
+        current_page = main_window.current_page
+        if current_page >= len(main_window.annotation_document.pages):
+            return
+
+        page = main_window.annotation_document.pages[current_page]
+        block_idx = block_data["idx"]
+        if block_idx < 0 or block_idx >= len(page.blocks):
+            return
+
+        block = page.blocks[block_idx]
+        controller = getattr(main_window, "jobs_controller", None)
+        if controller:
+            controller.force_recognize_block(block.id)
+
     def _toggle_correction_flag(self, blocks_data: list):
         """Переключить флаг корректировки для выбранных блоков"""
         main_window = self.parent().window()

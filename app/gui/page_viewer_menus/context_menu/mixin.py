@@ -50,6 +50,10 @@ class ContextMenuMixin(BlockOperationsMixin):
         menu.addSeparator()
         self._add_correction_action(menu, selected_blocks)
 
+        # 5. Принудительно распознать (один блок, tree-документ)
+        if len(selected_blocks) == 1:
+            self._add_force_recognize_action(menu, selected_blocks[0])
+
         menu.exec(global_pos)
 
     def _add_linked_block_action(self, menu: QMenu, selected_blocks: list):
@@ -134,6 +138,24 @@ class ContextMenuMixin(BlockOperationsMixin):
             )
         delete_action.triggered.connect(
             lambda blocks=selected_blocks: self._delete_blocks(blocks)
+        )
+
+    def _add_force_recognize_action(self, menu: QMenu, block_data: dict):
+        """Добавить пункт 'Принудительно распознать' (V1: только tree-документы)."""
+        main_window = self.parent().window()
+        node_id = getattr(main_window, "_current_node_id", None)
+        if not node_id:
+            return
+        if getattr(main_window, "_current_node_locked", False):
+            return
+        controller = getattr(main_window, "jobs_controller", None)
+        if not controller or controller._has_active_jobs:
+            return
+
+        menu.addSeparator()
+        action = menu.addAction("🔄 Принудительно распознать")
+        action.triggered.connect(
+            lambda checked, bd=block_data: self._trigger_force_recognize(bd)
         )
 
     def _add_correction_action(self, menu: QMenu, selected_blocks: list):
