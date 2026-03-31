@@ -1,7 +1,10 @@
 """Обработчик переупорядочивания задач в очереди OCR"""
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import Form, HTTPException
+from pydantic import BaseModel
 
 from services.remote_ocr.server.celery_app import celery_app
 from services.remote_ocr.server.logging_config import get_logger
@@ -39,11 +42,17 @@ def _revoke_and_resubmit(job_id: str, old_celery_task_id: Optional[str],
     return task_id
 
 
+class ReorderRequest(BaseModel):
+    direction: str
+
+
 def reorder_job_handler(
     job_id: str,
-    direction: str = Form(...),
+    body: ReorderRequest,
 ) -> dict:
     """Переместить задачу вверх/вниз в очереди обработки."""
+
+    direction = body.direction
 
     if direction not in ("up", "down"):
         raise HTTPException(

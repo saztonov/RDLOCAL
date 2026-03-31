@@ -150,8 +150,8 @@ class RemoteOCRClient:
         }
 
         resp = self._request_with_retry(
-            "POST", "/jobs",
-            data=form_data,
+            "POST", "/jobs/node",
+            json=form_data,
             timeout=30.0,
             max_retries=2,
         )
@@ -193,7 +193,7 @@ class RemoteOCRClient:
     def reorder_job(self, job_id: str, direction: str) -> dict:
         resp = self._request_with_retry(
             "POST", f"/jobs/{job_id}/reorder",
-            data={"direction": direction},
+            json={"direction": direction},
         )
         return resp.json()
 

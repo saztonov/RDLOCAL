@@ -4,6 +4,7 @@ import uuid
 from typing import Optional
 
 from fastapi import File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
@@ -250,6 +251,179 @@ async def create_job_handler(
             "engine": engine,
             "total_blocks": block_count,
             "node_id": node_id,
+        },
+    )
+
+    return {
+        "id": job.id,
+        "status": job.status,
+        "progress": job.progress,
+        "document_id": job.document_id,
+        "document_name": job.document_name,
+        "task_name": job.task_name,
+    }
+
+
+class CreateNodeJobRequest(BaseModel):
+    """JSON-тело для создания node-backed OCR задачи (без upload файлов)."""
+    document_id: str
+    document_name: str
+    client_id: str
+    task_name: str = ""
+    engine: str = "lmstudio"
+    text_model: str = ""
+    image_model: str = ""
+    stamp_model: str = ""
+    node_id: str
+    is_correction_mode: str = "false"
+
+
+async def create_node_job_handler(body: CreateNodeJobRequest) -> dict:
+    """Создать OCR-задачу для node-backed документа (JSON body, без upload).
+
+    Сервер сам берёт PDF из R2 и annotation из Supabase.
+    """
+    if body.engine not in ("lmstudio", "chandra"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported engine '{body.engine}'. Only 'lmstudio' is supported (legacy alias: 'chandra').",
+        )
+
+    _logger.info(
+        f"POST /jobs/node: создание node-backed OCR задачи",
+        extra={
+            "event": "job_create_request",
+            "action": "create",
+            "client_id": body.client_id,
+            "document_id": body.document_id[:16],
+            "document_name": body.document_name,
+            "task_name": body.task_name,
+            "engine": body.engine,
+            "text_model": body.text_model or None,
+            "image_model": body.image_model or None,
+            "stamp_model": body.stamp_model or None,
+            "node_id": body.node_id,
+        },
+    )
+
+    # Загружаем блоки из Supabase
+    blocks_data = _load_annotation_from_db(body.node_id)
+    if blocks_data is None:
+        _logger.error(
+            f"No annotation in Supabase for node {body.node_id}",
+            extra={"event": "blocks_not_found", "node_id": body.node_id},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"No annotation found in Supabase for node {body.node_id}",
+        )
+    _logger.info(
+        f"Loaded blocks from Supabase for node {body.node_id}",
+        extra={"event": "blocks_from_db", "node_id": body.node_id},
+    )
+
+    job_id = str(uuid.uuid4())
+
+    # PDF должен быть в R2 по node_id
+    pdf_r2_key = get_node_pdf_r2_key(body.node_id)
+    if not pdf_r2_key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No PDF registered for node {body.node_id}",
+        )
+
+    try:
+        s3_check, bucket_check = get_r2_sync_client()
+        s3_check.head_object(Bucket=bucket_check, Key=pdf_r2_key)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=f"PDF not found in R2 for node {body.node_id}",
+        )
+
+    from pathlib import PurePosixPath
+    r2_prefix = str(PurePosixPath(pdf_r2_key).parent)
+
+    # Проверка очереди
+    can_accept, queue_size, max_size = check_queue_capacity()
+    if not can_accept:
+        _logger.warning(
+            f"Очередь полна, задача отклонена: {queue_size}/{max_size}",
+            extra={
+                "event": "queue_rejected",
+                "action": "create",
+                "client_id": body.client_id,
+                "queue_size": queue_size,
+                "max_queue_size": max_size,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Queue is full ({queue_size}/{max_size}). Try again later.",
+        )
+
+    job = create_job(
+        document_id=body.document_id,
+        document_name=body.document_name,
+        task_name=body.task_name,
+        engine=body.engine,
+        r2_prefix=r2_prefix,
+        client_id=body.client_id,
+        status="queued",
+        node_id=body.node_id,
+    )
+
+    is_correction = body.is_correction_mode.lower() == "true"
+    save_job_settings(
+        job.id, body.text_model, body.image_model, body.stamp_model, is_correction,
+    )
+
+    try:
+        s3_client, bucket_name = get_r2_sync_client()
+
+        # Upload Blocks
+        blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
+        actual_blocks_key = make_blocks_key(r2_prefix, body.document_name, is_node=True)
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=actual_blocks_key,
+            Body=blocks_bytes,
+            ContentType="application/json",
+        )
+
+        # Register job files
+        pdf_file_name = body.document_name
+        blocks_file_name = PurePosixPath(actual_blocks_key).name
+        add_job_file(job.id, "pdf", pdf_r2_key, pdf_file_name, 0)
+        add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
+
+    except Exception as e:
+        _logger.error(f"R2 upload failed: {e}")
+        delete_job(job.id)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to upload files to R2: {e}"
+        )
+
+    block_count = count_blocks_from_data(blocks_data)
+    try:
+        dispatch_ocr_task(job.id, block_count, job.priority)
+    except Exception as e:
+        _logger.error(f"Dispatch failed, rolling back job {job.id}: {e}")
+        delete_job(job.id)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to dispatch OCR task: {e}"
+        )
+
+    _logger.info(
+        f"Node-backed задача создана: {job.id}",
+        extra={
+            "event": "job_created",
+            "action": "create",
+            "job_id": job.id,
+            "client_id": body.client_id,
+            "engine": body.engine,
+            "total_blocks": block_count,
+            "node_id": body.node_id,
         },
     )
 

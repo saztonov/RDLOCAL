@@ -1,7 +1,7 @@
 """Router для задач OCR"""
 from fastapi import APIRouter
 
-from services.remote_ocr.server.routes.jobs.create_handler import create_job_handler
+from services.remote_ocr.server.routes.jobs.create_handler import create_job_handler, create_node_job_handler
 from services.remote_ocr.server.routes.jobs.delete_handler import delete_job_handler
 from services.remote_ocr.server.routes.jobs.reorder_handler import reorder_job_handler
 from services.remote_ocr.server.routes.jobs.read_handlers import (
@@ -23,6 +23,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 # POST endpoints
 router.post("")(create_job_handler)
+router.post("/node")(create_node_job_handler)
 router.post("/{job_id}/restart")(restart_job_handler)
 router.post("/{job_id}/start")(start_job_handler)
 router.post("/{job_id}/pause")(pause_job_handler)
