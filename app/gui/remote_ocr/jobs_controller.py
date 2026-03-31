@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
@@ -120,6 +121,9 @@ class JobsController(QObject):
         self._force_full_refresh: bool = True
         self._optimistic_jobs: dict = {}  # job_id → (JobInfo, timestamp)
 
+        # Загрузить snapshot с прошлого запуска (до первого poll)
+        self._load_snapshot()
+
         # Thread-safe data passing (write in bg thread, read in GUI slot)
         self._pending_error: tuple[str, str] | None = None  # (error_type, message)
         self._pending_result: tuple[str, str] | None = None  # (job_id, node_id)
@@ -153,7 +157,7 @@ class JobsController(QObject):
     def refresh(self, *, force_full: bool = False, show_loading: bool = False) -> None:
         """Обновить список задач в UI."""
         if self._mode == "remote":
-            self._force_full_refresh = force_full or True
+            self._force_full_refresh = force_full
             if show_loading:
                 self.connection_status.emit("loading")
             self._remote_poll()
@@ -545,6 +549,51 @@ class JobsController(QObject):
                     self._runner.cancel_job(job_id)
 
     # ══════════════════════════════════════════════════════════════════
+    # REMOTE MODE: Snapshot persistence
+    # ══════════════════════════════════════════════════════════════════
+
+    _SNAPSHOT_PATH = Path.home() / ".rd_cache" / "jobs_snapshot.json"
+
+    def _load_snapshot(self) -> None:
+        """Загрузить кэш задач с прошлого запуска."""
+        try:
+            if not self._SNAPSHOT_PATH.exists():
+                return
+            raw = self._SNAPSHOT_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict) or data.get("version") != 1:
+                return
+            from app.ocr_client.models import JobInfo
+            for jd in data.get("jobs", []):
+                try:
+                    job = JobInfo.from_dict(jd)
+                    self._jobs_cache[job.id] = job
+                except Exception:
+                    continue
+            self._downloaded_jobs = set(data.get("downloaded_jobs", []))
+            self._last_server_time = data.get("server_time") or None
+            logger.info(f"Snapshot loaded: {len(self._jobs_cache)} jobs")
+        except Exception as e:
+            logger.warning(f"Failed to load snapshot: {e}")
+
+    def _save_snapshot(self) -> None:
+        """Сохранить кэш задач на диск (атомарно)."""
+        try:
+            jobs_list = [j.to_dict() for j in self._jobs_cache.values()]
+            data = {
+                "version": 1,
+                "server_time": self._last_server_time or "",
+                "downloaded_jobs": list(self._downloaded_jobs),
+                "jobs": jobs_list,
+            }
+            tmp_path = self._SNAPSHOT_PATH.with_suffix(".tmp")
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp_path, self._SNAPSHOT_PATH)
+        except Exception as e:
+            logger.warning(f"Failed to save snapshot: {e}")
+
+    # ══════════════════════════════════════════════════════════════════
     # REMOTE MODE: Create job
     # ══════════════════════════════════════════════════════════════════
 
@@ -764,6 +813,7 @@ class JobsController(QObject):
                 self._optimistic_jobs.pop(job_id, None)
 
         self._emit_remote_jobs_list()
+        self._save_snapshot()
         self.connection_status.emit("connected")
 
         # Проверяем есть ли завершённые задачи для автоскачивания

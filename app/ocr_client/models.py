@@ -21,6 +21,22 @@ class JobInfo:
     status_message: str | None = None
     priority: int = 0
 
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "progress": self.progress,
+            "document_id": self.document_id,
+            "document_name": self.document_name,
+            "task_name": self.task_name,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "error_message": self.error_message,
+            "node_id": self.node_id,
+            "status_message": self.status_message,
+            "priority": self.priority,
+        }
+
     @classmethod
     def from_dict(cls, d: dict) -> JobInfo:
         return cls(
