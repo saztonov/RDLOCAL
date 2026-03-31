@@ -120,9 +120,13 @@ class JobsController(QObject):
         self._consecutive_errors: int = 0
         self._force_full_refresh: bool = True
         self._optimistic_jobs: dict = {}  # job_id → (JobInfo, timestamp)
+        self._supabase_history: dict = {}  # job_id → JobInfo (baseline from Supabase)
 
         # Загрузить snapshot с прошлого запуска (до первого poll)
         self._load_snapshot()
+
+        # Загрузить историю задач из Supabase (дополняет snapshot)
+        self._load_history_from_supabase()
 
         # Thread-safe data passing (write in bg thread, read in GUI slot)
         self._pending_error: tuple[str, str] | None = None  # (error_type, message)
@@ -520,12 +524,15 @@ class JobsController(QObject):
 
     def has_snapshot(self) -> bool:
         if self._mode == "remote":
-            return bool(self._jobs_cache)
+            return bool(self._jobs_cache) or bool(self._supabase_history)
         return bool(self._runner.jobs)
 
     def get_snapshot_jobs(self) -> list:
         if self._mode == "remote":
-            return list(self._jobs_cache.values())
+            # Merge: cache + supabase history (cache takes priority)
+            merged = dict(self._supabase_history)
+            merged.update(self._jobs_cache)
+            return list(merged.values())
         return self._build_job_list()
 
     def shutdown(self) -> None:
@@ -548,6 +555,7 @@ class JobsController(QObject):
         """Загрузить кэш задач с прошлого запуска."""
         try:
             if not self._SNAPSHOT_PATH.exists():
+                logger.debug("Snapshot file not found, skipping")
                 return
             raw = self._SNAPSHOT_PATH.read_text(encoding="utf-8")
             data = json.loads(raw)
@@ -569,7 +577,10 @@ class JobsController(QObject):
     def _save_snapshot(self) -> None:
         """Сохранить кэш задач на диск (атомарно)."""
         try:
-            jobs_list = [j.to_dict() for j in self._jobs_cache.values()]
+            # Merge: server cache + supabase history (cache takes priority)
+            merged = dict(self._supabase_history)
+            merged.update(self._jobs_cache)
+            jobs_list = [j.to_dict() for j in merged.values()]
             data = {
                 "version": 1,
                 "server_time": self._last_server_time or "",
@@ -582,6 +593,59 @@ class JobsController(QObject):
             os.replace(tmp_path, self._SNAPSHOT_PATH)
         except Exception as e:
             logger.warning(f"Failed to save snapshot: {e}")
+
+    def _load_history_from_supabase(self) -> None:
+        """Загрузить историю задач напрямую из Supabase (fallback для remote mode)."""
+        try:
+            url = os.getenv("SUPABASE_URL", "").strip()
+            key = os.getenv("SUPABASE_KEY", "").strip()
+            if not url or not key:
+                return
+            import httpx
+            from app.ocr_client.models import JobInfo
+
+            headers = {
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+            resp = httpx.get(
+                f"{url}/rest/v1/jobs"
+                f"?select=id,document_id,document_name,task_name,status,progress,"
+                f"created_at,updated_at,error_message,status_message,node_id,priority"
+                f"&order=created_at.desc"
+                f"&limit=100",
+                headers=headers,
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Supabase history: HTTP {resp.status_code}")
+                return
+            rows = resp.json()
+            loaded = 0
+            for row in rows:
+                job_id = row.get("id", "")
+                if not job_id or job_id in self._jobs_cache or job_id in self._supabase_history:
+                    continue
+                self._supabase_history[job_id] = JobInfo(
+                    id=job_id,
+                    status=row.get("status", ""),
+                    progress=row.get("progress", 0.0),
+                    document_id=row.get("document_id", ""),
+                    document_name=row.get("document_name", ""),
+                    task_name=row.get("task_name", ""),
+                    created_at=row.get("created_at", ""),
+                    updated_at=row.get("updated_at", ""),
+                    error_message=row.get("error_message"),
+                    node_id=row.get("node_id"),
+                    status_message=row.get("status_message"),
+                    priority=row.get("priority", 0),
+                )
+                loaded += 1
+            if loaded:
+                logger.info(f"Supabase history: загружено {loaded} задач")
+        except Exception:
+            logger.debug("Supabase history: не удалось загрузить", exc_info=True)
 
     # ══════════════════════════════════════════════════════════════════
     # SERVER-ONLY: Create job (node-backed, без upload)
@@ -885,11 +949,13 @@ class JobsController(QObject):
                 if jobs:
                     for job in jobs:
                         self._jobs_cache[job.id] = job
+                    logger.info(f"Poll delta: {len(jobs)} updated jobs")
                 if server_time:
                     self._last_server_time = server_time
             else:
                 jobs, server_time = self._client.list_jobs()
                 self._jobs_cache = {j.id: j for j in jobs}
+                logger.info(f"Poll full: {len(jobs)} jobs from server, cache={len(self._jobs_cache)}")
                 if server_time:
                     self._last_server_time = server_time
 
@@ -921,6 +987,11 @@ class JobsController(QObject):
                 self._optimistic_jobs.pop(job_id, None)
             elif current_time - timestamp > 60:
                 self._optimistic_jobs.pop(job_id, None)
+
+        # Убираем из Supabase-истории задачи, которые уже есть в серверном кэше
+        for job_id in list(self._supabase_history):
+            if job_id in self._jobs_cache:
+                self._supabase_history.pop(job_id, None)
 
         self._emit_remote_jobs_list()
         self._save_snapshot()
@@ -1124,11 +1195,17 @@ class JobsController(QObject):
     # ══════════════════════════════════════════════════════════════════
 
     def _emit_remote_jobs_list(self) -> None:
-        """Emit список задач для remote mode (cache + optimistic)."""
+        """Emit список задач для remote mode (cache + supabase history + optimistic)."""
         jobs = list(self._jobs_cache.values())
+        cache_ids = {j.id for j in jobs}
+
+        # Добавляем Supabase-историю, которой нет в серверном кэше
+        for job_id, job_info in self._supabase_history.items():
+            if job_id not in cache_ids:
+                jobs.append(job_info)
+                cache_ids.add(job_id)
 
         # Добавляем optimistic jobs, которых ещё нет в кэше
-        cache_ids = {j.id for j in jobs}
         for job_id, (job_info, _) in self._optimistic_jobs.items():
             if job_id not in cache_ids:
                 jobs.insert(0, job_info)
