@@ -31,12 +31,19 @@ class RemoteOCRClient:
     сервер, доступный по сети (в т.ч. через ngrok).
     """
 
-    def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout: float = 30.0,
+        auth: tuple[str, str] | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(connect=10.0, read=timeout, write=timeout, pool=10.0),
+            auth=auth,
             follow_redirects=True,
         )
 

@@ -11,6 +11,8 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - REMOTE_OCR_DATA_DIR=/data
+      - LMSTUDIO_AUTH_USER=${LMSTUDIO_AUTH_USER}
+      - LMSTUDIO_AUTH_PASSWORD=${LMSTUDIO_AUTH_PASSWORD}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -42,6 +44,8 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - REMOTE_OCR_DATA_DIR=/data
+      - LMSTUDIO_AUTH_USER=${LMSTUDIO_AUTH_USER}
+      - LMSTUDIO_AUTH_PASSWORD=${LMSTUDIO_AUTH_PASSWORD}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

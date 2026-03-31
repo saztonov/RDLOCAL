@@ -1,7 +1,17 @@
 """Общие HTTP-утилиты для OCR бэкендов (sync)."""
+import os
 from typing import Optional, Tuple
 
 import httpx
+
+
+def get_lmstudio_auth() -> Optional[Tuple[str, str]]:
+    """Прочитать Basic Auth credentials для LM Studio (ngrok) из env."""
+    user = os.getenv("LMSTUDIO_AUTH_USER", "").strip()
+    password = os.getenv("LMSTUDIO_AUTH_PASSWORD", "").strip()
+    if user and password:
+        return (user, password)
+    return None
 
 
 def create_http_client(

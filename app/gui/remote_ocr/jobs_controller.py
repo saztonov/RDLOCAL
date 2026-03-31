@@ -105,9 +105,11 @@ class JobsController(QObject):
     def _init_remote(self, base_url: str) -> None:
         """Инициализация remote mode (HTTP-клиент)."""
         from app.ocr_client import RemoteOCRClient
+        from rd_core.ocr.http_utils import get_lmstudio_auth
 
-        logger.info(f"Remote OCR mode: {base_url}")
-        self._client = RemoteOCRClient(base_url)
+        auth = get_lmstudio_auth()
+        logger.info(f"Remote OCR mode: {base_url} (auth={'yes' if auth else 'no'})")
+        self._client = RemoteOCRClient(base_url, auth=auth)
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="remote-ocr")
         self._client_id = _get_client_id()
 

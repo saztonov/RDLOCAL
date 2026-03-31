@@ -89,6 +89,8 @@ class Settings:
     data_dir: str = _env("REMOTE_OCR_DATA_DIR", "/data")
     chandra_base_url: str = _env("CHANDRA_BASE_URL")
     qwen_base_url: str = _env("QWEN_BASE_URL")
+    lmstudio_auth_user: str = _env("LMSTUDIO_AUTH_USER")
+    lmstudio_auth_password: str = _env("LMSTUDIO_AUTH_PASSWORD")
     redis_url: str = _env("REDIS_URL", "redis://redis:6379/0")
     supabase_url: str = _env("SUPABASE_URL")
     supabase_key: str = _env("SUPABASE_KEY")
