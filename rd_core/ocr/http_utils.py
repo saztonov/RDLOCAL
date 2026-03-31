@@ -14,6 +14,18 @@ def get_lmstudio_auth() -> Optional[Tuple[str, str]]:
     return None
 
 
+def get_remote_ocr_auth() -> Optional[Tuple[str, str]]:
+    """Прочитать auth для доступа GUI к OCR серверу (ngrok).
+
+    Приоритет: REMOTE_OCR_AUTH_* → fallback на LMSTUDIO_AUTH_* (обратная совместимость).
+    """
+    user = os.getenv("REMOTE_OCR_AUTH_USER", "").strip()
+    password = os.getenv("REMOTE_OCR_AUTH_PASSWORD", "").strip()
+    if user and password:
+        return (user, password)
+    return get_lmstudio_auth()
+
+
 def create_http_client(
     auth: Optional[Tuple[str, str]] = None,
     total_retries: int = 3,

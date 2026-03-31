@@ -156,6 +156,19 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
     from rd_core.models import Block
 
     blocks = [Block.from_dict(b, migrate_ids=False)[0] for b in blocks_data]
+
+    # Серверная фильтрация блоков:
+    # - correction mode: только блоки с is_correction=True
+    # - обычный mode: все блоки (клиент уже очистил ocr_text перед отправкой)
+    is_correction = job.settings.is_correction_mode if job.settings else False
+    if is_correction:
+        all_count = len(blocks)
+        blocks = [b for b in blocks if getattr(b, "is_correction", False)]
+        logger.info(
+            f"Задача {job_id}: correction mode — отфильтровано {len(blocks)}/{all_count} блоков",
+            extra={"event": "blocks_filtered", "job_id": job_id, "filtered": len(blocks), "total": all_count},
+        )
+
     total_blocks = len(blocks)
 
     logger.info(f"Задача {job_id}: {total_blocks} блоков")

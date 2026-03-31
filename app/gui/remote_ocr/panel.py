@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QProgressDialog,
     QPushButton,
     QTableView,
@@ -81,27 +82,13 @@ class RemoteOCRPanel(QDockWidget):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        # Header
+        # Header: статус + минимальные кнопки
         header_layout = QHBoxLayout()
         header_layout.addWidget(QLabel("Задачи:"))
 
         self.status_label = QLabel("🔴 Не подключено")
         header_layout.addStretch()
         header_layout.addWidget(self.status_label)
-
-        self.move_up_btn = QPushButton("▲")
-        self.move_up_btn.setMaximumWidth(30)
-        self.move_up_btn.setToolTip("Переместить задачу выше в очереди")
-        self.move_up_btn.setEnabled(False)
-        self.move_up_btn.clicked.connect(lambda: self._reorder_selected("up"))
-        header_layout.addWidget(self.move_up_btn)
-
-        self.move_down_btn = QPushButton("▼")
-        self.move_down_btn.setMaximumWidth(30)
-        self.move_down_btn.setToolTip("Переместить задачу ниже в очереди")
-        self.move_down_btn.setEnabled(False)
-        self.move_down_btn.clicked.connect(lambda: self._reorder_selected("down"))
-        header_layout.addWidget(self.move_down_btn)
 
         self.cancel_all_btn = QPushButton("⏹")
         self.cancel_all_btn.setMaximumWidth(30)
@@ -125,6 +112,20 @@ class RemoteOCRPanel(QDockWidget):
 
         layout.addLayout(header_layout)
 
+        # Крупный прогресс-бар для активной задачи
+        self._active_progress_bar = QProgressBar()
+        self._active_progress_bar.setRange(0, 100)
+        self._active_progress_bar.setValue(0)
+        self._active_progress_bar.setTextVisible(True)
+        self._active_progress_bar.setMinimumHeight(24)
+        self._active_progress_bar.setVisible(False)
+        layout.addWidget(self._active_progress_bar)
+
+        self._active_status_label = QLabel("")
+        self._active_status_label.setWordWrap(True)
+        self._active_status_label.setVisible(False)
+        layout.addWidget(self._active_status_label)
+
         # Stats widget
         from app.gui.remote_ocr.ocr_stats_widget import OCRStatsWidget
 
@@ -140,7 +141,6 @@ class RemoteOCRPanel(QDockWidget):
         self.jobs_table.setSelectionMode(QTableView.SingleSelection)
         self.jobs_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.jobs_table.customContextMenuRequested.connect(self._show_context_menu)
-        self.jobs_table.selectionModel().selectionChanged.connect(self._update_reorder_buttons)
         self.jobs_table.setMouseTracking(True)
 
         # Delegate для кнопки отмены в колонке "Действия"
@@ -181,6 +181,9 @@ class RemoteOCRPanel(QDockWidget):
                 proxy_idx = self._proxy.mapFromSource(self._model.index(row, 0))
                 self.jobs_table.selectRow(proxy_idx.row())
 
+        # Обновить крупный прогресс-бар для активной задачи
+        self._update_active_progress(jobs)
+
     def _on_connection_status(self, status: str):
         labels = {
             "connected": "🟢 Подключено",
@@ -194,6 +197,7 @@ class RemoteOCRPanel(QDockWidget):
             "auth": "Ошибка авторизации",
             "size": "Файл слишком большой",
             "server": "Ошибка сервера",
+            "validation": "Ошибка валидации",
             "generic": "Ошибка",
         }
         QMessageBox.critical(self, titles.get(error_type, "Ошибка"), message)
@@ -270,24 +274,33 @@ class RemoteOCRPanel(QDockWidget):
                 "Не удалось найти узел в дереве проектов.\nВозможно, узел был удалён.",
             )
 
-    # ── Reorder ────────────────────────────────────────────────────────
+    # ── Active progress ─────────────────────────────────────────────────
 
-    def _reorder_selected(self, direction: str):
-        job_id = self._get_selected_job_id()
-        if job_id:
-            self.controller.reorder_job(job_id, direction)
+    def _update_active_progress(self, jobs):
+        """Обновить крупный прогресс-бар для активной задачи."""
+        active = None
+        for job in jobs:
+            if getattr(job, "status", "") in ("processing", "uploading", "queued"):
+                active = job
+                break
 
-    def _update_reorder_buttons(self):
-        job_id = self._get_selected_job_id()
-        if not job_id:
-            self.move_up_btn.setEnabled(False)
-            self.move_down_btn.setEnabled(False)
-            return
+        if active:
+            progress = int(getattr(active, "progress", 0) * 100)
+            self._active_progress_bar.setValue(progress)
+            self._active_progress_bar.setFormat(
+                f"{getattr(active, 'task_name', '')} — {progress}%"
+            )
+            self._active_progress_bar.setVisible(True)
 
-        job = self.controller._jobs_cache.get(job_id)
-        can_reorder = job and job.status == "queued"
-        self.move_up_btn.setEnabled(can_reorder)
-        self.move_down_btn.setEnabled(can_reorder)
+            status_msg = getattr(active, "status_message", "") or ""
+            if status_msg:
+                self._active_status_label.setText(status_msg)
+                self._active_status_label.setVisible(True)
+            else:
+                self._active_status_label.setVisible(False)
+        else:
+            self._active_progress_bar.setVisible(False)
+            self._active_status_label.setVisible(False)
 
     # ── Helpers ────────────────────────────────────────────────────────
 

@@ -41,11 +41,13 @@ async def create_job_handler(
     node_id: str = Form(...),
     is_correction_mode: str = Form("false"),
     blocks_file: Optional[UploadFile] = File(None, alias="blocks_file"),
-    pdf: UploadFile = File(...),
+    pdf: Optional[UploadFile] = File(None),
 ) -> dict:
     """Создать новую задачу OCR.
 
-    Если node_id указан - файлы берутся из tree_docs/{node_id}/, не дублируем.
+    Для node-backed задач pdf и blocks_file опциональны:
+    - PDF берётся из R2 по node_id (если не передан)
+    - Blocks берутся из Supabase annotations (если не переданы)
     """
     if engine not in ("lmstudio", "chandra"):
         raise HTTPException(
@@ -101,6 +103,7 @@ async def create_job_handler(
 
     # Определяем r2_prefix - папку для файлов задачи
     pdf_needs_upload = False
+    pdf_provided = pdf is not None and pdf.filename
 
     if node_id:
         pdf_r2_key = get_node_pdf_r2_key(node_id)
@@ -111,10 +114,20 @@ async def create_job_handler(
                 s3_check, bucket_check = get_r2_sync_client()
                 s3_check.head_object(Bucket=bucket_check, Key=pdf_r2_key)
             except Exception:
+                if not pdf_provided:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"PDF not found in R2 for node {node_id} and no PDF uploaded",
+                    )
                 _logger.warning(f"PDF not found in R2, will upload: {pdf_r2_key}")
                 pdf_needs_upload = True
             r2_prefix = str(PurePosixPath(pdf_r2_key).parent)
         else:
+            if not pdf_provided:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No PDF registered for node {node_id} and no PDF uploaded",
+                )
             node_info = get_node_info(node_id)
             if node_info and node_info.get("parent_id"):
                 r2_prefix = f"tree_docs/{node_info['parent_id']}"
@@ -123,6 +136,11 @@ async def create_job_handler(
             pdf_r2_key = f"{r2_prefix}/{document_name}"
             pdf_needs_upload = True
     else:
+        if not pdf_provided:
+            raise HTTPException(
+                status_code=400,
+                detail="PDF file is required for jobs without node_id",
+            )
         r2_prefix = f"ocr_jobs/{job_id}"
 
     # Проверка очереди ПЕРЕД созданием job в БД
@@ -156,7 +174,7 @@ async def create_job_handler(
 
     is_correction = is_correction_mode.lower() == "true"
     save_job_settings(
-        job.id, text_model, image_model, stamp_model, is_correction
+        job.id, text_model, image_model, stamp_model, is_correction,
     )
 
     try:
@@ -165,7 +183,7 @@ async def create_job_handler(
         is_node = bool(node_id)
 
         # --- Upload PDF ---
-        if pdf_needs_upload or not is_node:
+        if (pdf_needs_upload or not is_node) and pdf_provided:
             pdf_content = await pdf.read()
             actual_pdf_key = pdf_r2_key or make_pdf_key(r2_prefix, document_name, is_node=is_node)
             s3_client.put_object(

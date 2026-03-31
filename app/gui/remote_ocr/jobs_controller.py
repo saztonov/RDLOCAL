@@ -106,9 +106,9 @@ class JobsController(QObject):
     def _init_remote(self, base_url: str) -> None:
         """Инициализация remote mode (HTTP-клиент)."""
         from app.ocr_client import RemoteOCRClient
-        from rd_core.ocr.http_utils import get_lmstudio_auth
+        from rd_core.ocr.http_utils import get_remote_ocr_auth
 
-        auth = get_lmstudio_auth()
+        auth = get_remote_ocr_auth()
         logger.info(f"Remote OCR mode: {base_url} (auth={'yes' if auth else 'no'})")
         self._client = RemoteOCRClient(base_url, auth=auth)
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="remote-ocr")
@@ -165,10 +165,8 @@ class JobsController(QObject):
             self._emit_jobs_list()
 
     def create_job(self) -> None:
-        """Показать диалог создания задачи и запустить OCR."""
+        """Создать OCR-задачу на сервере (server-only flow для tree-документов)."""
         from PySide6.QtWidgets import QDialog, QMessageBox
-
-        from app.gui.ocr_dialog import OCRDialog
 
         mw = self.main_window
 
@@ -184,32 +182,21 @@ class JobsController(QObject):
             )
             return
 
-        pdf_path = mw.annotation_document.pdf_path
-        if not pdf_path or not Path(pdf_path).exists():
-            if getattr(mw, "_current_pdf_path", None):
-                pdf_path = mw._current_pdf_path
-                mw.annotation_document.pdf_path = pdf_path
-
-        if not pdf_path or not Path(pdf_path).exists():
-            QMessageBox.warning(mw, "Ошибка", "PDF файл не найден")
-            return
-
         node_id = getattr(mw, "_current_node_id", None) or None
-
-        task_name = Path(pdf_path).stem if pdf_path else ""
-        dialog = OCRDialog(mw, task_name=task_name, pdf_path=pdf_path)
-        if dialog.exec() != QDialog.Accepted:
+        if not node_id:
+            QMessageBox.warning(
+                mw, "Ошибка",
+                "OCR доступен только для документов из дерева проектов.\n"
+                "Откройте документ через дерево проектов.",
+            )
             return
-
-        self._last_output_dir = dialog.output_dir
-        self._last_engine = dialog.ocr_backend
-        self._pending_output_dir = dialog.output_dir
 
         all_blocks = self._get_selected_blocks()
         if not all_blocks:
             QMessageBox.warning(mw, "Ошибка", "Нет блоков для распознавания")
             return
 
+        # Smart vs Full OCR
         blocks_needing = self._get_blocks_needing_ocr()
         has_previous = len(all_blocks) > len(blocks_needing)
 
@@ -226,12 +213,14 @@ class JobsController(QObject):
                 return
 
             if mode_dialog.selected_mode == SmartOCRModeDialog.MODE_SMART:
-                selected_blocks = blocks_needing
+                # Smart: пометить нераспознанные блоки is_correction
                 self._is_correction_mode = True
-                cleanup_blocks = [b.id for b in selected_blocks]
+                for b in blocks_needing:
+                    b.is_correction = True
+                cleanup_blocks = [b.id for b in blocks_needing]
                 self._clear_ocr_text_in_memory(blocks_to_reprocess=cleanup_blocks)
             else:
-                selected_blocks = all_blocks
+                # Full: очистить всё
                 self._is_correction_mode = False
                 self._clear_ocr_text_in_memory()
 
@@ -244,27 +233,33 @@ class JobsController(QObject):
             )
             return
         else:
-            selected_blocks = all_blocks
+            # Первый запуск — полный OCR
             self._is_correction_mode = False
             self._clear_ocr_text_in_memory()
 
-        # Serialize blocks
-        blocks_data = [b.to_dict() for b in selected_blocks]
-        full_blocks_data = (
-            [b.to_dict() for b in all_blocks] if self._is_correction_mode else None
-        )
+        # Сохранить annotation в Supabase (с мутациями) перед отправкой на сервер
+        document_name = Path(mw.annotation_document.pdf_path or "").name
+        task_name = Path(mw.annotation_document.pdf_path or "").stem
 
-        output_dir = dialog.output_dir or str(Path(pdf_path).parent)
+        self._flush_autosave(node_id)
+        self._save_annotation_to_db(node_id)
 
         if self._mode == "remote":
-            self._remote_create_job(
-                pdf_path=pdf_path,
-                blocks_data=blocks_data,
-                full_blocks_data=full_blocks_data,
+            self._server_create_job(
                 node_id=node_id,
+                document_name=document_name,
                 task_name=task_name,
+                is_correction_mode=self._is_correction_mode,
             )
         else:
+            # Legacy local mode fallback
+            pdf_path = mw.annotation_document.pdf_path
+            selected_blocks = blocks_needing if self._is_correction_mode else all_blocks
+            blocks_data = [b.to_dict() for b in selected_blocks]
+            full_blocks_data = (
+                [b.to_dict() for b in all_blocks] if self._is_correction_mode else None
+            )
+            output_dir = str(Path(pdf_path).parent) if pdf_path else ""
             self._local_create_job(
                 pdf_path=pdf_path,
                 blocks_data=blocks_data,
@@ -275,7 +270,7 @@ class JobsController(QObject):
             )
 
     def force_recognize_block(self, block_id: str) -> None:
-        """Принудительно пере-распознать один блок."""
+        """Принудительно пере-распознать один блок (server-only)."""
         from PySide6.QtWidgets import QMessageBox
 
         mw = self.main_window
@@ -303,14 +298,6 @@ class JobsController(QObject):
                                 "Дождитесь завершения текущей OCR-задачи.")
             return
 
-        pdf_path = mw.annotation_document.pdf_path
-        if not pdf_path or not Path(pdf_path).exists():
-            if getattr(mw, "_current_pdf_path", None):
-                pdf_path = mw._current_pdf_path
-            else:
-                QMessageBox.warning(mw, "Ошибка", "PDF файл не найден")
-                return
-
         # Найти блок
         target_block = None
         for page in mw.annotation_document.pages:
@@ -325,18 +312,18 @@ class JobsController(QObject):
             logger.warning(f"Block {block_id} not found for force recognize")
             return
 
-        self._flush_autosave(node_id)
-
+        # Mutation: очистить OCR, пометить для correction
         target_block.ocr_text = None
         target_block.ocr_html = None
         target_block.ocr_json = None
         target_block.ocr_meta = None
         target_block.is_correction = True
 
-        blocks_data = [target_block.to_dict()]
-        all_blocks = self._get_selected_blocks()
-        full_blocks_data = [b.to_dict() for b in all_blocks]
+        # Сохранить annotation в Supabase перед отправкой
+        self._flush_autosave(node_id)
+        self._save_annotation_to_db(node_id)
 
+        document_name = Path(mw.annotation_document.pdf_path or "").name
         task_name = f"Блок {block_id[:9]}"
         self._is_correction_mode = True
 
@@ -344,16 +331,19 @@ class JobsController(QObject):
         show_toast(mw, f"Принудительное OCR блока {block_id[:9]}...", duration=2000)
 
         if self._mode == "remote":
-            self._remote_create_job(
-                pdf_path=pdf_path,
-                blocks_data=blocks_data,
-                full_blocks_data=full_blocks_data,
+            self._server_create_job(
                 node_id=node_id,
+                document_name=document_name,
                 task_name=task_name,
                 is_correction_mode=True,
             )
         else:
-            output_dir = str(Path(pdf_path).parent)
+            # Legacy local fallback
+            pdf_path = mw.annotation_document.pdf_path
+            blocks_data = [target_block.to_dict()]
+            all_blocks = self._get_selected_blocks()
+            full_blocks_data = [b.to_dict() for b in all_blocks]
+            output_dir = str(Path(pdf_path).parent) if pdf_path else ""
             chandra_url = os.getenv("CHANDRA_BASE_URL", "http://localhost:1234")
             chandra_url = chandra_url.replace("host.docker.internal", "localhost")
             qwen_url = os.getenv("QWEN_BASE_URL", "") or chandra_url
@@ -594,7 +584,127 @@ class JobsController(QObject):
             logger.warning(f"Failed to save snapshot: {e}")
 
     # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Create job
+    # SERVER-ONLY: Create job (node-backed, без upload)
+    # ══════════════════════════════════════════════════════════════════
+
+    def _save_annotation_to_db(self, node_id: str) -> bool:
+        """Сохранить текущую annotation в Supabase (синхронно)."""
+        try:
+            from app.annotation_db import AnnotationDBIO
+            doc = self.main_window.annotation_document
+            if doc and node_id:
+                AnnotationDBIO.save_to_db(doc, node_id)
+                logger.info(f"Annotation saved to Supabase for node {node_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save annotation to Supabase: {e}", exc_info=True)
+        return False
+
+    def _server_create_job(
+        self,
+        *,
+        node_id: str,
+        document_name: str,
+        task_name: str,
+        is_correction_mode: bool = False,
+    ) -> None:
+        """Создать OCR-задачу для node-backed документа (без upload PDF/blocks).
+
+        Сервер сам берёт PDF из R2 и annotation из Supabase.
+        Лёгкий POST без файлов.
+        """
+        from app.gui.toast import show_toast
+        from app.ocr_client.models import JobInfo
+
+        document_id = node_id  # Стабильный серверный идентификатор
+
+        # Optimistic job для немедленного показа в UI
+        temp_id = str(uuid.uuid4())
+        temp_job = JobInfo(
+            id=temp_id,
+            status="uploading",
+            progress=0.0,
+            document_id=document_id,
+            document_name=document_name,
+            task_name=task_name,
+            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            node_id=node_id,
+            status_message="Отправка задачи...",
+        )
+        self._optimistic_jobs[temp_id] = (temp_job, time.time())
+        self.job_uploading.emit(temp_job)
+        self._emit_remote_jobs_list()
+
+        show_toast(self.main_window, "Отправка задачи на сервер...", duration=2000)
+
+        self._executor.submit(
+            self._server_create_job_bg,
+            temp_id=temp_id,
+            node_id=node_id,
+            document_id=document_id,
+            document_name=document_name,
+            task_name=task_name,
+            is_correction_mode=is_correction_mode,
+        )
+
+    def _server_create_job_bg(
+        self,
+        *,
+        temp_id: str,
+        node_id: str,
+        document_id: str,
+        document_name: str,
+        task_name: str,
+        is_correction_mode: bool,
+    ) -> None:
+        """Фоновый поток: лёгкий POST на сервер (без файлов)."""
+        from app.ocr_client import RemoteOCRError
+        from app.ocr_client.models import JobInfo
+
+        try:
+            result = self._client.create_node_job(
+                node_id=node_id,
+                document_id=document_id,
+                document_name=document_name,
+                client_id=self._client_id,
+                task_name=task_name,
+                is_correction_mode=is_correction_mode,
+            )
+
+            # Заменяем optimistic job на реальный
+            self._optimistic_jobs.pop(temp_id, None)
+            real_job = JobInfo.from_dict(result)
+            self._optimistic_jobs[real_job.id] = (real_job, time.time())
+
+            QMetaObject.invokeMethod(
+                self, "_on_remote_job_created",
+                Qt.QueuedConnection,
+            )
+
+        except RemoteOCRError as e:
+            self._optimistic_jobs.pop(temp_id, None)
+            error_type = "server"
+            if e.status_code == 400:
+                error_type = "validation"
+            elif e.status_code == 503:
+                error_type = "server"
+            self._pending_error = (error_type, str(e))
+            QMetaObject.invokeMethod(
+                self, "_on_remote_job_create_error",
+                Qt.QueuedConnection,
+            )
+        except Exception as e:
+            self._optimistic_jobs.pop(temp_id, None)
+            logger.error(f"Server create_node_job failed: {e}", exc_info=True)
+            self._pending_error = ("generic", str(e))
+            QMetaObject.invokeMethod(
+                self, "_on_remote_job_create_error",
+                Qt.QueuedConnection,
+            )
+
+    # ══════════════════════════════════════════════════════════════════
+    # REMOTE MODE: Create job (legacy, с upload PDF)
     # ══════════════════════════════════════════════════════════════════
 
     def _remote_create_job(

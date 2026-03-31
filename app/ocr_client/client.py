@@ -94,7 +94,7 @@ class RemoteOCRClient:
         pdf_path: str,
         blocks_data: list[dict] | dict,
     ) -> dict:
-        """Создать OCR-задачу (multipart upload PDF + blocks)."""
+        """Создать OCR-задачу (multipart upload PDF + blocks). Legacy метод."""
         form_data = {
             "document_id": document_id,
             "document_name": document_name,
@@ -121,6 +121,40 @@ class RemoteOCRClient:
                 timeout=600.0,
                 max_retries=2,
             )
+
+        return resp.json()
+
+    def create_node_job(
+        self,
+        *,
+        node_id: str,
+        document_id: str,
+        document_name: str,
+        client_id: str,
+        task_name: str = "",
+        is_correction_mode: bool = False,
+    ) -> dict:
+        """Создать OCR-задачу для node-backed документа (без upload PDF/blocks).
+
+        Сервер сам берёт PDF из R2 и annotation из Supabase.
+        Лёгкий POST — только метаданные.
+        """
+        form_data = {
+            "document_id": document_id,
+            "document_name": document_name,
+            "client_id": client_id,
+            "task_name": task_name,
+            "engine": "lmstudio",
+            "node_id": node_id,
+            "is_correction_mode": str(is_correction_mode).lower(),
+        }
+
+        resp = self._request_with_retry(
+            "POST", "/jobs",
+            data=form_data,
+            timeout=30.0,
+            max_retries=2,
+        )
 
         return resp.json()
 
