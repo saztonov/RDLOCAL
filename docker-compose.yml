@@ -5,7 +5,7 @@ services:
       dockerfile: services/remote_ocr/Dockerfile
     command: uvicorn services.remote_ocr.server.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:1234:8000"
     env_file:
       - .env
     environment:
