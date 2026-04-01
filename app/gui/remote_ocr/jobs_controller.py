@@ -998,10 +998,12 @@ class JobsController(QObject):
         self.connection_status.emit("connected")
 
         # Проверяем есть ли завершённые задачи для автоскачивания
+        # Скачиваем только для текущего документа, чтобы не забивать executor
+        current_node = getattr(self.main_window, "_current_node_id", None)
         for job_id, job in self._jobs_cache.items():
             if getattr(job, "status", "") in ("done", "partial") and job_id not in self._downloaded_jobs:
                 node_id = getattr(job, "node_id", None)
-                if node_id:
+                if node_id and (not current_node or node_id == current_node):
                     self.auto_download_result(job_id)
 
         # Обновляем интервал polling
