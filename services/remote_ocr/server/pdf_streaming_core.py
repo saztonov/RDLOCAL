@@ -342,6 +342,17 @@ class StreamingPDFProcessor:
                             fitz.Point(norm_px * crop_width, norm_py * crop_height)
                         )
 
+                    # Rotate polygon_pts so the first vertex is farthest
+                    # from (0,0).  When draw_polyline starts at the same
+                    # point where draw_rect ended, PyMuPDF merges both
+                    # into a single sub-path and the even-odd fill breaks.
+                    if len(polygon_pts) >= 3:
+                        best_idx = max(
+                            range(len(polygon_pts)),
+                            key=lambda i: polygon_pts[i].x ** 2 + polygon_pts[i].y ** 2,
+                        )
+                        polygon_pts = polygon_pts[best_idx:] + polygon_pts[:best_idx]
+
                     shape = new_page.new_shape()
                     shape.draw_rect(new_page.rect)
                     if polygon_pts:
