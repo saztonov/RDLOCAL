@@ -147,7 +147,7 @@ class FileDownloadMixin:
 
         # Показываем модальное окно загрузки
         self._download_dialog = QProgressDialog(
-            f"Загрузка документа и связанных файлов...",
+            "Загрузка документа...",
             "Отмена",
             0,
             len(tasks),
@@ -182,18 +182,12 @@ class FileDownloadMixin:
     def _build_download_tasks(
         self, node_id: str, r2_key: str, local_path: str
     ) -> list:
-        """Собрать список задач для скачивания (PDF + OCR результаты).
+        """Собрать список задач для скачивания (только PDF).
 
-        Все файлы скачиваются в temp-папку (parent от local_path).
+        Разметка загружается из Supabase, sidecar-файлы не нужны при открытии.
         use_cache=False для tree-документов — не используем R2DiskCache.
         """
-        from app.tree_client import FileType, TreeClient
-
-        tasks = []
-        temp_dir = Path(local_path).parent
-
-        # Основной PDF — всегда скачиваем (temp-папка новая)
-        tasks.append(
+        return [
             TransferTask(
                 transfer_type=TransferType.DOWNLOAD,
                 local_path=local_path,
@@ -201,55 +195,7 @@ class FileDownloadMixin:
                 node_id=node_id,
                 use_cache=False,
             )
-        )
-
-        # Типы файлов для скачивания (без кропов и аннотаций)
-        download_file_types = {
-            FileType.OCR_HTML,
-            FileType.RESULT_MD,
-        }
-
-        # Проверяем есть ли дополнительные файлы в node_files
-        try:
-            from rd_core.r2_storage import R2Storage
-
-            client = TreeClient()
-            node_files = client.get_node_files(node_id)
-            r2 = R2Storage()
-
-            for nf in node_files:
-                if nf.file_type == FileType.PDF:
-                    continue
-                if nf.file_type in (FileType.CROP, FileType.CROPS_FOLDER):
-                    continue
-                if nf.file_type not in download_file_types:
-                    continue
-
-                try:
-                    if not r2.exists(nf.r2_key):
-                        logger.warning(f"File not found in R2, skipping: {nf.r2_key}")
-                        continue
-                except Exception as e:
-                    logger.warning(f"R2 exists check failed for {nf.r2_key}: {e}")
-
-                file_local_path = temp_dir / Path(nf.r2_key).name
-
-                tasks.append(
-                    TransferTask(
-                        transfer_type=TransferType.DOWNLOAD,
-                        local_path=str(file_local_path),
-                        r2_key=nf.r2_key,
-                        node_id=node_id,
-                        timeout=15,
-                        use_cache=False,
-                    )
-                )
-                logger.debug(f"Added download task: {nf.file_type.value} -> {file_local_path}")
-
-        except Exception as e:
-            logger.warning(f"Failed to get additional files for download: {e}")
-
-        return tasks
+        ]
 
     def _on_download_canceled(self):
         """Отмена загрузки пользователем"""
