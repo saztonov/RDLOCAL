@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { Document } from "../models/document";
 import type { Block } from "../models/block";
 import * as annotationsApi from "../api/annotations";
+import { useUndoStore } from "./undoStore";
 
 interface DocumentStore {
   nodeId: string | null;
@@ -24,6 +25,8 @@ interface DocumentStore {
   getCurrentPageBlocks: () => Block[];
   markDirty: () => void;
   saveAnnotation: () => Promise<void>;
+  undo: () => void;
+  redo: () => void;
 }
 
 function updateBlocksInDocument(
@@ -41,6 +44,12 @@ function updateBlocksInDocument(
   };
 }
 
+/** Push current document to undo stack before a mutation. */
+function pushUndo() {
+  const { document } = useDocumentStore.getState();
+  if (document) useUndoStore.getState().pushUndo(document);
+}
+
 export const useDocumentStore = create<DocumentStore>((set, get) => ({
   nodeId: null,
   document: null,
@@ -53,6 +62,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { syncTimer } = get();
     if (syncTimer) clearTimeout(syncTimer);
 
+    useUndoStore.getState().clear();
     set({ loading: true, nodeId, dirty: false, syncTimer: null });
     try {
       const response = await annotationsApi.getAnnotation(nodeId);
@@ -72,6 +82,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
+    pushUndo();
     const updated = updateBlocksInDocument(document, currentPage, (blocks) => [
       ...blocks,
       block,
@@ -84,6 +95,8 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
+    // Don't push undo for every mousemove during resize — only on discrete edits.
+    // Resize pushes undo at start via handleResizeStart; continuous updates skip it.
     const updated = updateBlocksInDocument(document, currentPage, (blocks) =>
       blocks.map((b) => (b.id === blockId ? { ...b, ...updates } : b)),
     );
@@ -95,6 +108,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
+    pushUndo();
     const updated = updateBlocksInDocument(document, currentPage, (blocks) =>
       blocks.filter((b) => b.id !== blockId),
     );
@@ -106,6 +120,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
+    pushUndo();
     const ids = new Set(blockIds);
     const updated = updateBlocksInDocument(document, currentPage, (blocks) =>
       blocks.filter((b) => !ids.has(b.id)),
@@ -121,9 +136,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
+    pushUndo();
     const updated = updateBlocksInDocument(document, currentPage, (blocks) =>
       blocks.map((b) =>
-        b.id === blockId ? { ...b, coords: newCoords } : b,
+        b.id === blockId ? { ...b, coords_norm: newCoords } : b,
       ),
     );
     set({ document: updated });
@@ -157,6 +173,22 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       set({ dirty: false, syncTimer: null });
     } catch (err) {
       console.error("Failed to save annotation:", err);
+    }
+  },
+
+  undo: () => {
+    const restored = useUndoStore.getState().undo();
+    if (restored) {
+      set({ document: restored });
+      get().markDirty();
+    }
+  },
+
+  redo: () => {
+    const restored = useUndoStore.getState().redo();
+    if (restored) {
+      set({ document: restored });
+      get().markDirty();
     }
   },
 }));

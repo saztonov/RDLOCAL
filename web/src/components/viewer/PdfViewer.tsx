@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDocumentStore } from "../../stores/documentStore";
 import { useViewerStore } from "../../stores/viewerStore";
 import { BlockCanvas } from "./BlockCanvas";
-import { PageNavigation } from "./PageNavigation";
-import { BlockToolbar } from "./BlockToolbar";
 
 const BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? window.location.origin;
@@ -88,65 +86,52 @@ export function PdfViewer() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-gray-900">
-      {/* Top toolbar */}
-      <div className="flex items-center gap-4 border-b border-gray-700 bg-gray-800 px-4 py-2">
-        <BlockToolbar />
-        <div className="mx-auto" />
-        <PageNavigation />
-        <span className="ml-4 text-sm text-gray-400">
-          {Math.round(zoom * 100)}%
-        </span>
-      </div>
-
-      {/* Scrollable viewer area */}
+    <div
+      ref={containerRef}
+      className="relative flex-1 overflow-auto bg-gray-900"
+      onWheel={handleWheel}
+    >
       <div
-        ref={containerRef}
-        className="relative flex-1 overflow-auto"
-        onWheel={handleWheel}
+        className="relative mx-auto my-4"
+        style={{ width: canvasWidth, height: canvasHeight }}
       >
-        <div
-          className="relative mx-auto my-4"
-          style={{ width: canvasWidth, height: canvasHeight }}
-        >
-          {/* PDF page image */}
-          {pageImageUrl && (
-            <img
-              src={pageImageUrl}
-              alt={`Page ${currentPage + 1}`}
+        {/* PDF page image */}
+        {pageImageUrl && (
+          <img
+            src={pageImageUrl}
+            alt={`Page ${currentPage + 1}`}
+            width={canvasWidth}
+            height={canvasHeight}
+            className="absolute left-0 top-0 select-none"
+            style={{ imageRendering: "auto" }}
+            draggable={false}
+            onLoad={() => setImageLoaded(true)}
+            onError={() => setImageError(true)}
+          />
+        )}
+
+        {/* Error fallback */}
+        {imageError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-800 text-red-400">
+            Не удалось загрузить страницу
+          </div>
+        )}
+
+        {/* Konva block overlay */}
+        {imageLoaded && pageWidth > 0 && pageHeight > 0 && (
+          <div className="absolute left-0 top-0">
+            <BlockCanvas
               width={canvasWidth}
               height={canvasHeight}
-              className="absolute left-0 top-0 select-none"
-              style={{ imageRendering: "auto" }}
-              draggable={false}
-              onLoad={() => setImageLoaded(true)}
-              onError={() => setImageError(true)}
+              pageWidth={pageWidth}
+              pageHeight={pageHeight}
             />
-          )}
-
-          {/* Error fallback */}
-          {imageError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-800 text-red-400">
-              Не удалось загрузить страницу
-            </div>
-          )}
-
-          {/* Konva block overlay */}
-          {imageLoaded && pageWidth > 0 && pageHeight > 0 && (
-            <div className="absolute left-0 top-0">
-              <BlockCanvas
-                width={canvasWidth}
-                height={canvasHeight}
-                pageWidth={pageWidth}
-                pageHeight={pageHeight}
-              />
-            </div>
-          )}
-
-          {/* Page number badge */}
-          <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
-            {currentPage + 1} / {document.pages.length}
           </div>
+        )}
+
+        {/* Page number badge */}
+        <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
+          {currentPage + 1} / {document.pages.length}
         </div>
       </div>
     </div>

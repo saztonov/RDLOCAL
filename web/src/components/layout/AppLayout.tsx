@@ -1,8 +1,12 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useDocumentStore } from '../../stores/documentStore'
 import { useViewerStore } from '../../stores/viewerStore'
 import { BlockType, ShapeType } from '../../models/enums'
 import { ProjectTree } from '../tree/ProjectTree'
+import { PdfViewer } from '../viewer/PdfViewer'
+import BlocksTree from '../blocks/BlocksTree'
+import OcrPreview from '../ocr/OcrPreview'
+import JobsPanel from '../ocr/JobsPanel'
 
 const BLOCK_TYPE_LABELS: Record<BlockType, string> = {
   [BlockType.TEXT]: 'TEXT',
@@ -18,11 +22,13 @@ const SHAPE_TYPE_LABELS: Record<ShapeType, string> = {
 export function AppLayout() {
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
-  const [rightTab, setRightTab] = useState<'blocks' | 'ocr'>('blocks')
+  const [rightTab, setRightTab] = useState<'blocks' | 'ocr' | 'jobs'>('blocks')
 
   const currentPage = useDocumentStore((s) => s.currentPage)
   const document = useDocumentStore((s) => s.document)
+  const dirty = useDocumentStore((s) => s.dirty)
   const setCurrentPage = useDocumentStore((s) => s.setCurrentPage)
+  const saveAnnotation = useDocumentStore((s) => s.saveAnnotation)
 
   const zoom = useViewerStore((s) => s.zoom)
   const zoomIn = useViewerStore((s) => s.zoomIn)
@@ -41,6 +47,26 @@ export function AppLayout() {
   const handleNextPage = useCallback(() => {
     if (currentPage < totalPages - 1) setCurrentPage(currentPage + 1)
   }, [currentPage, totalPages, setCurrentPage])
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' && !e.shiftKey) {
+          e.preventDefault()
+          useDocumentStore.getState().undo()
+        } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+          e.preventDefault()
+          useDocumentStore.getState().redo()
+        } else if (e.key === 's') {
+          e.preventDefault()
+          useDocumentStore.getState().saveAnnotation()
+        }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white overflow-hidden">
@@ -140,7 +166,49 @@ export function AppLayout() {
           </button>
         </div>
 
+        {/* Separator */}
+        <div className="w-px h-5 bg-gray-600" />
+
+        {/* Undo / Redo */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => useDocumentStore.getState().undo()}
+            className="px-2 py-1 text-sm rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Отменить (Ctrl+Z)"
+          >
+            &#8630;
+          </button>
+          <button
+            onClick={() => useDocumentStore.getState().redo()}
+            className="px-2 py-1 text-sm rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Повторить (Ctrl+Shift+Z)"
+          >
+            &#8631;
+          </button>
+        </div>
+
         <div className="flex-1" />
+
+        {/* Save indicator */}
+        {document && (
+          <div className="flex items-center gap-2">
+            {dirty ? (
+              <button
+                onClick={() => saveAnnotation()}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded hover:bg-gray-700 transition-colors"
+                title="Сохранить (Ctrl+S)"
+              >
+                <span className="inline-block h-2 w-2 rounded-full bg-yellow-400 animate-pulse" />
+                <span className="text-yellow-400">Не сохранено</span>
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-500">
+                <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                Сохранено
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Right panel toggle */}
         <button
@@ -167,14 +235,11 @@ export function AppLayout() {
         )}
 
         {/* Center: PDF viewer */}
-        <main className="flex-1 flex items-center justify-center overflow-auto bg-gray-900">
+        <main className="flex-1 flex overflow-hidden bg-gray-900">
           {document ? (
-            <div className="text-gray-500 text-sm">
-              {/* PdfViewer will be mounted here */}
-              PDF Viewer: {document.pdf_path}
-            </div>
+            <PdfViewer />
           ) : (
-            <div className="text-gray-500 text-sm">
+            <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
               Выберите документ в дереве проектов
             </div>
           )}
@@ -205,20 +270,26 @@ export function AppLayout() {
               >
                 OCR
               </button>
+              <button
+                onClick={() => setRightTab('jobs')}
+                className={`flex-1 px-3 py-2 text-sm font-medium transition-colors ${
+                  rightTab === 'jobs'
+                    ? 'text-white border-b-2 border-blue-500'
+                    : 'text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                Задачи
+              </button>
             </div>
 
             {/* Tab content */}
-            <div className="flex-1 overflow-y-auto p-3">
+            <div className="flex-1 overflow-y-auto">
               {rightTab === 'blocks' ? (
-                <div className="text-gray-500 text-sm">
-                  {/* BlocksPanel will be mounted here */}
-                  Панель блоков
-                </div>
+                <BlocksTree />
+              ) : rightTab === 'ocr' ? (
+                <OcrPreview />
               ) : (
-                <div className="text-gray-500 text-sm">
-                  {/* OcrPreview will be mounted here */}
-                  OCR предпросмотр
-                </div>
+                <JobsPanel />
               )}
             </div>
           </aside>
