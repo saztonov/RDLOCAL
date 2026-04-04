@@ -148,39 +148,6 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
 
 
 def copy_crops_to_final(work_dir: Path, blocks) -> None:
-    """Копировать PDF кропы из crops/images в crops_final для загрузки в R2.
-
-    Исключает блоки с category_code='stamp' - они не сохраняются на R2.
-    """
-    crops_dir = work_dir / "crops"
-    images_subdir = crops_dir / "images"
-    crops_final = work_dir / "crops_final"
-
-    if not images_subdir.exists():
-        return
-
-    crops_final.mkdir(exist_ok=True)
-    blocks_by_id = {b.id: b for b in blocks}
-
-    # ID блоков-штампов для исключения
-    from rd_core.ocr.generator_common import is_stamp_block
-    stamp_ids = {b.id for b in blocks if is_stamp_block(b)}
-
-    for pdf_file in images_subdir.glob("*.pdf"):
-        try:
-            block_id = pdf_file.stem
-
-            # Пропускаем штампы
-            if block_id in stamp_ids:
-                logger.debug(f"Пропущен кроп штампа: {pdf_file.name}")
-                continue
-
-            target = crops_final / pdf_file.name
-            shutil.copy2(pdf_file, target)
-
-            if block_id in blocks_by_id:
-                blocks_by_id[block_id].image_file = str(target)
-
-            logger.debug(f"PDF кроп скопирован: {pdf_file.name}")
-        except Exception as e:
-            logger.warning(f"Ошибка копирования PDF кропа {pdf_file}: {e}")
+    """Копировать PDF кропы — делегирует в rd_core.pipeline.cleanup."""
+    from rd_core.pipeline.cleanup import copy_crops_to_final as _copy
+    _copy(work_dir, blocks)

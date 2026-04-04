@@ -1,8 +1,8 @@
 """
 Локальный OCR pipeline — замена distributed Celery+Redis+HTTP.
 
-Переиспользует серверную OCR-логику (pdf_twopass, backend_factory,
-task_results, block_verification) без зависимостей на Celery/Redis/R2/Supabase.
+Переиспользует shared OCR-логику из rd_core.pipeline
+без зависимостей на Celery/Redis/R2/Supabase.
 
 Каждая задача выполняется в отдельном multiprocessing.Process
 для изоляции утечек памяти (аналог Celery prefork worker_max_tasks=3).
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -18,7 +19,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+import yaml
+
 logger = logging.getLogger(__name__)
+
+# ── Desktop config loading ──────────────────────────────────────
+# Ищем config.yaml: OCR_CONFIG_PATH > рядом с server config (для dev)
+_CONFIG_SEARCH_PATHS = [
+    Path(__file__).resolve().parent.parent.parent / "services" / "remote_ocr" / "server" / "config.yaml",
+]
+
+
+def _load_ocr_config() -> dict:
+    """Загрузить OCR config для desktop pipeline."""
+    override = os.getenv("OCR_CONFIG_PATH")
+    if override:
+        p = Path(override)
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+
+    for p in _CONFIG_SEARCH_PATHS:
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+
+    logger.warning("OCR config.yaml not found, using empty config")
+    return {}
 
 
 @dataclass
@@ -67,7 +94,6 @@ def run_local_ocr(
     Запускает полный OCR pipeline локально.
 
     Это главная функция, вызываемая в subprocess (multiprocessing.Process).
-    Переиспользует серверные модули напрямую.
     """
     pdf_path = Path(pdf_path)
     output_dir = Path(output_dir)
@@ -119,21 +145,26 @@ def run_local_ocr(
 
         # ── Create backends ──────────────────────────────────────
         from rd_core.ocr import create_ocr_engine
-        from services.remote_ocr.server.backend_factory import (
-            _build_chandra_config,
-            _build_qwen_config,
-            _build_stamp_config,
+        from rd_core.pipeline.config_builders import (
+            build_chandra_config,
+            build_qwen_config,
+            build_stamp_config,
         )
-        from services.remote_ocr.server.settings import settings
 
-        chandra_url = chandra_base_url or settings.chandra_base_url or os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
-        qwen_url = qwen_base_url or settings.qwen_base_url or chandra_url
+        cfg = _load_ocr_config()
+
+        chandra_url = chandra_base_url or cfg.get("chandra_base_url", "") or os.getenv("CHANDRA_BASE_URL", "") or os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
+        qwen_url = qwen_base_url or cfg.get("qwen_base_url", "") or chandra_url
+
+        _chandra_timeout = chandra_http_timeout or cfg.get("chandra_http_timeout", 300)
+        _qwen_timeout = qwen_http_timeout or cfg.get("qwen_http_timeout", 300)
+        _stamp_timeout = cfg.get("stamp_http_timeout", _qwen_timeout)
 
         text_backend = create_ocr_engine(
             "chandra",
             base_url=chandra_url,
-            http_timeout=settings.chandra_http_timeout,
-            model_config=_build_chandra_config(),
+            http_timeout=_chandra_timeout,
+            model_config=build_chandra_config(cfg),
         )
         try:
             text_backend.preload()
@@ -143,14 +174,14 @@ def run_local_ocr(
         image_backend = create_ocr_engine(
             "qwen",
             base_url=qwen_url,
-            http_timeout=settings.qwen_http_timeout,
-            model_config=_build_qwen_config(),
+            http_timeout=_qwen_timeout,
+            model_config=build_qwen_config(cfg),
         )
         stamp_backend = create_ocr_engine(
             "qwen",
             base_url=qwen_url,
-            http_timeout=settings.stamp_http_timeout,
-            model_config=_build_stamp_config(),
+            http_timeout=_stamp_timeout,
+            model_config=build_stamp_config(cfg),
         )
 
         # Deadline для бэкендов
@@ -162,10 +193,7 @@ def run_local_ocr(
         _progress(0.1, "Бэкенды готовы")
 
         # ── PASS 1: Crop extraction ─────────────────────────────
-        from services.remote_ocr.server.pdf_twopass import (
-            cleanup_manifest_files,
-            pass1_prepare_crops,
-        )
+        from rd_core.pipeline import cleanup_manifest_files, pass1_prepare_crops
 
         def on_pass1_progress(current, total):
             _progress(0.1 + 0.3 * (current / total), f"PASS 1: стр. {current}/{total}")
@@ -177,6 +205,7 @@ def run_local_ocr(
             save_image_crops_as_pdf=True,
             on_progress=on_pass1_progress,
             should_stop=_is_cancelled,
+            crop_png_compress=cfg.get("crop_png_compress", 6),
         )
 
         if not manifest or len(manifest.blocks) == 0:
@@ -195,7 +224,8 @@ def run_local_ocr(
         # ── PASS 2: Recognition (async) ──────────────────────────
         import asyncio
 
-        from services.remote_ocr.server.pdf_twopass.pass2_ocr_async import (
+        from rd_core.pipeline.pass2_ocr_async import (
+            PhaseConcurrency,
             pass2_ocr_from_manifest_async,
         )
 
@@ -248,6 +278,12 @@ def run_local_ocr(
                 same_server=(qwen_url == chandra_url),
             )
 
+        phase_concurrency = PhaseConcurrency(
+            text_max_concurrent=cfg.get("text_max_concurrent", 1),
+            stamp_max_concurrent=cfg.get("stamp_max_concurrent", 1),
+            image_max_concurrent=cfg.get("image_max_concurrent", 1),
+        )
+
         asyncio.run(
             pass2_ocr_from_manifest_async(
                 manifest,
@@ -264,6 +300,7 @@ def run_local_ocr(
                 deadline=deadline,
                 before_stamp_phase=_swap_to_stamp,
                 before_image_phase=_swap_to_image,
+                phase_concurrency=phase_concurrency,
             )
         )
 
@@ -273,7 +310,7 @@ def run_local_ocr(
         _progress(0.88, "Распознавание завершено")
 
         # ── Копируем PDF кропы в crops_final (до cleanup) ──
-        from services.remote_ocr.server.task_upload import copy_crops_to_final
+        from rd_core.pipeline import copy_crops_to_final
         copy_crops_to_final(work_dir, blocks)
 
         _progress(0.9, "Кропы подготовлены")
@@ -310,10 +347,7 @@ def run_local_ocr(
         _progress(0.98, "Результаты сохранены")
 
         # ── Compute stats ────────────────────────────────────────
-        from services.remote_ocr.server.ocr_constants import (
-            is_error as _is_error,
-            is_success as _is_success,
-        )
+        from rd_core.ocr_result import is_error as _is_error, is_success as _is_success
 
         # Счётчики по обработанному subset
         recognized = sum(1 for b in blocks if _is_success(b.ocr_text))
@@ -422,7 +456,7 @@ def _generate_local_results(
     from datetime import datetime, timezone
 
     from rd_core.ocr.result_pipeline import generate_ocr_results
-    from services.remote_ocr.server.pdf_streaming_core import get_page_dimensions_streaming
+    from rd_core.pipeline.pdf_streaming_core import get_page_dimensions_streaming
 
     page_dims = get_page_dimensions_streaming(str(pdf_path))
     r2_project_name = node_id or None

@@ -12,6 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
+from rd_core.pipeline.config_builders import (
+    build_chandra_config,
+    build_qwen_config,
+    build_stamp_config,
+)
+
 from .logging_config import get_logger
 from .settings import settings
 
@@ -61,112 +67,17 @@ class JobBackends:
 
 def _build_chandra_config() -> dict:
     """Собрать model_config для ChandraBackend из settings (config.yaml)."""
-    return {
-        "model_key": settings.chandra_model_key,
-        "context_length": settings.chandra_context_length,
-        "flash_attention": settings.chandra_flash_attention,
-        "eval_batch_size": settings.chandra_eval_batch_size,
-        "offload_kv_cache": settings.chandra_offload_kv_cache,
-        "max_image_size": settings.chandra_max_image_size,
-        "preload_timeout": settings.chandra_preload_timeout,
-        "max_retries": settings.chandra_max_retries,
-        "retry_delays": settings.chandra_retry_delays,
-        "system_prompt": settings.chandra_system_prompt,
-        "user_prompt": settings.chandra_user_prompt,
-        "max_tokens": settings.chandra_max_tokens,
-        "temperature": settings.chandra_temperature,
-        "top_p": settings.chandra_top_p,
-        "top_k": settings.chandra_top_k,
-        "repetition_penalty": settings.chandra_repetition_penalty,
-        "min_p": settings.chandra_min_p,
-        "length_retry_attempts": settings.chandra_length_retry_attempts,
-        "length_retry_max_tokens": settings.chandra_length_retry_max_tokens,
-    }
+    return build_chandra_config(settings)
 
 
 def _build_qwen_config() -> dict:
     """Собрать model_config для QwenBackend из settings (config.yaml)."""
-    return {
-        "model_key": settings.qwen_model_key,
-        "context_length": settings.qwen_context_length,
-        "flash_attention": settings.qwen_flash_attention,
-        "eval_batch_size": settings.qwen_eval_batch_size,
-        "offload_kv_cache": settings.qwen_offload_kv_cache,
-        "max_image_size": settings.qwen_max_image_size,
-        "preload_timeout": settings.qwen_preload_timeout,
-        "max_retries": settings.qwen_max_retries,
-        "retry_delays": settings.qwen_retry_delays,
-        "default_system_prompt": settings.qwen_default_system_prompt,
-        "default_user_prompt": settings.qwen_default_user_prompt,
-        "max_tokens": settings.qwen_max_tokens,
-        "temperature": settings.qwen_temperature,
-        "top_p": settings.qwen_top_p,
-        "top_k": settings.qwen_top_k,
-        "repetition_penalty": settings.qwen_repetition_penalty,
-        "min_p": settings.qwen_min_p,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "image_ocr_output",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "fragment_type": {"type": ["string", "null"]},
-                        "location": {"type": ["object", "null"]},
-                        "content_summary": {"type": ["string", "null"]},
-                        "detailed_description": {"type": ["string", "null"]},
-                        "verification_recommendations": {"type": ["string", "null"]},
-                        "key_entities": {"type": ["array", "null"]},
-                    },
-                    "required": ["fragment_type", "content_summary", "detailed_description"],
-                },
-            },
-        },
-    }
+    return build_qwen_config(settings)
 
 
 def _build_stamp_config() -> dict:
     """Собрать model_config для Stamp QwenBackend из settings (config.yaml)."""
-    return {
-        "model_key": settings.stamp_model_key,
-        "context_length": settings.stamp_context_length,
-        "flash_attention": settings.stamp_flash_attention,
-        "eval_batch_size": settings.stamp_eval_batch_size,
-        "offload_kv_cache": settings.stamp_offload_kv_cache,
-        "max_image_size": settings.stamp_max_image_size,
-        "preload_timeout": settings.stamp_preload_timeout,
-        "max_retries": settings.stamp_max_retries,
-        "retry_delays": settings.stamp_retry_delays,
-        "default_system_prompt": settings.stamp_system_prompt,
-        "default_user_prompt": settings.stamp_user_prompt,
-        "max_tokens": settings.stamp_max_tokens,
-        "temperature": settings.stamp_temperature,
-        "top_p": settings.stamp_top_p,
-        "top_k": settings.stamp_top_k,
-        "repetition_penalty": settings.stamp_repetition_penalty,
-        "min_p": settings.stamp_min_p,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "stamp_output",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "document_code": {"type": ["string", "null"]},
-                        "project_name": {"type": ["string", "null"]},
-                        "sheet_name": {"type": ["string", "null"]},
-                        "stage": {"type": ["string", "null"]},
-                        "sheet_number": {"type": ["string", "null"]},
-                        "total_sheets": {"type": ["string", "null"]},
-                        "organization": {"type": ["string", "null"]},
-                        "signatures": {"type": "array"},
-                        "revisions": {"type": "array"},
-                    },
-                    "required": ["document_code", "project_name", "sheet_name"],
-                },
-            },
-        },
-    }
+    return build_stamp_config(settings)
 
 
 def create_job_backends(job) -> JobBackends:

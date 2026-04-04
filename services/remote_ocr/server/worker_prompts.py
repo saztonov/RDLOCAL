@@ -1,10 +1,25 @@
-"""Промпты для OCR воркера"""
+"""Промпты для OCR воркера — делегирует в rd_core.pipeline.prompts."""
 
 from typing import Dict, Optional
+
+from rd_core.pipeline.prompts import (
+    build_text_prompt,  # noqa: F401
+    fill_image_prompt_variables as _fill_image_prompt_variables,
+    get_image_block_prompt as _get_image_block_prompt,
+)
 
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _get_category_prompt_fn():
+    """Lazy import storage_settings для серверного контекста."""
+    try:
+        from .storage_settings import get_category_prompt
+        return get_category_prompt
+    except Exception:
+        return None
 
 
 def get_image_block_prompt(
@@ -12,25 +27,13 @@ def get_image_block_prompt(
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> Optional[dict]:
-    """
-    Получить промпт для IMAGE/STAMP блока с учётом категории и движка.
-    Приоритет: block.prompt > category prompt (из config.yaml)
-    """
-    # Если блок имеет собственный промпт — используем его
-    if block_prompt and (block_prompt.get("system") or block_prompt.get("user")):
-        return block_prompt
-
-    # Иначе получаем промпт из config.yaml
-    try:
-        from .storage_settings import get_category_prompt
-
-        category_prompt = get_category_prompt(category_code=category_code, engine=engine)
-        if category_prompt:
-            return category_prompt
-    except Exception as e:
-        logger.warning(f"Не удалось получить промпт категории: {e}")
-
-    return None
+    """Server wrapper: подставляет category_prompt_fn из storage_settings."""
+    return _get_image_block_prompt(
+        block_prompt,
+        category_code=category_code,
+        engine=engine,
+        category_prompt_fn=_get_category_prompt_fn(),
+    )
 
 
 def fill_image_prompt_variables(
@@ -41,51 +44,13 @@ def fill_image_prompt_variables(
     category_code: Optional[str] = None,
     engine: Optional[str] = None,
 ) -> dict:
-    """
-    Заполнить переменные в промпте для IMAGE/STAMP блока.
-    Если prompt_data пуст — берёт промпт из config.yaml по категории и движку.
-
-    Переменные:
-        {DOC_NAME} - имя PDF документа
-        {PAGE_NUM} - номер страницы (1-based)
-        {BLOCK_ID} - ID блока
-    """
-    # Получаем промпт с учётом категории и движка
-    effective_prompt = get_image_block_prompt(
-        prompt_data, category_code=category_code, engine=engine
+    """Server wrapper: подставляет category_prompt_fn из storage_settings."""
+    return _fill_image_prompt_variables(
+        prompt_data,
+        doc_name=doc_name,
+        page_index=page_index,
+        block_id=block_id,
+        category_code=category_code,
+        engine=engine,
+        category_prompt_fn=_get_category_prompt_fn(),
     )
-
-    if not effective_prompt:
-        return {
-            "system": "",
-            "user": "Опиши что изображено на картинке. Верни результат как JSON.",
-        }
-
-    result = {
-        "system": effective_prompt.get("system", ""),
-        "user": effective_prompt.get("user", ""),
-    }
-
-    variables = {
-        "{DOC_NAME}": doc_name or "unknown",
-        "{PAGE_NUM}": str(page_index + 1) if page_index is not None else "1",
-        "{BLOCK_ID}": block_id or "",
-    }
-
-    for key, value in variables.items():
-        result["system"] = result["system"].replace(key, value)
-        result["user"] = result["user"].replace(key, value)
-
-    return result
-
-
-def build_text_prompt(block) -> dict:
-    """
-    Построить промпт для одного TEXT блока.
-    """
-    if block.prompt:
-        return block.prompt
-    return {
-        "system": "You are an expert OCR system. Extract text accurately.",
-        "user": "Распознай текст на изображении. Сохрани форматирование.",
-    }
