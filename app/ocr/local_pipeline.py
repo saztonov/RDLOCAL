@@ -205,31 +205,48 @@ def run_local_ocr(
             _progress(progress, msg)
 
         # Model swap callbacks (если один LM Studio инстанс)
-        def _swap_to_stamp():
-            """chandra → stamp model (qwen3.5-9b)"""
-            if qwen_url == chandra_url:
-                logger.info("Model swap: chandra → stamp")
+        def _model_swap_with_retry(
+            swap_name: str,
+            unload_backend,
+            load_backend,
+            same_server: bool,
+            max_retries: int = 2,
+            retry_delay: float = 5.0,
+        ):
+            """Выполнить swap моделей с retry. Raises RuntimeError при финальной ошибке."""
+            last_error = None
+            for attempt in range(max_retries + 1):
                 try:
-                    text_backend.unload_model()
-                except Exception:
-                    pass
-            try:
-                stamp_backend.preload()
-            except Exception:
-                pass
+                    if same_server and unload_backend is not None:
+                        unload_backend.unload_model()
+                    load_backend.preload()
+                    logger.info(f"Model swap '{swap_name}' OK (attempt {attempt + 1})")
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        f"Model swap '{swap_name}' failed "
+                        f"(attempt {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+                    if attempt < max_retries:
+                        time.sleep(retry_delay)
+
+            raise RuntimeError(
+                f"Model swap '{swap_name}' failed after "
+                f"{max_retries + 1} attempts: {last_error}"
+            )
+
+        def _swap_to_stamp():
+            _model_swap_with_retry(
+                "chandra → stamp", text_backend, stamp_backend,
+                same_server=(qwen_url == chandra_url),
+            )
 
         def _swap_to_image():
-            """stamp model → image model (qwen3.5-27b)"""
-            if qwen_url == chandra_url:
-                logger.info("Model swap: stamp → image")
-                try:
-                    stamp_backend.unload_model()
-                except Exception:
-                    pass
-            try:
-                image_backend.preload()
-            except Exception:
-                pass
+            _model_swap_with_retry(
+                "stamp → image", stamp_backend, image_backend,
+                same_server=(qwen_url == chandra_url),
+            )
 
         asyncio.run(
             pass2_ocr_from_manifest_async(
@@ -263,17 +280,10 @@ def run_local_ocr(
 
         # ── Model swap: вернуться к text backend перед верификацией ──
         def _swap_to_text():
-            """image/stamp model → chandra (для TEXT верификации)"""
-            if qwen_url == chandra_url:
-                logger.info("Model swap: qwen → chandra (верификация)")
-                try:
-                    image_backend.unload_model()
-                except Exception:
-                    pass
-            try:
-                text_backend.preload()
-            except Exception:
-                pass
+            _model_swap_with_retry(
+                "qwen → chandra", image_backend, text_backend,
+                same_server=(qwen_url == chandra_url),
+            )
 
         _swap_to_text()
 
@@ -405,168 +415,43 @@ def _generate_local_results(
     node_id: str | None = None,
     full_blocks_data: list[dict] | None = None,
 ):
-    """Генерация файлов результатов (annotation.json, HTML, MD, export_report.json)."""
+    """Генерация файлов результатов (annotation.json, HTML, MD, export_report.json).
+
+    Делегирует основную логику в rd_core.ocr.result_pipeline.generate_ocr_results().
+    """
     from datetime import datetime, timezone
 
-    from rd_core.models import Block, Document, Page, ShapeType
-    from rd_core.models.enums import BlockType
-    from rd_core.ocr import generate_html_from_pages, generate_md_from_pages
-    from rd_core.ocr_result import is_suspicious_output, make_error as make_ocr_error
-
+    from rd_core.ocr.result_pipeline import generate_ocr_results
     from services.remote_ocr.server.pdf_streaming_core import get_page_dimensions_streaming
-    from services.remote_ocr.server.text_ocr_quality import filter_mixed_text_output
-
-    engine = "lmstudio"
-
-    # Filter mixed-text Chandra artifacts
-    for block in blocks:
-        if block.block_type == BlockType.TEXT and block.ocr_text:
-            block.ocr_text, _ = filter_mixed_text_output(block.ocr_text, engine)
-
-    # Detect suspicious output → error marker
-    for block in blocks:
-        if block.block_type == BlockType.TEXT and block.ocr_text:
-            suspicious, reason = is_suspicious_output(block.ocr_text)
-            if suspicious:
-                block.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
-
-    # Correction mode: merge OCR results from the processed subset into
-    # the full block set so that HTML/MD export contains ALL blocks.
-    if is_correction_mode and full_blocks_data:
-        ocr_results = {b.id: b.ocr_text for b in blocks if b.ocr_text}
-
-        full_blocks = [Block.from_dict(b, migrate_ids=False)[0] for b in full_blocks_data]
-
-        for fb in full_blocks:
-            if fb.id in ocr_results:
-                fb.ocr_text = ocr_results[fb.id]
-
-        # Apply text filtering only to freshly OCR'd blocks in the full set
-        for fb in full_blocks:
-            if fb.id in ocr_results and fb.block_type == BlockType.TEXT and fb.ocr_text:
-                fb.ocr_text, _ = filter_mixed_text_output(fb.ocr_text, engine)
-                suspicious, reason = is_suspicious_output(fb.ocr_text)
-                if suspicious:
-                    fb.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
-
-        logger.info(
-            f"Correction mode: merged {len(ocr_results)} OCR results "
-            f"into {len(full_blocks)} total blocks"
-        )
-        blocks = full_blocks
-
-    # Group blocks by page
-    blocks_by_page: dict[int, list[tuple[int, object]]] = {}
-    for idx, b in enumerate(blocks):
-        blocks_by_page.setdefault(b.page_index, []).append((idx, b))
 
     page_dims = get_page_dimensions_streaming(str(pdf_path))
-
-    pages = []
-    for page_idx in sorted(blocks_by_page.keys()):
-        dims = page_dims.get(page_idx)
-        width, height = dims if dims else (0, 0)
-        page_blocks = [b for _, b in sorted(blocks_by_page[page_idx], key=lambda x: x[0])]
-
-        if width > 0 and height > 0:
-            for block in page_blocks:
-                old_x1, old_y1, old_x2, old_y2 = block.coords_px
-                old_bbox_w = max(old_x2 - old_x1, 1)
-                old_bbox_h = max(old_y2 - old_y1, 1)
-                block.coords_px = Block.norm_to_px(block.coords_norm, width, height)
-
-                if block.shape_type == ShapeType.POLYGON and block.polygon_points:
-                    new_x1, new_y1, new_x2, new_y2 = block.coords_px
-                    new_bbox_w = max(new_x2 - new_x1, 1)
-                    new_bbox_h = max(new_y2 - new_y1, 1)
-                    block.polygon_points = [
-                        (
-                            int(new_x1 + (px - old_x1) / old_bbox_w * new_bbox_w),
-                            int(new_y1 + (py - old_y1) / old_bbox_h * new_bbox_h),
-                        )
-                        for px, py in block.polygon_points
-                    ]
-
-        pages.append(Page(page_number=page_idx, width=width, height=height, blocks=page_blocks))
-
+    r2_project_name = node_id or None
     doc_name = pdf_path.name
-    doc = Document(pdf_path=doc_name, pages=pages)
+    pdf_stem = pdf_path.stem
+
+    result = generate_ocr_results(
+        pdf_path,
+        blocks,
+        work_dir,
+        output_dir,
+        page_dims=page_dims,
+        engine="lmstudio",
+        doc_name=doc_name,
+        project_name=r2_project_name,
+        is_correction_mode=is_correction_mode,
+        full_blocks_data=full_blocks_data,
+        text_backend=text_backend,
+        image_backend=image_backend,
+        stamp_backend=stamp_backend,
+        deadline=deadline,
+        before_stamp_phase=before_stamp_phase,
+        before_image_phase=before_image_phase,
+    )
 
     # annotation.json → output_dir
-    ann_dict = doc.to_dict()
     annotation_path = output_dir / "annotation.json"
     with open(annotation_path, "w", encoding="utf-8") as f:
-        json.dump(ann_dict, f, ensure_ascii=False, indent=2)
-
-    pdf_stem = pdf_path.stem
-    html_stats = None
-    md_stats = None
-
-    # project_name для R2 ссылок: node_id (если есть), иначе None (без ссылок)
-    r2_project_name = node_id or None
-
-    # HTML
-    html_path = output_dir / f"{pdf_stem}_ocr.html"
-    try:
-        _, html_stats = generate_html_from_pages(
-            pages, str(html_path), doc_name=doc_name, project_name=r2_project_name
-        )
-    except Exception as e:
-        logger.warning(f"HTML generation error: {e}")
-
-    # Markdown
-    md_path = output_dir / f"{pdf_stem}_document.md"
-    try:
-        _, md_stats = generate_md_from_pages(
-            pages, str(md_path), doc_name=doc_name, project_name=r2_project_name
-        )
-    except Exception as e:
-        logger.warning(f"MD generation error: {e}")
-
-    # Block verification (retry missing blocks via enriched dict)
-    if text_backend:
-        try:
-            from services.remote_ocr.server.block_verification import verify_and_retry_missing_blocks
-            from services.remote_ocr.server.ocr_result_merger import (
-                enrich_annotation_dict,
-                regenerate_html_from_result,
-                regenerate_md_from_result,
-            )
-
-            # Обогащаем annotation dict (добавляем ocr_html, ocr_json, ocr_meta)
-            html_text = ""
-            if html_path.exists():
-                with open(html_path, "r", encoding="utf-8") as f:
-                    html_text = f.read()
-            enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name=r2_project_name)
-
-            # Верификация и повторное распознавание пропущенных блоков
-            enriched_dict = verify_and_retry_missing_blocks(
-                enriched_dict, pdf_path, work_dir, text_backend,
-                image_backend=image_backend,
-                stamp_backend=stamp_backend,
-                deadline=deadline,
-                before_stamp_phase=before_stamp_phase,
-                before_image_phase=before_image_phase,
-            )
-
-            # Перезаписать annotation.json из enriched_dict (после верификации)
-            with open(annotation_path, "w", encoding="utf-8") as f:
-                json.dump(enriched_dict, f, ensure_ascii=False, indent=2)
-
-            # Перегенерируем HTML/MD из обновлённого enriched dict
-            try:
-                regenerate_html_from_result(enriched_dict, html_path, doc_name=doc_name)
-            except Exception as e:
-                logger.warning(f"HTML regeneration after verification error: {e}")
-
-            try:
-                regenerate_md_from_result(enriched_dict, md_path, doc_name=doc_name)
-            except Exception as e:
-                logger.warning(f"MD regeneration after verification error: {e}")
-
-        except Exception as e:
-            logger.warning(f"Block verification error: {e}")
+        json.dump(result.enriched_dict, f, ensure_ascii=False, indent=2)
 
     # Export report — машинно-читаемая статистика экспорта
     try:
@@ -575,10 +460,10 @@ def _generate_local_results(
             "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "output_dir": str(output_dir),
         }
-        if html_stats:
-            report["html"] = html_stats.to_dict()
-        if md_stats:
-            report["md"] = md_stats.to_dict()
+        if result.html_stats:
+            report["html"] = result.html_stats.to_dict()
+        if result.md_stats:
+            report["md"] = result.md_stats.to_dict()
 
         report_path = output_dir / f"{pdf_stem}_export_report.json"
         with open(report_path, "w", encoding="utf-8") as f:

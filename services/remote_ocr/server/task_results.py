@@ -1,16 +1,59 @@
-"""Генерация результатов OCR"""
+"""Генерация результатов OCR (серверная обёртка).
+
+Основная логика генерации — в rd_core.ocr.result_pipeline.generate_ocr_results().
+Этот модуль добавляет серверную специфику: Job, Supabase, R2, correction mode через Supabase.
+"""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Callable
 
 from .logging_config import get_logger
-from .ocr_result_merger import enrich_annotation_dict
 from .r2_keys import resolve_r2_prefix
 from .storage import Job, get_node_full_path
 
 logger = get_logger(__name__)
+
+
+def _build_verification_config():
+    """Построить VerificationConfig из серверных settings."""
+    from rd_core.ocr.block_verification import VerificationConfig
+
+    from .settings import settings
+
+    def _flush_progress(job_id: str) -> None:
+        try:
+            from .debounced_updater import get_debounced_updater
+            get_debounced_updater(job_id).flush()
+        except Exception:
+            pass
+
+    def _prompt_builder(prompt_data, doc_name, page_index, block_id, category_code):
+        from .worker_prompts import fill_image_prompt_variables
+        return fill_image_prompt_variables(
+            prompt_data=prompt_data,
+            doc_name=doc_name,
+            page_index=page_index,
+            block_id=block_id,
+            category_code=category_code,
+            engine=None,
+        )
+
+    def _stamp_json_parser(ocr_text: str):
+        from .pdf_twopass.pass2_images import _parse_stamp_json
+        return _parse_stamp_json(ocr_text)
+
+    from .pdf_streaming_core import StreamingPDFProcessor
+
+    return VerificationConfig(
+        chandra_retry_delay=settings.chandra_retry_delay,
+        max_retry_blocks=settings.max_retry_blocks,
+        verification_timeout_minutes=settings.verification_timeout_minutes,
+        on_flush_progress=_flush_progress,
+        prompt_builder=_prompt_builder,
+        stamp_json_parser=_stamp_json_parser,
+        pdf_processor_factory=StreamingPDFProcessor,
+    )
 
 
 def generate_results(
@@ -27,15 +70,15 @@ def generate_results(
     before_stamp_phase: Callable = None,
     before_image_phase: Callable = None,
 ) -> str:
-    """Генерация результатов OCR (enriched annotation dict + HTML + MD)"""
-    from rd_core.models import Block, Document, Page, ShapeType
-    from rd_core.models.enums import BlockType
-    from rd_core.ocr import generate_html_from_pages, generate_md_from_pages
+    """Генерация результатов OCR (серверная обёртка).
+
+    Делегирует основную логику в rd_core.ocr.result_pipeline.generate_ocr_results().
+    Добавляет: Job-специфику, Supabase сохранение, correction mode через Supabase.
+    """
+    from rd_core.ocr.result_pipeline import generate_ocr_results
 
     from .node_storage.ocr_registry import _save_annotation_to_db
-    from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
     from .pdf_streaming_core import get_page_dimensions_streaming
-    from .text_ocr_quality import filter_mixed_text_output
 
     # Проверяем режим корректировки
     is_correction_mode = job.settings.is_correction_mode if job.settings else False
@@ -45,191 +88,62 @@ def generate_results(
             job, pdf_path, blocks, work_dir, ocr_backend, on_verification_progress
         )
 
-    # Фильтрация image-артефактов из TEXT блоков (mixed-text Chandra output)
-    engine = job.engine or "lmstudio"
-    for block in blocks:
-        if block.block_type == BlockType.TEXT and block.ocr_text:
-            block.ocr_text, fmeta = filter_mixed_text_output(block.ocr_text, engine)
-            if fmeta.get("removed_image_segments", 0) > 0:
-                logger.info(
-                    f"Block {block.id}: удалено {fmeta['removed_image_segments']} "
-                    f"image сегментов ({fmeta['removed_chars']} символов)"
-                )
-
-    # Детекция suspicious output (JSON-dump, low density) → error marker
-    # Suspicious вывод не должен попадать в result как "успех",
-    # чтобы верификация могла его повторно обработать.
-    from rd_core.ocr_result import is_suspicious_output, make_error as make_ocr_error
-    for block in blocks:
-        if block.block_type == BlockType.TEXT and block.ocr_text:
-            suspicious, reason = is_suspicious_output(block.ocr_text)
-            if suspicious:
-                logger.warning(
-                    f"Block {block.id}: suspicious output → error marker ({reason})"
-                )
-                block._debug_raw_ocr_text = block.ocr_text
-                block.ocr_text = make_ocr_error(f"suspicious OCR output: {reason}")
-
-    # Логирование состояния блоков
-    blocks_with_ocr = sum(1 for b in blocks if b.ocr_text)
-    logger.info(
-        f"generate_results: всего блоков={len(blocks)}, с ocr_text={blocks_with_ocr}"
-    )
-
-    # Сохраняем оригинальный порядок блоков (индекс в исходном списке)
-    blocks_by_page: dict[int, list[tuple[int, any]]] = {}
-    for orig_idx, b in enumerate(blocks):
-        blocks_by_page.setdefault(b.page_index, []).append((orig_idx, b))
-
-    # Streaming получение размеров страниц
-    page_dims = get_page_dimensions_streaming(str(pdf_path))
-
-    pages = []
-    for page_idx in sorted(blocks_by_page.keys()):
-        dims = page_dims.get(page_idx)
-        width, height = dims if dims else (0, 0)
-        page_blocks = [
-            b for _, b in sorted(blocks_by_page[page_idx], key=lambda x: x[0])
-        ]
-
-        # Пересчитываем coords_px и polygon_points
-        if width > 0 and height > 0:
-            for block in page_blocks:
-                old_x1, old_y1, old_x2, old_y2 = block.coords_px
-                old_bbox_w = old_x2 - old_x1 if old_x2 != old_x1 else 1
-                old_bbox_h = old_y2 - old_y1 if old_y2 != old_y1 else 1
-
-                block.coords_px = Block.norm_to_px(block.coords_norm, width, height)
-
-                if block.shape_type == ShapeType.POLYGON and block.polygon_points:
-                    new_x1, new_y1, new_x2, new_y2 = block.coords_px
-                    new_bbox_w = new_x2 - new_x1 if new_x2 != new_x1 else 1
-                    new_bbox_h = new_y2 - new_y1 if new_y2 != new_y1 else 1
-                    block.polygon_points = [
-                        (
-                            int(new_x1 + (px - old_x1) / old_bbox_w * new_bbox_w),
-                            int(new_y1 + (py - old_y1) / old_bbox_h * new_bbox_h),
-                        )
-                        for px, py in block.polygon_points
-                    ]
-
-        pages.append(
-            Page(page_number=page_idx, width=width, height=height, blocks=page_blocks)
-        )
+    # ── Resolve server-specific context ──
 
     r2_prefix = resolve_r2_prefix(job)
 
-    # Извлекаем путь для ссылок
     if r2_prefix.startswith("tree_docs/"):
         project_name = r2_prefix[len("tree_docs/"):]
     else:
         project_name = job.node_id if job.node_id else job.id
 
-    # Получаем полный путь из дерева проектов (используется в HTML)
     if job.node_id:
         full_path = get_node_full_path(job.node_id)
         doc_name = full_path if full_path else pdf_path.name
     else:
         doc_name = pdf_path.name
 
-    # Строим Document и получаем annotation dict
-    doc = Document(pdf_path=doc_name, pages=pages)
+    page_dims = get_page_dimensions_streaming(str(pdf_path))
+    verification_config = _build_verification_config()
 
-    # Генерация итогового HTML файла
-    partial_failures = []
-    html_path = work_dir / "ocr_result.html"
-    html_stats = None
-    try:
-        _, html_stats = generate_html_from_pages(
-            pages, str(html_path), doc_name=doc_name, project_name=project_name
-        )
-        logger.info(f"HTML файл сгенерирован: {html_path}")
-    except Exception as e:
-        logger.warning(f"Ошибка генерации HTML: {e}")
-        partial_failures.append(f"HTML: {e}")
+    # ── Вызов единой генерации ──
 
-    # Генерация компактного Markdown файла (оптимизирован для LLM)
-    md_path = work_dir / "document.md"
-    md_stats = None
-    try:
-        _, md_stats = generate_md_from_pages(
-            pages, str(md_path), doc_name=doc_name, project_name=project_name
-        )
-        if md_path.exists():
-            logger.info(f"MD файл сгенерирован: {md_path} ({md_path.stat().st_size} bytes)")
-        else:
-            logger.error(f"MD файл не создан: {md_path}")
-            partial_failures.append("MD: файл не создан")
-    except Exception as e:
-        logger.error(f"Ошибка генерации MD: {e}", exc_info=True)
-        partial_failures.append(f"MD: {e}")
+    result = generate_ocr_results(
+        pdf_path,
+        blocks,
+        work_dir,
+        work_dir,  # output_dir = work_dir для сервера
+        page_dims=page_dims,
+        engine=job.engine or "lmstudio",
+        doc_name=doc_name,
+        project_name=project_name,
+        text_backend=ocr_backend,
+        text_fallback_backend=text_fallback_backend,
+        image_backend=image_backend,
+        stamp_backend=stamp_backend,
+        verification_config=verification_config,
+        on_verification_progress=on_verification_progress,
+        job_id=job.id,
+        deadline=verification_deadline,
+        before_stamp_phase=before_stamp_phase,
+        before_image_phase=before_image_phase,
+        html_filename="ocr_result.html",
+        md_filename="document.md",
+    )
 
-    # Обогащение annotation dict: добавление ocr_html, ocr_json, crop_url, ocr_meta
-    ann_dict = doc.to_dict()
-    try:
-        html_text = ""
-        if html_path.exists():
-            with open(html_path, "r", encoding="utf-8") as f:
-                html_text = f.read()
-        enriched_dict = enrich_annotation_dict(ann_dict, html_text, project_name)
-    except Exception as e:
-        logger.warning(f"Ошибка обогащения annotation dict: {e}")
-        partial_failures.append(f"enrich: {e}")
-        enriched_dict = ann_dict
+    # ── Сохранение enriched dict в Supabase ──
 
-    # Верификация и повторное распознавание пропущенных блоков
-    if ocr_backend:
-        from .block_verification import verify_and_retry_missing_blocks
-
-        try:
-            # Сигнализируем начало верификации (total=0 означает "начало проверки")
-            if on_verification_progress:
-                on_verification_progress(0, 0)
-
-            logger.info("Запуск верификации блоков...")
-            enriched_dict = verify_and_retry_missing_blocks(
-                enriched_dict,
-                pdf_path,
-                work_dir,
-                ocr_backend,
-                text_fallback_backend=text_fallback_backend,
-                image_backend=image_backend,
-                stamp_backend=stamp_backend,
-                on_progress=on_verification_progress,
-                job_id=job.id,
-                deadline=verification_deadline,
-                before_stamp_phase=before_stamp_phase,
-                before_image_phase=before_image_phase,
-            )
-        except Exception as e:
-            logger.warning(f"Ошибка верификации блоков: {e}", exc_info=True)
-            partial_failures.append(f"verification: {e}")
-
-    # Регенерируем HTML и MD из enriched dict (после верификации)
-    try:
-        regenerate_html_from_result(enriched_dict, html_path, doc_name=doc_name)
-    except Exception as e:
-        logger.warning(f"Ошибка регенерации HTML: {e}")
-        partial_failures.append(f"regen_html: {e}")
-
-    try:
-        regenerate_md_from_result(enriched_dict, md_path, doc_name=doc_name)
-    except Exception as e:
-        logger.warning(f"Ошибка регенерации MD: {e}")
-        partial_failures.append(f"regen_md: {e}")
-
-    # Сохраняем enriched dict в Supabase
     if job.node_id:
         try:
-            _save_annotation_to_db(job.node_id, enriched_dict)
+            _save_annotation_to_db(job.node_id, result.enriched_dict)
             logger.info(f"Enriched annotation saved to Supabase: node_id={job.node_id}")
         except Exception as e:
             logger.warning(f"Ошибка сохранения annotation в Supabase: {e}")
-            partial_failures.append(f"save_db: {e}")
+            result.partial_failures.append(f"save_db: {e}")
 
-    if partial_failures:
+    if result.partial_failures:
         logger.warning(
-            f"Частичные ошибки постобработки: {partial_failures}",
+            f"Частичные ошибки постобработки: {result.partial_failures}",
             extra={"job_id": job.id, "event": "partial_failures"},
         )
 
@@ -247,13 +161,16 @@ def _generate_correction_results(
     """
     Генерация результатов в режиме корректировки.
     Merge новых OCR результатов с существующим enriched dict из Supabase.
+
+    Эта функция содержит Supabase-специфичную логику merge, которая
+    не может быть обобщена в rd_core.
     """
     from rd_core.ocr import generate_html_from_pages
     from rd_core.ocr.generator_common import sanitize_html
+    from rd_core.ocr.ocr_html_parser import build_segments_from_html
+    from rd_core.ocr.ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
 
     from .node_storage.ocr_registry import _load_annotation_from_db, _save_annotation_to_db
-    from .ocr_html_parser import build_segments_from_html
-    from .ocr_result_merger import regenerate_html_from_result, regenerate_md_from_result
 
     r2_prefix = resolve_r2_prefix(job)
 
@@ -428,7 +345,7 @@ def _generate_correction_results(
 
 
 def _build_pages_from_blocks(blocks: list, pdf_path: Path) -> list:
-    """Построить список Page объектов из блоков для генерации HTML."""
+    """Построить список Page объектов и�� блоков для генерации HTML."""
     from rd_core.models import Page
 
     from .pdf_streaming_core import get_page_dimensions_streaming

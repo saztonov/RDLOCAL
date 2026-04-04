@@ -8,6 +8,7 @@ from rd_core.ocr.factory import create_ocr_engine
 from rd_core.ocr.html_generator import generate_html_from_pages
 from rd_core.ocr.md import generate_md_from_pages, generate_md_from_result
 from rd_core.ocr.qwen import QwenBackend
+from rd_core.ocr.result_pipeline import ResultPipelineOutput, generate_ocr_results
 from rd_core.ocr.utils import image_to_base64, image_to_pdf_base64
 
 __all__ = [
@@ -25,4 +26,7 @@ __all__ = [
     "ExportStats",
     # Factory
     "create_ocr_engine",
+    # Result pipeline
+    "generate_ocr_results",
+    "ResultPipelineOutput",
 ]
