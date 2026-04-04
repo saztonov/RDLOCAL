@@ -1,5 +1,5 @@
 # ============================================================
-# RD-OCR Server: FastAPI + LM Studio + Web UI
+# RD-OCR Server: FastAPI + LM Studio (llmster) + Web UI
 # Multi-stage build: frontend (Node) → runtime (CUDA + Python)
 # ============================================================
 
@@ -21,12 +21,17 @@ ENV PYTHONUNBUFFERED=1
 # Установка Python 3.11, supervisor, curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-dev python3-pip \
-    supervisor curl wget \
+    supervisor curl wget libatomic1 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Альтернатива python → python3.11
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Установка llmster (headless LM Studio)
+RUN curl -fsSL https://lmstudio.ai/install.sh | bash \
+    && ln -s /root/.lmstudio/bin/lms /usr/local/bin/lms
+ENV PATH="/root/.lmstudio/bin:${PATH}"
 
 WORKDIR /app
 
@@ -37,7 +42,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем backend код
 COPY rd_core/ /app/rd_core/
 COPY services/ /app/services/
-COPY setup.py pyproject.toml /app/
+COPY pyproject.toml /app/
 RUN pip install --no-cache-dir -e . 2>/dev/null || true
 
 # Копируем собранный frontend
@@ -46,15 +51,13 @@ COPY --from=frontend-build /app/web/dist /app/web/dist
 # Конфигурация supervisor
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# LM Studio: предполагается что lms CLI установлен в образе
-# или монтируется как volume. Для production:
-# RUN wget -qO- https://lmstudio.ai/install | bash
-# Пока используем placeholder — LM Studio ставится вручную или через volume
+# Entrypoint: запускает lms daemon, затем supervisor
+COPY deploy/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-EXPOSE 8000
+EXPOSE 8000 1234
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+ENTRYPOINT ["/app/entrypoint.sh"]

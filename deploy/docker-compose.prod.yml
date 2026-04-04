@@ -21,7 +21,7 @@ services:
       - CHANDRA_BASE_URL=http://localhost:1234
       - QWEN_BASE_URL=http://localhost:1234
     volumes:
-      - lmstudio_models:/root/.cache/lm-studio
+      - lmstudio_models:/root/.lmstudio/models
       - ocr_data:/data
     deploy:
       resources:
