@@ -1,22 +1,18 @@
 """Обработчики чтения задач OCR"""
 import json
-import os
 import uuid as _uuid
 from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException, Query
 
-from services.remote_ocr.server.local_storage import is_local_path, resolve_local_path
+from services.remote_ocr.server.local_storage import is_local_path, local_input_dir
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
 from services.remote_ocr.server.routes.common import (
-    get_file_icon,
-    get_r2_storage,
     require_job,
 )
 from services.remote_ocr.server.storage import (
-    get_job_file_by_type,
     job_to_dict,
     list_jobs,
     list_jobs_changed_since,
@@ -118,11 +114,11 @@ def get_job_details_handler(
 ) -> dict:
     """Получить детальную информацию о задаче"""
 
-    job = require_job(job_id, with_files=True, with_settings=True)
+    job = require_job(job_id, with_settings=True)
 
     result = job_to_dict(job)
 
-    # Загрузка block_stats: Supabase (node-backed) → R2 (legacy)
+    # Загрузка block_stats: Supabase annotation (node-backed) → локальный файл (standalone)
     block_stats_loaded = False
     if job.node_id:
         try:
@@ -134,27 +130,15 @@ def get_job_details_handler(
         except Exception as e:
             _logger.warning(f"Failed to load blocks from Supabase for node {job.node_id}: {e}")
 
-    if not block_stats_loaded:
-        blocks_file = get_job_file_by_type(job_id, "blocks")
-        if blocks_file:
-            try:
-                if is_local_path(blocks_file.r2_key):
-                    # Standalone: читаем blocks с локального диска
-                    local_path = resolve_local_path(blocks_file.r2_key)
-                    if local_path.exists():
-                        blocks_data = json.loads(local_path.read_text(encoding="utf-8"))
-                        blocks = _extract_blocks_list(blocks_data)
-                        result["block_stats"] = _compute_block_stats(blocks)
-                else:
-                    # Node-backed fallback: из R2
-                    r2 = get_r2_storage()
-                    blocks_text = r2.download_text(blocks_file.r2_key)
-                    if blocks_text:
-                        blocks_data = json.loads(blocks_text)
-                        blocks = _extract_blocks_list(blocks_data)
-                        result["block_stats"] = _compute_block_stats(blocks)
-            except Exception as e:
-                _logger.warning(f"Failed to load blocks: {e}")
+    if not block_stats_loaded and is_local_path(job.r2_prefix):
+        try:
+            blocks_path = local_input_dir(job_id) / "blocks.json"
+            if blocks_path.exists():
+                blocks_data = json.loads(blocks_path.read_text(encoding="utf-8"))
+                blocks = _extract_blocks_list(blocks_data)
+                result["block_stats"] = _compute_block_stats(blocks)
+        except Exception as e:
+            _logger.warning(f"Failed to load blocks from disk: {e}")
 
     if job.settings:
         result["job_settings"] = {
@@ -165,22 +149,8 @@ def get_job_details_handler(
     else:
         result["job_settings"] = {}
 
-    r2_public_url = os.getenv("R2_PUBLIC_URL")
-    if r2_public_url and job.r2_prefix and not is_local_path(job.r2_prefix):
-        base_url = r2_public_url.rstrip("/")
-        result["r2_base_url"] = f"{base_url}/{job.r2_prefix}"
-
-        result["r2_files"] = [
-            {
-                "name": f.file_name,
-                "path": f.r2_key.replace(f"{job.r2_prefix}/", ""),
-                "icon": get_file_icon(f.file_type),
-            }
-            for f in job.files
-        ]
-    else:
-        result["r2_base_url"] = None
-        result["r2_files"] = []
+    result["r2_base_url"] = None
+    result["r2_files"] = []
 
     return result
 
@@ -188,28 +158,8 @@ def get_job_details_handler(
 def download_result_handler(
     job_id: str,
 ) -> dict:
-    """Получить ссылку на результат"""
-    _logger.info(
-        f"Запрос скачивания результата: {job_id}",
-        extra={"event": "job_download_result", "action": "download", "job_id": job_id},
+    """Получить ссылку на результат (deprecated — результаты доступны через node tree)."""
+    raise HTTPException(
+        status_code=410,
+        detail="Result download via this endpoint is deprecated. Use node tree to access results.",
     )
-
-    job = require_job(job_id)
-
-    if job.status not in ("done", "partial"):
-        raise HTTPException(
-            status_code=400, detail=f"Job not ready, status: {job.status}"
-        )
-
-    result_file = get_job_file_by_type(job_id, "result_zip")
-    if not result_file:
-        raise HTTPException(status_code=404, detail="Result file not found")
-
-    try:
-        r2 = get_r2_storage()
-        url = r2.generate_presigned_url(result_file.r2_key, expiration=3600)
-        return {"download_url": url, "file_name": result_file.file_name}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to generate download URL: {e}"
-        )

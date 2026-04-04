@@ -41,22 +41,24 @@ def save_job_settings(
     stamp_model: str = "",
     is_correction_mode: bool = False,
 ) -> JobSettings:
-    """Сохранить/обновить настройки задачи"""
-    now = datetime.utcnow().isoformat()
+    """Сохранить настройки задачи в jobs.phase_data (inline, без отдельной таблицы)."""
     client = get_client()
+    now = datetime.utcnow().isoformat()
 
-    # Upsert: вставить или обновить
-    client.table("job_settings").upsert(
-        {
-            "job_id": job_id,
-            "text_model": text_model,
-            "image_model": image_model,
-            "stamp_model": stamp_model,
-            "is_correction_mode": is_correction_mode,
-            "updated_at": now,
-        },
-        on_conflict="job_id",
-    ).execute()
+    # Читаем существующий phase_data чтобы не затереть другие поля
+    result = client.table("jobs").select("phase_data").eq("id", job_id).execute()
+    phase_data = (result.data[0].get("phase_data") or {}) if result.data else {}
+
+    phase_data["settings"] = {
+        "text_model": text_model,
+        "image_model": image_model,
+        "stamp_model": stamp_model,
+        "is_correction_mode": is_correction_mode,
+    }
+
+    client.table("jobs").update(
+        {"phase_data": phase_data, "updated_at": now}
+    ).eq("id", job_id).execute()
 
     return JobSettings(
         job_id=job_id,
@@ -68,18 +70,22 @@ def save_job_settings(
 
 
 def get_job_settings(job_id: str) -> Optional[JobSettings]:
-    """Получить настройки задачи"""
+    """Получить настройки задачи из jobs.phase_data."""
     client = get_client()
-    result = client.table("job_settings").select("*").eq("job_id", job_id).execute()
+    result = client.table("jobs").select("phase_data").eq("id", job_id).execute()
 
     if not result.data:
         return None
 
-    row = result.data[0]
+    phase_data = result.data[0].get("phase_data") or {}
+    s = phase_data.get("settings")
+    if not s:
+        return None
+
     return JobSettings(
-        job_id=row["job_id"],
-        text_model=row.get("text_model", ""),
-        image_model=row.get("image_model", ""),
-        stamp_model=row.get("stamp_model", ""),
-        is_correction_mode=row.get("is_correction_mode", False),
+        job_id=job_id,
+        text_model=s.get("text_model", ""),
+        image_model=s.get("image_model", ""),
+        stamp_model=s.get("stamp_model", ""),
+        is_correction_mode=s.get("is_correction_mode", False),
     )

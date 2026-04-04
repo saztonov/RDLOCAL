@@ -47,7 +47,7 @@ def validate_job(job_id: str, celery_task_id: str) -> "Job":
         JobValidationError: если задача невалидна.
     """
 
-    job = get_job(job_id, with_files=True, with_settings=True)
+    job = get_job(job_id, with_settings=True)
     if not job:
         raise JobValidationError(f"Задача {job_id} не найдена")
 

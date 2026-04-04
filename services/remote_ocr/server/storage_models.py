@@ -1,6 +1,6 @@
 """Модели данных для хранилища задач OCR"""
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -48,5 +48,4 @@ class Job:
     priority: int = 0  # Приоритет в очереди (меньше = раньше)
     celery_task_id: Optional[str] = None  # ID Celery задачи для revoke при reorder
     # Вложенные данные (опционально загружаются)
-    files: List[JobFile] = field(default_factory=list)
     settings: Optional[JobSettings] = None

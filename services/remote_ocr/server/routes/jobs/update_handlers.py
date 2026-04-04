@@ -17,8 +17,6 @@ from services.remote_ocr.server.routes.common import (
     require_job,
 )
 from services.remote_ocr.server.storage import (
-    delete_job_files,
-    get_job_files,
     pause_job,
     reset_job_for_restart,
     resume_job,
@@ -36,33 +34,31 @@ _logger = get_logger(__name__)
 
 
 def _get_block_count_for_job(job_id: str) -> int:
-    """Получить количество блоков для задачи из R2.
+    """Получить количество блоков для задачи.
 
-    Args:
-        job_id: ID задачи
-
-    Returns:
-        Количество блоков (100 по умолчанию если не удалось получить)
+    Источники: Supabase annotation (node-backed) → локальный blocks.json (standalone).
     """
     try:
-        files = get_job_files(job_id)
-        blocks_file = next((f for f in files if f.file_type == "blocks"), None)
-
-        if not blocks_file:
-            _logger.warning(f"No blocks file for job {job_id}, using default timeout")
+        from services.remote_ocr.server.storage import get_job
+        job = get_job(job_id)
+        if not job:
             return 100
 
-        if is_local_path(blocks_file.r2_key):
-            from services.remote_ocr.server.local_storage import resolve_local_path
-            local_path = resolve_local_path(blocks_file.r2_key)
-            content = local_path.read_bytes()
-        else:
-            s3_client, bucket_name = get_r2_sync_client()
-            response = s3_client.get_object(Bucket=bucket_name, Key=blocks_file.r2_key)
-            content = response["Body"].read()
+        # Node-backed: из Supabase annotation
+        if job.node_id:
+            from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
+            ann = _load_annotation_from_db(job.node_id)
+            if ann is not None:
+                return count_blocks_from_data(ann)
 
-        blocks_data = parse_blocks_json(content)
-        return count_blocks_from_data(blocks_data)
+        # Standalone: из локального файла
+        if is_local_path(job.r2_prefix):
+            blocks_path = local_input_dir(job_id) / "blocks.json"
+            if blocks_path.exists():
+                content = blocks_path.read_bytes()
+                return count_blocks_from_data(parse_blocks_json(content))
+
+        return 100
     except Exception as e:
         _logger.warning(f"Failed to get block count for job {job_id}: {e}")
         return 100
@@ -98,9 +94,6 @@ async def restart_job_handler(
 
     job = require_job(job_id)
 
-    result_files = get_job_files(job_id)
-    result_types = ["result_md", "result_zip", "crop"]
-
     try:
         if is_local_path(job.r2_prefix):
             # Standalone: удаляем output директорию, пересоздаём пустую
@@ -111,21 +104,28 @@ async def restart_job_handler(
             output_dir.mkdir(parents=True, exist_ok=True)
             (output_dir / "crops").mkdir(exist_ok=True)
             _logger.info(f"Cleaned local output dir for job {job_id}")
-        else:
+        elif job.r2_prefix:
+            # Node-backed: удаляем OCR результаты из R2 по суффиксу
+            from services.remote_ocr.server.r2_keys import resolve_r2_prefix
+            r2_prefix = resolve_r2_prefix(job)
             s3_client, bucket_name = get_r2_sync_client()
+            doc_stem = __import__("pathlib").Path(job.document_name).stem
 
-            keys_to_delete = [f.r2_key for f in result_files if f.file_type in result_types]
+            # Удаляем результатные файлы по конвенции
+            result_suffixes = [f"/{doc_stem}_ocr.html", f"/{doc_stem}_document.md"]
+            keys_to_delete = [{"Key": f"{r2_prefix}{s}"} for s in result_suffixes]
+
+            # Удаляем crops/
+            paginator = s3_client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket_name, Prefix=f"{r2_prefix}/crops/"):
+                if "Contents" in page:
+                    keys_to_delete.extend({"Key": obj["Key"]} for obj in page["Contents"])
 
             if keys_to_delete:
                 for i in range(0, len(keys_to_delete), 1000):
                     batch = keys_to_delete[i : i + 1000]
-                    delete_dict = {"Objects": [{"Key": key} for key in batch]}
-                    s3_client.delete_objects(Bucket=bucket_name, Delete=delete_dict)
-                _logger.info(
-                    f"Deleted {len(keys_to_delete)} result files from R2 for job {job_id}"
-                )
-
-        delete_job_files(job_id, result_types)
+                    s3_client.delete_objects(Bucket=bucket_name, Delete={"Objects": batch})
+                _logger.info(f"Deleted {len(keys_to_delete)} result files from R2 for job {job_id}")
     except Exception as e:
         _logger.warning(f"Failed to delete result files: {e}")
 

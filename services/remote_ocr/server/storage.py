@@ -14,13 +14,9 @@
 # Re-export клиента
 from .storage_client import get_client, init_db  # noqa: F401
 
-# Re-export файлов задач
-from .storage_files import (  # noqa: F401
-    add_job_file,
-    delete_job_files,
-    get_job_file_by_type,
-    get_job_files,
-)
+# storage_files.py больше не используется — job_files таблица устранена.
+# Standalone jobs хранят файлы на локальном диске (local_storage.py).
+# Node-backed jobs используют конвенции r2_keys.py + node_files.
 
 # Re-export CRUD задач
 from .storage_jobs import (  # noqa: F401
@@ -44,7 +40,7 @@ from .storage_jobs import (  # noqa: F401
 )
 
 # Re-export моделей
-from .storage_models import Job, JobFile, JobSettings  # noqa: F401
+from .storage_models import Job, JobSettings  # noqa: F401
 
 # Re-export node files и tree_nodes
 from .node_storage import (  # noqa: F401

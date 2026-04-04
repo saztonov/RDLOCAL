@@ -139,12 +139,14 @@ def create_job(
 
 
 def get_job(
-    job_id: str, with_files: bool = False, with_settings: bool = False
+    job_id: str, with_settings: bool = False, **_kwargs
 ) -> Optional[Job]:
-    """Получить задачу по ID"""
-    from .storage_files import get_job_files
-    from .storage_settings import get_job_settings
+    """Получить задачу по ID.
 
+    Args:
+        with_settings: загрузить настройки из phase_data.
+        **_kwargs: игнорируемые аргументы для обратной совместимости (with_files).
+    """
     client = get_client()
     result = client.table("jobs").select("*").eq("id", job_id).execute()
 
@@ -153,10 +155,19 @@ def get_job(
 
     job = _row_to_job(result.data[0])
 
-    if with_files:
-        job.files = get_job_files(job_id)
     if with_settings:
-        job.settings = get_job_settings(job_id)
+        # Settings хранятся inline в phase_data — парсим без дополнительного запроса
+        phase_data = result.data[0].get("phase_data") or {}
+        s = phase_data.get("settings")
+        if s:
+            from .storage_models import JobSettings
+            job.settings = JobSettings(
+                job_id=job_id,
+                text_model=s.get("text_model", ""),
+                image_model=s.get("image_model", ""),
+                stamp_model=s.get("stamp_model", ""),
+                is_correction_mode=s.get("is_correction_mode", False),
+            )
 
     return job
 

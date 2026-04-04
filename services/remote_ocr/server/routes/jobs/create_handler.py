@@ -21,7 +21,6 @@ from services.remote_ocr.server.routes.common import (
     get_r2_sync_client,
 )
 from services.remote_ocr.server.storage import (
-    add_job_file,
     add_node_file,
     create_job,
     delete_job,
@@ -222,12 +221,6 @@ async def create_job_handler(
                 ContentType="application/json",
             )
 
-            # --- Register job files ---
-            from pathlib import PurePosixPath
-            blocks_file_name = PurePosixPath(actual_blocks_key).name
-            add_job_file(job.id, "pdf", actual_pdf_key, document_name, pdf_size)
-            add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
-
         except Exception as e:
             _logger.error(f"R2 upload failed: {e}")
             delete_job(job.id)
@@ -251,12 +244,6 @@ async def create_job_handler(
             blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
             blocks_local = input_dir / "blocks.json"
             blocks_local.write_bytes(blocks_bytes)
-
-            # --- Register job files (local:// keys) ---
-            pdf_key = f"{LOCAL_PREFIX}ocr_jobs/{job_id}/input/document.pdf"
-            blocks_key = f"{LOCAL_PREFIX}ocr_jobs/{job_id}/input/blocks.json"
-            add_job_file(job.id, "pdf", pdf_key, "document.pdf", pdf_size)
-            add_job_file(job.id, "blocks", blocks_key, "blocks.json", len(blocks_bytes))
 
         except Exception as e:
             _logger.error(f"Local file save failed: {e}")
@@ -426,12 +413,6 @@ async def create_node_job_handler(body: CreateNodeJobRequest) -> dict:
             Body=blocks_bytes,
             ContentType="application/json",
         )
-
-        # Register job files
-        pdf_file_name = body.document_name
-        blocks_file_name = PurePosixPath(actual_blocks_key).name
-        add_job_file(job.id, "pdf", pdf_r2_key, pdf_file_name, 0)
-        add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
 
     except Exception as e:
         _logger.error(f"R2 upload failed: {e}")
