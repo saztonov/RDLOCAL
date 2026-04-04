@@ -4,6 +4,12 @@ from typing import Optional
 
 from fastapi import File, Form, HTTPException, UploadFile
 
+from services.remote_ocr.server.local_storage import (
+    LOCAL_PREFIX,
+    is_local_path,
+    local_input_dir,
+    local_output_dir,
+)
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.queue_checker import check_queue_capacity
 from services.remote_ocr.server.routes.common import (
@@ -46,11 +52,16 @@ def _get_block_count_for_job(job_id: str) -> int:
             _logger.warning(f"No blocks file for job {job_id}, using default timeout")
             return 100
 
-        s3_client, bucket_name = get_r2_sync_client()
-        response = s3_client.get_object(Bucket=bucket_name, Key=blocks_file.r2_key)
-        content = response["Body"].read()
-        blocks_data = parse_blocks_json(content)
+        if is_local_path(blocks_file.r2_key):
+            from services.remote_ocr.server.local_storage import resolve_local_path
+            local_path = resolve_local_path(blocks_file.r2_key)
+            content = local_path.read_bytes()
+        else:
+            s3_client, bucket_name = get_r2_sync_client()
+            response = s3_client.get_object(Bucket=bucket_name, Key=blocks_file.r2_key)
+            content = response["Body"].read()
 
+        blocks_data = parse_blocks_json(content)
         return count_blocks_from_data(blocks_data)
     except Exception as e:
         _logger.warning(f"Failed to get block count for job {job_id}: {e}")
@@ -91,22 +102,32 @@ async def restart_job_handler(
     result_types = ["result_md", "result_zip", "crop"]
 
     try:
-        s3_client, bucket_name = get_r2_sync_client()
+        if is_local_path(job.r2_prefix):
+            # Standalone: удаляем output директорию, пересоздаём пустую
+            import shutil
+            output_dir = local_output_dir(job_id)
+            if output_dir.exists():
+                shutil.rmtree(output_dir, ignore_errors=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "crops").mkdir(exist_ok=True)
+            _logger.info(f"Cleaned local output dir for job {job_id}")
+        else:
+            s3_client, bucket_name = get_r2_sync_client()
 
-        keys_to_delete = [f.r2_key for f in result_files if f.file_type in result_types]
+            keys_to_delete = [f.r2_key for f in result_files if f.file_type in result_types]
 
-        if keys_to_delete:
-            for i in range(0, len(keys_to_delete), 1000):
-                batch = keys_to_delete[i : i + 1000]
-                delete_dict = {"Objects": [{"Key": key} for key in batch]}
-                s3_client.delete_objects(Bucket=bucket_name, Delete=delete_dict)
-            _logger.info(
-                f"Deleted {len(keys_to_delete)} result files from R2 for job {job_id}"
-            )
+            if keys_to_delete:
+                for i in range(0, len(keys_to_delete), 1000):
+                    batch = keys_to_delete[i : i + 1000]
+                    delete_dict = {"Objects": [{"Key": key} for key in batch]}
+                    s3_client.delete_objects(Bucket=bucket_name, Delete=delete_dict)
+                _logger.info(
+                    f"Deleted {len(keys_to_delete)} result files from R2 for job {job_id}"
+                )
 
         delete_job_files(job_id, result_types)
     except Exception as e:
-        _logger.warning(f"Failed to delete result files from R2: {e}")
+        _logger.warning(f"Failed to delete result files: {e}")
 
     if blocks_file:
         try:
@@ -116,20 +137,26 @@ async def restart_job_handler(
                 "utf-8"
             )
 
-            s3_client, bucket_name = get_r2_sync_client()
+            if is_local_path(job.r2_prefix):
+                # Standalone: обновляем blocks на диске
+                blocks_local = local_input_dir(job_id) / "blocks.json"
+                blocks_local.write_bytes(blocks_bytes)
+                _logger.info(f"Updated blocks locally for job {job_id}")
+            else:
+                s3_client, bucket_name = get_r2_sync_client()
 
-            from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key, resolve_r2_prefix
+                from services.remote_ocr.server.r2_keys import blocks_key as make_blocks_key, resolve_r2_prefix
 
-            r2_prefix = resolve_r2_prefix(job)
-            blocks_key = make_blocks_key(r2_prefix, job.document_name, is_node=bool(job.node_id))
+                r2_prefix = resolve_r2_prefix(job)
+                blocks_key = make_blocks_key(r2_prefix, job.document_name, is_node=bool(job.node_id))
 
-            s3_client.put_object(
-                Bucket=bucket_name,
-                Key=blocks_key,
-                Body=blocks_bytes,
-                ContentType="application/json",
-            )
-            _logger.info(f"Updated blocks for job {job_id}: {blocks_key}")
+                s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=blocks_key,
+                    Body=blocks_bytes,
+                    ContentType="application/json",
+                )
+                _logger.info(f"Updated blocks for job {job_id}: {blocks_key}")
         except Exception as e:
             _logger.error(f"Failed to update blocks: {e}")
             raise HTTPException(status_code=400, detail=f"Invalid blocks: {e}")

@@ -17,6 +17,7 @@ from typing import Optional
 from .debounced_updater import cleanup_updater, get_debounced_updater
 from .execution_lock import acquire_execution_lock, release_execution_lock
 from .job_context import JobContext, JobSkipped, JobValidationError
+from .local_storage import is_local_path, local_input_dir, local_output_dir
 from .logging_config import get_logger
 from .lmstudio_lifecycle import acquire_chandra, release_chandra
 from .memory_utils import force_gc, log_memory_delta
@@ -126,15 +127,36 @@ def bootstrap_job(job, start_mem: float) -> JobContext:
     job_id = job.id
     update_job_status(job_id, "processing", progress=0.05, status_message="📥 Инициализация задачи...")
 
-    # Временная директория
-    work_dir = Path(tempfile.mkdtemp(prefix=f"ocr_job_{job_id}_"))
-    crops_dir = work_dir / "crops"
-    crops_dir.mkdir(exist_ok=True)
+    is_standalone = not job.node_id and is_local_path(job.r2_prefix)
 
-    logger.info(f"Задача {job_id}: скачивание файлов из R2...")
-    update_job_status(job_id, "processing", progress=0.06, status_message="📥 Скачивание файлов из R2...")
-    pdf_path, blocks_path = download_job_files(job, work_dir)
-    log_memory_delta("После скачивания файлов", start_mem)
+    if is_standalone:
+        # Standalone: файлы уже на диске, work_dir = output директория
+        work_dir = local_output_dir(job_id)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        crops_dir = work_dir / "crops"
+        crops_dir.mkdir(exist_ok=True)
+
+        input_dir = local_input_dir(job_id)
+        pdf_path = input_dir / "document.pdf"
+        blocks_path = input_dir / "blocks.json"
+
+        if not pdf_path.exists():
+            raise RuntimeError(f"PDF not found on disk: {pdf_path}")
+        if not blocks_path.exists():
+            raise RuntimeError(f"Blocks not found on disk: {blocks_path}")
+
+        logger.info(f"Задача {job_id}: файлы на локальном диске")
+    else:
+        # Node-backed: скачивание из R2 во временную директорию
+        work_dir = Path(tempfile.mkdtemp(prefix=f"ocr_job_{job_id}_"))
+        crops_dir = work_dir / "crops"
+        crops_dir.mkdir(exist_ok=True)
+
+        logger.info(f"Задача {job_id}: скачивание файлов из R2...")
+        update_job_status(job_id, "processing", progress=0.06, status_message="📥 Скачивание файлов из R2...")
+        pdf_path, blocks_path = download_job_files(job, work_dir)
+
+    log_memory_delta("После подготовки файлов", start_mem)
 
     # Парсинг блоков
     with open(blocks_path, "r", encoding="utf-8") as f:
@@ -462,14 +484,18 @@ def cleanup(job_id: str, ctx: Optional[JobContext], engine: str, lmstudio_acquir
             f"({stats['reduction_percent']}% reduction)"
         )
 
-    # Временная директория
+    # Временная директория (только для node-backed; standalone очищается при delete job)
     work_dir = ctx.work_dir if ctx else None
     if work_dir and work_dir.exists():
-        try:
-            shutil.rmtree(work_dir)
-            logger.info(f"✅ Временная директория очищена: {work_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
+        is_tempdir = str(work_dir).startswith(tempfile.gettempdir())
+        if is_tempdir:
+            try:
+                shutil.rmtree(work_dir)
+                logger.info(f"✅ Временная директория очищена: {work_dir}")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка очистки временной директории: {e}")
+        else:
+            logger.info(f"Standalone job: локальная директория сохранена: {work_dir}")
 
     # LM Studio — delayed unload (grace period вместо немедленной выгрузки)
     from .lmstudio_lifecycle import schedule_pending_unload

@@ -6,6 +6,12 @@ from typing import Optional
 from fastapi import File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from services.remote_ocr.server.local_storage import (
+    LOCAL_PREFIX,
+    cleanup_job,
+    ensure_dirs,
+    local_input_dir,
+)
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
 from services.remote_ocr.server.queue_checker import check_queue_capacity
@@ -142,7 +148,7 @@ async def create_job_handler(
                 status_code=400,
                 detail="PDF file is required for jobs without node_id",
             )
-        r2_prefix = f"ocr_jobs/{job_id}"
+        r2_prefix = f"{LOCAL_PREFIX}ocr_jobs/{job_id}"
 
     # Проверка очереди ПЕРЕД созданием job в БД
     can_accept, queue_size, max_size = check_queue_capacity()
@@ -178,57 +184,87 @@ async def create_job_handler(
         job.id, text_model, image_model, stamp_model, is_correction,
     )
 
-    try:
-        s3_client, bucket_name = get_r2_sync_client()
+    is_node = bool(node_id)
 
-        is_node = bool(node_id)
+    if is_node:
+        # Node-backed: загрузка в R2 (без изменений)
+        try:
+            s3_client, bucket_name = get_r2_sync_client()
 
-        # --- Upload PDF ---
-        if (pdf_needs_upload or not is_node) and pdf_provided:
-            pdf_content = await pdf.read()
-            actual_pdf_key = pdf_r2_key or make_pdf_key(r2_prefix, document_name, is_node=is_node)
-            s3_client.put_object(
-                Bucket=bucket_name,
-                Key=actual_pdf_key,
-                Body=pdf_content,
-                ContentType="application/pdf",
-            )
-            _logger.info(f"Uploaded PDF to R2: {actual_pdf_key} ({len(pdf_content)} bytes)")
-
-            if is_node:
+            # --- Upload PDF ---
+            if (pdf_needs_upload) and pdf_provided:
+                pdf_content = await pdf.read()
+                actual_pdf_key = pdf_r2_key or make_pdf_key(r2_prefix, document_name, is_node=True)
+                s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=actual_pdf_key,
+                    Body=pdf_content,
+                    ContentType="application/pdf",
+                )
+                _logger.info(f"Uploaded PDF to R2: {actual_pdf_key} ({len(pdf_content)} bytes)")
                 add_node_file(
                     node_id, "pdf", actual_pdf_key,
                     document_name, len(pdf_content), "application/pdf",
                 )
                 update_node_r2_key(node_id, actual_pdf_key)
+                pdf_size = len(pdf_content)
+            else:
+                actual_pdf_key = pdf_r2_key
+                pdf_size = 0
+
+            # --- Upload Blocks ---
+            blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
+            actual_blocks_key = make_blocks_key(r2_prefix, document_name, is_node=True)
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=actual_blocks_key,
+                Body=blocks_bytes,
+                ContentType="application/json",
+            )
+
+            # --- Register job files ---
+            from pathlib import PurePosixPath
+            blocks_file_name = PurePosixPath(actual_blocks_key).name
+            add_job_file(job.id, "pdf", actual_pdf_key, document_name, pdf_size)
+            add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
+
+        except Exception as e:
+            _logger.error(f"R2 upload failed: {e}")
+            delete_job(job.id)
+            raise HTTPException(
+                status_code=500, detail=f"Failed to upload files to R2: {e}"
+            )
+    else:
+        # Standalone: сохранение на локальный диск (без R2)
+        try:
+            ensure_dirs(job_id)
+            input_dir = local_input_dir(job_id)
+
+            # --- Save PDF ---
+            pdf_content = await pdf.read()
+            pdf_local = input_dir / "document.pdf"
+            pdf_local.write_bytes(pdf_content)
             pdf_size = len(pdf_content)
-        else:
-            actual_pdf_key = pdf_r2_key
-            pdf_size = 0
+            _logger.info(f"Saved PDF locally: {pdf_local} ({pdf_size} bytes)")
 
-        # --- Upload Blocks ---
-        blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
-        actual_blocks_key = make_blocks_key(r2_prefix, document_name, is_node=is_node)
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key=actual_blocks_key,
-            Body=blocks_bytes,
-            ContentType="application/json",
-        )
+            # --- Save Blocks ---
+            blocks_bytes = json.dumps(blocks_data, ensure_ascii=False, indent=2).encode("utf-8")
+            blocks_local = input_dir / "blocks.json"
+            blocks_local.write_bytes(blocks_bytes)
 
-        # --- Register job files ---
-        from pathlib import PurePosixPath
-        pdf_file_name = document_name if is_node else "document.pdf"
-        blocks_file_name = PurePosixPath(actual_blocks_key).name
-        add_job_file(job.id, "pdf", actual_pdf_key, pdf_file_name, pdf_size)
-        add_job_file(job.id, "blocks", actual_blocks_key, blocks_file_name, len(blocks_bytes))
+            # --- Register job files (local:// keys) ---
+            pdf_key = f"{LOCAL_PREFIX}ocr_jobs/{job_id}/input/document.pdf"
+            blocks_key = f"{LOCAL_PREFIX}ocr_jobs/{job_id}/input/blocks.json"
+            add_job_file(job.id, "pdf", pdf_key, "document.pdf", pdf_size)
+            add_job_file(job.id, "blocks", blocks_key, "blocks.json", len(blocks_bytes))
 
-    except Exception as e:
-        _logger.error(f"R2 upload failed: {e}")
-        delete_job(job.id)
-        raise HTTPException(
-            status_code=500, detail=f"Failed to upload files to R2: {e}"
-        )
+        except Exception as e:
+            _logger.error(f"Local file save failed: {e}")
+            cleanup_job(job_id)
+            delete_job(job.id)
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save files locally: {e}"
+            )
 
     # Запускаем OCR задачу в Celery
     block_count = count_blocks_from_data(blocks_data)

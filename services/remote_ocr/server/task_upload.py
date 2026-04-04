@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from .local_storage import LOCAL_PREFIX, is_local_path
 from .logging_config import get_logger
 from .r2_keys import resolve_r2_prefix
 from .storage import Job, add_job_file
@@ -122,23 +123,33 @@ def upload_results_to_r2(job: Job, work_dir: Path, r2_prefix: str = None) -> str
                         "crop", crop_file.name, crop_file.stat().st_size, crop_metadata
                     ))
 
-    # Batch upload всех файлов
+    # Загрузка / регистрация файлов
     if files_to_upload:
-        uploads = [(local, r2_key, ct) for local, r2_key, ct, *_ in files_to_upload]
-        logger.info(f"Batch uploading {len(uploads)} files for job {job.id}")
+        is_standalone = is_local_path(r2_prefix)
 
-        results = r2.upload_files_batch(uploads)
+        if is_standalone:
+            # Standalone: файлы уже на диске, только регистрируем в БД с local:// ключами
+            for local_path, r2_key, ct, file_type, filename, size, metadata in files_to_upload:
+                local_key = f"{LOCAL_PREFIX}{r2_key}" if not r2_key.startswith(LOCAL_PREFIX) else r2_key
+                add_job_file(job.id, file_type, local_key, filename, size, metadata)
+            logger.info(f"Standalone: зарегистрировано {len(files_to_upload)} файлов (без R2)")
+        else:
+            # Node-backed: batch upload в R2
+            uploads = [(local, r2_key, ct) for local, r2_key, ct, *_ in files_to_upload]
+            logger.info(f"Batch uploading {len(uploads)} files for job {job.id}")
 
-        # Регистрируем успешно загруженные файлы в БД
-        success_count = 0
-        for i, (local_path, r2_key, ct, file_type, filename, size, metadata) in enumerate(files_to_upload):
-            if results[i]:
-                add_job_file(job.id, file_type, r2_key, filename, size, metadata)
-                success_count += 1
-            else:
-                logger.error(f"Не удалось загрузить файл в R2: {r2_key}")
+            results = r2.upload_files_batch(uploads)
 
-        logger.info(f"Batch upload завершён: {success_count}/{len(files_to_upload)} файлов загружено")
+            # Регистрируем успешно загруженные файлы в БД
+            success_count = 0
+            for i, (local_path, r2_key, ct, file_type, filename, size, metadata) in enumerate(files_to_upload):
+                if results[i]:
+                    add_job_file(job.id, file_type, r2_key, filename, size, metadata)
+                    success_count += 1
+                else:
+                    logger.error(f"Не удалось загрузить файл в R2: {r2_key}")
+
+            logger.info(f"Batch upload завершён: {success_count}/{len(files_to_upload)} файлов загружено")
 
     return r2_prefix
 

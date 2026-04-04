@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Query
 
+from services.remote_ocr.server.local_storage import is_local_path, resolve_local_path
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.node_storage.ocr_registry import _load_annotation_from_db
 from services.remote_ocr.server.routes.common import (
@@ -137,14 +138,23 @@ def get_job_details_handler(
         blocks_file = get_job_file_by_type(job_id, "blocks")
         if blocks_file:
             try:
-                r2 = get_r2_storage()
-                blocks_text = r2.download_text(blocks_file.r2_key)
-                if blocks_text:
-                    blocks_data = json.loads(blocks_text)
-                    blocks = _extract_blocks_list(blocks_data)
-                    result["block_stats"] = _compute_block_stats(blocks)
+                if is_local_path(blocks_file.r2_key):
+                    # Standalone: читаем blocks с локального диска
+                    local_path = resolve_local_path(blocks_file.r2_key)
+                    if local_path.exists():
+                        blocks_data = json.loads(local_path.read_text(encoding="utf-8"))
+                        blocks = _extract_blocks_list(blocks_data)
+                        result["block_stats"] = _compute_block_stats(blocks)
+                else:
+                    # Node-backed fallback: из R2
+                    r2 = get_r2_storage()
+                    blocks_text = r2.download_text(blocks_file.r2_key)
+                    if blocks_text:
+                        blocks_data = json.loads(blocks_text)
+                        blocks = _extract_blocks_list(blocks_data)
+                        result["block_stats"] = _compute_block_stats(blocks)
             except Exception as e:
-                _logger.warning(f"Failed to load blocks from R2: {e}")
+                _logger.warning(f"Failed to load blocks: {e}")
 
     if job.settings:
         result["job_settings"] = {
@@ -156,7 +166,7 @@ def get_job_details_handler(
         result["job_settings"] = {}
 
     r2_public_url = os.getenv("R2_PUBLIC_URL")
-    if r2_public_url and job.r2_prefix:
+    if r2_public_url and job.r2_prefix and not is_local_path(job.r2_prefix):
         base_url = r2_public_url.rstrip("/")
         result["r2_base_url"] = f"{base_url}/{job.r2_prefix}"
 

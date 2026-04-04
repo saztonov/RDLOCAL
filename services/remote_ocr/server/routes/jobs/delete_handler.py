@@ -1,6 +1,7 @@
 """Обработчик удаления задачи OCR"""
 from fastapi import HTTPException
 
+from services.remote_ocr.server.local_storage import cleanup_job, is_local_path
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import (
     get_r2_sync_client,
@@ -40,8 +41,14 @@ def delete_job_handler(
         _logger.info(
             f"Job {job_id} linked to node {job.node_id}, skipping R2 file deletion"
         )
+    elif job.r2_prefix and is_local_path(job.r2_prefix):
+        # Standalone: удаляем локальную директорию
+        try:
+            cleanup_job(job_id)
+        except Exception as e:
+            _logger.warning(f"Failed to delete local files: {e}")
     elif job.r2_prefix:
-        # Legacy: job без node_id - удаляем файлы из R2
+        # Legacy: job без node_id с файлами в R2 - удаляем из R2
         try:
             s3_client, bucket_name = get_r2_sync_client()
             r2_prefix = (
