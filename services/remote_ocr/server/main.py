@@ -1,4 +1,8 @@
-"""FastAPI сервер для удалённого OCR (все данные через Supabase + R2)"""
+"""FastAPI сервер для OCR — embedded режим (без Celery/Redis).
+
+Job manager встроен в процесс FastAPI, OCR задачи выполняются
+в отдельных multiprocessing.Process для изоляции памяти.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -25,8 +29,7 @@ _logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle: инициализация БД (воркер запускается отдельно через Celery)"""
-    # Логируем конфигурацию при старте (без секретов)
+    """Lifecycle: инициализация БД, job manager, фоновые задачи."""
     _logger.info(
         "Server starting with configuration",
         extra={
@@ -45,6 +48,49 @@ async def lifespan(app: FastAPI):
     )
 
     init_db()
+
+    # Инициализация embedded job manager с WebSocket callback
+    from .embedded_job_manager_singleton import init_job_manager
+    from .routes.websocket import on_job_event_sync
+
+    manager = init_job_manager(on_job_event=on_job_event_sync)
+
+    # Восстановление queued задач из Supabase после рестарта
+    reloaded = manager.reload_queued_jobs()
+    if reloaded:
+        _logger.info(f"Reloaded {reloaded} jobs from Supabase after restart")
+
+    # Фоновый poll loop для job manager (замена Celery polling)
+    async def _poll_loop():
+        from .storage import update_job_status
+
+        while True:
+            try:
+                messages = manager.poll()
+                for msg in messages:
+                    job_id = msg.get("job_id", "")
+                    msg_type = msg.get("type", "")
+                    if msg_type == "progress":
+                        progress = msg.get("progress", 0)
+                        status_message = msg.get("message", "")
+                        update_job_status(
+                            job_id, "processing",
+                            progress=progress,
+                            status_message=status_message,
+                        )
+                    elif msg_type == "error":
+                        error_msg = msg.get("message", "Unknown error")
+                        update_job_status(
+                            job_id, "error",
+                            error_message=error_msg,
+                            status_message="❌ Ошибка обработки",
+                        )
+                    # "done" — finalize() уже обновил статус в Supabase
+            except Exception:
+                _logger.exception("Poll loop error")
+            await asyncio.sleep(0.5)
+
+    poll_task = asyncio.create_task(_poll_loop())
 
     # Запуск фонового zombie detector
     from .zombie_detector import zombie_detector_loop
@@ -70,18 +116,35 @@ async def lifespan(app: FastAPI):
     yield
 
     # Остановка фоновых задач
-    zombie_task.cancel()
-    unload_task.cancel()
-    for task in (zombie_task, unload_task):
+    for task in (poll_task, zombie_task, unload_task):
+        task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
 
+    # Остановка job manager
+    manager.shutdown()
+
     _logger.info("Server shutting down", extra={"event": "server_shutdown"})
 
 
-app = FastAPI(title="rd-remote-ocr", lifespan=lifespan)
+app = FastAPI(title="rd-ocr-server", lifespan=lifespan)
+
+# CORS для web-клиента
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://llm.fvds.ru",
+        "http://localhost:5173",  # Vite dev server
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class RequestTimingMiddleware(BaseHTTPMiddleware):
@@ -149,19 +212,8 @@ def health() -> dict:
 
 @app.get("/health/ready")
 async def readiness() -> JSONResponse:
-    """Readiness check — проверяет Redis, Supabase и наличие OCR API-ключей."""
-    checks: dict[str, bool] = {"redis": False, "supabase": False, "config": False}
-
-    # Redis: ping через Celery broker
-    try:
-        from .celery_app import celery_app
-
-        conn = celery_app.connection()
-        conn.ensure_connection(max_retries=1, timeout=3)
-        conn.close()
-        checks["redis"] = True
-    except Exception:
-        _logger.warning("Readiness: Redis ping failed", exc_info=True)
+    """Readiness check — проверяет Supabase, OCR API и job manager."""
+    checks: dict[str, bool] = {"supabase": False, "config": False, "job_manager": False}
 
     # Supabase: простой запрос
     try:
@@ -175,6 +227,14 @@ async def readiness() -> JSONResponse:
 
     # Config: chandra_base_url обязателен
     checks["config"] = bool(settings.chandra_base_url)
+
+    # Job manager: инициализирован
+    try:
+        from .embedded_job_manager_singleton import get_job_manager
+        manager = get_job_manager()
+        checks["job_manager"] = True
+    except Exception:
+        pass
 
     # Provider health (информационное, НЕ влияет на ready)
     providers: dict = {}
@@ -217,16 +277,53 @@ async def readiness() -> JSONResponse:
 @app.get("/queue")
 def queue_status() -> dict:
     """Queue status для мониторинга backpressure"""
-    from .queue_checker import check_queue_capacity
+    from .embedded_job_manager_singleton import get_job_manager
 
-    can_accept, current, max_size = check_queue_capacity()
-    return {"can_accept": can_accept, "size": current, "max": max_size}
+    manager = get_job_manager()
+    return manager.get_status()
 
 
 # Подключаем роутеры
 app.include_router(jobs_router)
 app.include_router(tree_router)
 app.include_router(storage_router)
+
+from .routes.annotations import router as annotations_router
+from .routes.pdf_info import router as pdf_info_router
+from .routes.websocket import router as websocket_router
+
+app.include_router(annotations_router)
+app.include_router(pdf_info_router)
+app.include_router(websocket_router)
+
+
+# Static SPA serving: web/dist если существует
+import os
+from pathlib import Path
+
+_web_dist = Path(__file__).parent.parent.parent.parent / "web" / "dist"
+if not _web_dist.exists():
+    # Fallback: в Docker образе может быть в /app/web/dist
+    _web_dist = Path("/app/web/dist")
+
+if _web_dist.exists():
+    from fastapi.staticfiles import StaticFiles
+
+    # SPA fallback: все неизвестные пути -> index.html
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """SPA fallback — отдаёт index.html для клиентского роутинга."""
+        from fastapi.responses import FileResponse
+
+        file_path = _web_dist / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_web_dist / "index.html")
+
+    # Статика (CSS, JS, assets)
+    app.mount("/assets", StaticFiles(directory=str(_web_dist / "assets")), name="assets")
+
+    _logger.info(f"Serving SPA from {_web_dist}")
 
 
 if __name__ == "__main__":

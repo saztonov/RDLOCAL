@@ -1,82 +1,54 @@
-"""CRUD операции для задач OCR"""
+"""CRUD операции для задач OCR — in-memory кеширование (без Redis)."""
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any, List, Optional
 
 from .logging_config import get_logger
-from .queue_checker import _get_redis_client
 from .storage_client import get_client
 from .storage_models import Job
 
 logger = get_logger(__name__)
 
-# Redis кеш для list_jobs() - TTL 5 секунд
-JOBS_CACHE_TTL = 5
-JOBS_CACHE_PREFIX = "jobs:list:"
+# In-memory TTL кеш (заменяет Redis)
+_cache_lock = threading.Lock()
+_jobs_cache: dict[str, tuple[float, list]] = {}  # key -> (expire_at, data)
+_pause_cache: dict[str, tuple[float, bool]] = {}  # job_id -> (expire_at, is_paused)
 
-# Redis кеш для is_job_paused() - TTL 15 секунд
-PAUSE_CACHE_TTL = 15
-PAUSE_CACHE_PREFIX = "job:paused:"
-
-
-def _get_jobs_cache_key(document_id: Optional[str]) -> str:
-    """Формирует ключ кеша для list_jobs"""
-    if document_id:
-        return f"{JOBS_CACHE_PREFIX}doc:{document_id}"
-    return f"{JOBS_CACHE_PREFIX}all"
+JOBS_CACHE_TTL = 5  # секунд
+PAUSE_CACHE_TTL = 15  # секунд
 
 
 def _invalidate_jobs_cache() -> None:
-    """Инвалидирует весь кеш list_jobs"""
-    try:
-        client = _get_redis_client()
-        keys = client.keys(f"{JOBS_CACHE_PREFIX}*")
-        if keys:
-            client.delete(*keys)
-            logger.debug(f"Invalidated {len(keys)} jobs cache keys")
-    except Exception as e:
-        logger.warning(f"Failed to invalidate jobs cache: {e}")
-
-
-def _get_pause_cache_key(job_id: str) -> str:
-    """Get Redis key for pause status cache"""
-    return f"{PAUSE_CACHE_PREFIX}{job_id}"
+    """Инвалидирует весь кеш list_jobs."""
+    with _cache_lock:
+        _jobs_cache.clear()
 
 
 def _set_pause_cache(job_id: str, is_paused: bool) -> None:
-    """Set pause status in Redis cache"""
-    try:
-        client = _get_redis_client()
-        key = _get_pause_cache_key(job_id)
-        client.setex(key, PAUSE_CACHE_TTL, "1" if is_paused else "0")
-    except Exception as e:
-        logger.debug(f"Failed to set pause cache: {e}")
+    """Set pause status in cache."""
+    with _cache_lock:
+        _pause_cache[job_id] = (time.time() + PAUSE_CACHE_TTL, is_paused)
 
 
 def _get_pause_cache(job_id: str) -> Optional[bool]:
-    """Get pause status from Redis cache. Returns None if not cached."""
-    try:
-        client = _get_redis_client()
-        key = _get_pause_cache_key(job_id)
-        cached = client.get(key)
-        if cached is not None:
-            return cached == "1"
-    except Exception as e:
-        logger.debug(f"Failed to get pause cache: {e}")
+    """Get pause status from cache. Returns None if not cached/expired."""
+    with _cache_lock:
+        entry = _pause_cache.get(job_id)
+        if entry and entry[0] > time.time():
+            return entry[1]
+        _pause_cache.pop(job_id, None)
     return None
 
 
 def _invalidate_pause_cache(job_id: str) -> None:
-    """Invalidate pause cache for a job"""
-    try:
-        client = _get_redis_client()
-        key = _get_pause_cache_key(job_id)
-        client.delete(key)
-    except Exception as e:
-        logger.debug(f"Failed to invalidate pause cache: {e}")
+    """Invalidate pause cache for a job."""
+    with _cache_lock:
+        _pause_cache.pop(job_id, None)
 
 
 def create_job(
@@ -173,18 +145,14 @@ def get_job(
 
 
 def list_jobs(document_id: Optional[str] = None) -> List[Job]:
-    """Получить список задач (с Redis кешированием)"""
-    cache_key = _get_jobs_cache_key(document_id)
+    """Получить список задач (с in-memory кешированием)."""
+    cache_key = f"doc:{document_id}" if document_id else "all"
 
     # Проверяем кеш
-    try:
-        redis_client = _get_redis_client()
-        cached = redis_client.get(cache_key)
-        if cached:
-            jobs_data = json.loads(cached)
-            return [_row_to_job(row) for row in jobs_data]
-    except Exception as e:
-        logger.debug(f"Cache miss or error: {e}")
+    with _cache_lock:
+        entry = _jobs_cache.get(cache_key)
+        if entry and entry[0] > time.time():
+            return [_row_to_job(row) for row in entry[1]]
 
     # Запрос к БД
     client = get_client()
@@ -196,11 +164,8 @@ def list_jobs(document_id: Optional[str] = None) -> List[Job]:
     result = query.order("priority", desc=False).order("created_at", desc=True).execute()
 
     # Сохраняем в кеш
-    try:
-        redis_client = _get_redis_client()
-        redis_client.setex(cache_key, JOBS_CACHE_TTL, json.dumps(result.data))
-    except Exception as e:
-        logger.debug(f"Failed to cache jobs: {e}")
+    with _cache_lock:
+        _jobs_cache[cache_key] = (time.time() + JOBS_CACHE_TTL, result.data)
 
     return [_row_to_job(row) for row in result.data]
 
@@ -352,17 +317,17 @@ def resume_job(job_id: str) -> bool:
 
 
 def invalidate_pause_cache(job_id: str) -> None:
-    """Инвалидировать Redis-кеш паузы для задачи (public API)"""
+    """Инвалидировать кеш паузы для задачи (public API)."""
     _invalidate_pause_cache(job_id)
 
 
 def set_pause_cache(job_id: str, is_paused: bool) -> None:
-    """Установить статус паузы в Redis-кеш (public API)"""
+    """Установить статус паузы в кеш (public API)."""
     _set_pause_cache(job_id, is_paused)
 
 
 def is_job_paused(job_id: str) -> bool:
-    """Проверить, поставлена ли задача на паузу (с Redis кешированием)"""
+    """Проверить, поставлена ли задача на паузу (с in-memory кешированием)."""
     # Check cache first
     cached = _get_pause_cache(job_id)
     if cached is not None:

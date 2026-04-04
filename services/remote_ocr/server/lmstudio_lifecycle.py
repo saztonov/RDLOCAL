@@ -1,141 +1,80 @@
-"""Управление lifecycle моделей LM Studio при параллельных Celery задачах.
+"""Управление lifecycle моделей LM Studio — in-process координация.
 
-Delayed unload: вместо немедленной выгрузки при remaining==0,
-модель остаётся загруженной на UNLOAD_GRACE_SECONDS. Если за это время
-придёт новая задача — выгрузка отменяется (acquire удаляет pending ключ).
+Заменяет Redis-based координацию на threading-based.
+Используется в embedded режиме (без Celery/Redis).
 
-Celery prefork = отдельные процессы. Каждый создаёт Backend
-и вызывает unload_model() в finally. Redis SET координирует
-выгрузку: модель выгружается только когда последняя задача завершится.
+Delayed unload: при remaining==0 модель остаётся загруженной
+на UNLOAD_GRACE_SECONDS. Если за это время придёт новая задача —
+выгрузка отменяется.
 
-Используется Redis SET (SADD/SREM/SCARD) вместо INCR/DECR:
-- SET не может уйти в минус
-- Не допускает дублей (повторный acquire одного job_id — no-op)
-- release без acquire — безопасный no-op (SREM несуществующего элемента)
-- TTL 24h как страховка от крашей
-
-Поддерживает движок chandra через параметрический ключ.
+Используется threading.Lock + in-memory set вместо Redis SET.
 """
 from __future__ import annotations
 
 import threading
-from urllib.parse import urlparse
-
-import redis
+import time
 
 from .logging_config import get_logger
 from .settings import settings
 
 logger = get_logger(__name__)
 
-_redis_pool: redis.ConnectionPool | None = None
-_pool_lock = threading.Lock()
-
-# TTL для SET-ключа — страховка от крашей (24 часа)
-_SAFETY_TTL = 86400
-
 # Grace period перед выгрузкой модели (секунды)
 UNLOAD_GRACE_SECONDS = 120
 
-
-def _active_key(engine: str) -> str:
-    """Redis key для множества активных задач данного движка."""
-    return f"lmstudio:{engine}:active_jobs"
-
-
-def _pending_unload_key(engine: str) -> str:
-    """Redis key для отложенной выгрузки."""
-    return f"lmstudio:{engine}:pending_unload"
+# In-process state (заменяет Redis)
+_lock = threading.Lock()
+_active_jobs: dict[str, set[str]] = {}  # engine -> set of job_ids
+_pending_unloads: dict[str, float] = {}  # engine -> timestamp when unload was scheduled
 
 
-def _get_redis_pool() -> redis.ConnectionPool:
-    """Redis connection pool (паттерн из queue_checker.py)."""
-    global _redis_pool
-    if _redis_pool is None:
-        with _pool_lock:
-            if _redis_pool is None:
-                parsed = urlparse(settings.redis_url)
-                _redis_pool = redis.ConnectionPool(
-                    host=parsed.hostname or "localhost",
-                    port=parsed.port or 6379,
-                    db=int(parsed.path.lstrip("/") or 0),
-                    password=parsed.password,
-                    decode_responses=True,
-                    max_connections=10,
-                )
-    return _redis_pool
-
-
-def _get_redis_client() -> redis.Redis:
-    return redis.Redis(connection_pool=_get_redis_pool())
+def _active_set(engine: str) -> set[str]:
+    """Получить/создать set активных задач для движка."""
+    if engine not in _active_jobs:
+        _active_jobs[engine] = set()
+    return _active_jobs[engine]
 
 
 # ── Универсальные функции ───────────────────────────────────────────
 
 def acquire_lmstudio(engine: str, job_id: str) -> int:
     """Зарегистрировать начало задачи для LM Studio движка. Возвращает счётчик."""
-    try:
-        client = _get_redis_client()
-        key = _active_key(engine)
-        client.sadd(key, job_id)
-        # TTL обновляется при каждом acquire — страховка от крашей
-        client.expire(key, _SAFETY_TTL)
+    with _lock:
+        jobs = _active_set(engine)
+        jobs.add(job_id)
         # Отменяем pending unload — новая задача пришла
-        client.delete(_pending_unload_key(engine))
-        count = client.scard(key)
-        logger.info(
-            f"{engine} acquire: job={job_id}, active_tasks={count}",
-            extra={"event": f"{engine}_acquire", "job_id": job_id},
-        )
-        return count
-    except Exception as e:
-        logger.warning(f"{engine} acquire failed (fallback to 1): {e}")
-        return 1
+        _pending_unloads.pop(engine, None)
+        count = len(jobs)
+    logger.info(
+        f"{engine} acquire: job={job_id[:8]}, active_tasks={count}",
+        extra={"event": f"{engine}_acquire", "job_id": job_id},
+    )
+    return count
 
 
 def release_lmstudio(engine: str, job_id: str) -> int:
-    """Снять регистрацию задачи для LM Studio движка. Возвращает оставшийся счётчик."""
-    try:
-        client = _get_redis_client()
-        key = _active_key(engine)
-        client.srem(key, job_id)
-        count = client.scard(key)
-        if count > 0:
-            # Обновляем TTL пока есть активные задачи
-            client.expire(key, _SAFETY_TTL)
-        logger.info(
-            f"{engine} release: job={job_id}, active_tasks={count}",
-            extra={"event": f"{engine}_release", "job_id": job_id},
-        )
-        return count
-    except Exception as e:
-        logger.warning(f"{engine} release failed (fallback: will unload): {e}")
-        return 0
+    """Снять регистрацию задачи. Возвращает оставшийся счётчик."""
+    with _lock:
+        jobs = _active_set(engine)
+        jobs.discard(job_id)
+        count = len(jobs)
+    logger.info(
+        f"{engine} release: job={job_id[:8]}, active_tasks={count}",
+        extra={"event": f"{engine}_release", "job_id": job_id},
+    )
+    return count
 
 
 def schedule_pending_unload(engine: str) -> None:
-    """Запланировать отложенную выгрузку модели (если нет активных задач).
-
-    Сохраняет timestamp, когда выгрузка была запланирована.
-    Background loop через UNLOAD_GRACE_SECONDS проверит и выгрузит.
-    """
-    import time
-
-    try:
-        client = _get_redis_client()
-        count = client.scard(_active_key(engine))
+    """Запланировать отложенную выгрузку модели."""
+    with _lock:
+        count = len(_active_set(engine))
         if count == 0:
-            client.set(
-                _pending_unload_key(engine),
-                str(time.time()),
-                ex=UNLOAD_GRACE_SECONDS + 60,  # +60s запас чтобы loop успел проверить
-            )
+            _pending_unloads[engine] = time.time()
             logger.info(
                 f"{engine}: pending unload запланирован (grace={UNLOAD_GRACE_SECONDS}s)",
                 extra={"event": f"{engine}_pending_unload"},
             )
-    except Exception as e:
-        logger.warning(f"{engine} schedule_pending_unload failed: {e}")
 
 
 def check_and_unload_models() -> None:
@@ -143,38 +82,30 @@ def check_and_unload_models() -> None:
 
     Вызывается из background loop (каждые 30 сек).
     """
-    import time
-
     for engine in ("chandra", "qwen"):
-        try:
-            client = _get_redis_client()
-            pending_ts = client.get(_pending_unload_key(engine))
+        with _lock:
+            pending_ts = _pending_unloads.get(engine)
             if pending_ts is None:
                 continue
 
-            elapsed = time.time() - float(pending_ts)
+            elapsed = time.time() - pending_ts
             if elapsed < UNLOAD_GRACE_SECONDS:
-                continue  # Grace period ещё не истёк
+                continue
 
-            # Проверяем что нет новых активных задач
-            count = client.scard(_active_key(engine))
+            count = len(_active_set(engine))
             if count > 0:
-                # Новая задача пришла, удаляем pending
-                client.delete(_pending_unload_key(engine))
+                _pending_unloads.pop(engine, None)
                 continue
 
             # Grace period истёк, нет активных — выгружаем
-            client.delete(_pending_unload_key(engine))
-            _do_unload_model(engine)
+            _pending_unloads.pop(engine, None)
 
-        except Exception as e:
-            logger.warning(f"check_and_unload_models({engine}): {e}")
+        # Выгрузку выполняем вне lock
+        _do_unload_model(engine)
 
 
 def _do_unload_model(engine: str) -> None:
     """Выполнить выгрузку модели LM Studio."""
-    from .settings import settings
-
     base_url = None
     if engine == "chandra":
         base_url = getattr(settings, "chandra_base_url", None)
@@ -191,7 +122,6 @@ def _do_unload_model(engine: str) -> None:
         if resp.status_code != 200:
             return
 
-        # Определяем точный model key для matching
         if engine == "chandra":
             from rd_core.ocr._chandra_common import CHANDRA_MODEL_KEY
             model_key_lower = CHANDRA_MODEL_KEY.lower()
@@ -221,20 +151,16 @@ def _do_unload_model(engine: str) -> None:
 # ── Обратная совместимость (Chandra) ────────────────────────────────
 
 def acquire_chandra(job_id: str) -> int:
-    """Обратная совместимость: acquire для Chandra."""
     return acquire_lmstudio("chandra", job_id)
 
 
 def release_chandra(job_id: str) -> int:
-    """Обратная совместимость: release для Chandra."""
     return release_lmstudio("chandra", job_id)
 
 
 def acquire_qwen(job_id: str) -> int:
-    """Обратная совместимость: acquire для Qwen."""
     return acquire_lmstudio("qwen", job_id)
 
 
 def release_qwen(job_id: str) -> int:
-    """Обратная совместимость: release для Qwen."""
     return release_lmstudio("qwen", job_id)

@@ -274,8 +274,8 @@ def resume_job_handler(
 def cancel_job_handler(
     job_id: str,
 ) -> dict:
-    """Отменить задачу (установить статус cancelled + revoke Celery task)"""
-    from services.remote_ocr.server.celery_app import celery_app
+    """Отменить задачу (установить статус cancelled + cancel в job manager)"""
+    from services.remote_ocr.server.embedded_job_manager_singleton import get_job_manager
     from services.remote_ocr.server.storage import invalidate_pause_cache, set_pause_cache, update_job_status
 
     _logger.info(
@@ -290,32 +290,17 @@ def cancel_job_handler(
             status_code=400, detail=f"Cannot cancel job in status: {job.status}"
         )
 
-    was_processing = job.status == "processing"
-
     update_job_status(job_id, "cancelled", status_message="Отменено пользователем")
     invalidate_pause_cache(job_id)
-    # Мгновенный сигнал worker-у через Redis (не ждать TTL кеша)
     set_pause_cache(job_id, True)
 
-    # Revoke Celery task
-    if job.celery_task_id:
-        try:
-            if was_processing:
-                # SIGUSR1 бросит SoftTimeLimitExceeded в worker (graceful stop)
-                celery_app.control.revoke(
-                    job.celery_task_id, terminate=True, signal="SIGUSR1"
-                )
-            else:
-                # queued/paused — просто убрать из очереди
-                celery_app.control.revoke(job.celery_task_id, terminate=False)
-            _logger.info(
-                f"Revoked celery task {job.celery_task_id} for job {job_id[:8]}",
-                extra={"event": "job_cancel_revoke", "job_id": job_id},
-            )
-        except Exception as e:
-            _logger.warning(f"Failed to revoke task {job.celery_task_id}: {e}")
-
-    # LM Studio locks и execution lock освобождаются в worker cleanup (finally)
-    # или zombie detector — НЕ здесь, чтобы не сбить счётчик при duplicate delivery
+    # Cancel в embedded job manager
+    manager = get_job_manager()
+    cancelled = manager.cancel(job_id)
+    if cancelled:
+        _logger.info(
+            f"Cancelled job {job_id[:8]} in embedded manager",
+            extra={"event": "job_cancel", "job_id": job_id},
+        )
 
     return {"ok": True, "job_id": job_id, "status": "cancelled"}

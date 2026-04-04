@@ -1,187 +1,705 @@
-# Карта работы RDLOCAL
+# Карта рабочих процессов CoreStructure
 
-Этот документ фиксирует текущую рабочую карту всего стека RDLOCAL по состоянию репозитория: `desktop GUI + local OCR + remote OCR server + Supabase/R2 + shared core`.
+Этот документ описывает как работает приложение — от запуска до получения OCR-результатов. Каждый раздел объясняет один пользовательский сценарий простым языком с указанием ключевых файлов.
 
-Цель документа не перечислить папки, а показать:
-- какие подсистемы реально участвуют в работе;
-- как проходят основные пользовательские и системные сценарии;
-- где формируются документы и побочные артефакты;
-- где сосредоточены узкие места, избыточная связность и дублирование.
+---
+
+## Содержание
+
+1. [Общая архитектура](#1-общая-архитектура)
+2. [Работа с деревом проектов](#2-работа-с-деревом-проектов)
+3. [Открытие и просмотр PDF](#3-открытие-и-просмотр-pdf)
+4. [Разметка блоков](#4-разметка-блоков)
+5. [Локальный OCR](#5-локальный-ocr)
+6. [Удалённый OCR (сервер)](#6-удалённый-ocr-сервер)
+7. [Получение результатов](#7-получение-результатов)
+8. [Карта хранилищ данных](#8-карта-хранилищ-данных)
+9. [Карта формирования документов](#9-карта-формирования-документов)
+10. [Узкие места](#10-узкие-места)
+11. [Дублирование](#11-дублирование)
+
+---
 
 ## Что считать каноном
 
-- Канонический пользовательский сценарий для продукта: tree-backed документ, открытый из дерева проектов, с аннотацией в Supabase и OCR-артефактами в R2.
+- Канонический пользовательский сценарий: tree-backed документ, открытый из дерева проектов, с аннотацией в Supabase и OCR-артефактами в R2.
 - Канонический источник разметки: таблица `annotations`, а не sidecar JSON рядом с PDF.
 - Канонический каталог OCR-артефактов: префикс документа в R2 плюс записи в `node_files`.
-- Local OCR не является отдельным доменным контуром: он переиспользует общий OCR-код и значимую часть серверной постобработки.
+- Local OCR не является отдельным доменным контуром: он переиспользует общий OCR-код из `rd_core/pipeline`.
 - Remote OCR остаётся полным production-контуром: API, очередь, воркер, R2, Supabase и регистрация результатов.
 
-## Слой 1. Ландшафт системы
+---
 
-| Подсистема | Основные точки кода | Роль | Читает | Пишет | Основной риск |
-| --- | --- | --- | --- | --- | --- |
-| Desktop shell и состояние окна | [`app/main.py`](../app/main.py), [`app/gui/main_window.py`](../app/gui/main_window.py), [`app/gui/panels_setup.py`](../app/gui/panels_setup.py) | Поднимает Qt, собирает `MainWindow`, хранит текущий документ, страницу, temp-сессию, undo/redo, OCR panel | `.env`, `QSettings`, текущее состояние документа | UI state, temp cleanup, status bar, dock layout | Большая mixin-композиция затрудняет трассировку жизненного цикла |
-| Дерево проектов и file I/O | [`app/gui/project_tree/widget.py`](../app/gui/project_tree/widget.py), [`app/gui/file_download.py`](../app/gui/file_download.py), [`app/gui/file_operations.py`](../app/gui/file_operations.py) | Навигация по `tree_nodes`, скачивание PDF и sidecar-файлов, открытие tree-backed документа через temp workspace | `tree_nodes`, `node_files`, R2, temp workspace | temp workspace, текущий `node_id`, lock state, локальный открытый PDF | UI-слой одновременно навигирует, скачивает, открывает и частично обновляет storage-состояние |
-| Модель аннотаций и сохранение | [`rd_core/models/document.py`](../rd_core/models/document.py), [`rd_core/annotation_io.py`](../rd_core/annotation_io.py), [`app/annotation_db.py`](../app/annotation_db.py), [`app/gui/annotation_cache.py`](../app/gui/annotation_cache.py) | Представление `Document/Page/Block`, миграция legacy-форматов, асинхронный autosave в Supabase | JSON-структуры аннотаций, `annotations`, in-memory `Document` | `annotations`, dirty-cache, флаги `has_annotation` | Сразу несколько точек записи в одну и ту же сущность |
-| Оркестрация OCR в GUI | [`app/gui/remote_ocr/jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py), [`app/ocr/local_runner.py`](../app/ocr/local_runner.py) | Выбор режима, correction mode, запуск local/remote OCR, polling, применение результатов обратно в документ | `annotation_document`, `jobs`, server API, local subprocess queue | local jobs, remote requests, merged OCR fields, snapshot jobs | Один контроллер совмещает UI, orchestration и result-merge |
-| Local OCR pipeline | [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) | Pass1/pass2 OCR, model swap, verification, генерация файлов результатов, sync обратно в tree storage | PDF, `blocks_data`, shared OCR backends, server `pdf_twopass` | `annotation.json`, HTML, MD, export report, R2/node_files | Толстый модуль с высокой связностью и множеством обязанностей |
-| Remote OCR API и worker | [`services/remote_ocr/server/main.py`](../services/remote_ocr/server/main.py), [`services/remote_ocr/server/routes/jobs/create_handler.py`](../services/remote_ocr/server/routes/jobs/create_handler.py), [`services/remote_ocr/server/tasks.py`](../services/remote_ocr/server/tasks.py), [`services/remote_ocr/server/job_stages.py`](../services/remote_ocr/server/job_stages.py) | Принимает задания, создаёт `jobs`, запускает Celery-пайплайн, публикует результаты | `jobs`, `job_files`, `job_settings`, R2 PDF/blocks, `annotations` | `jobs`, `job_settings`, `job_files`, `annotations`, R2 artifacts, `node_files` | Переходы состояния распределены между route/storage/task-слоями |
-| Shared core | [`rd_core/ocr`](../rd_core/ocr), [`rd_core/pdf_utils.py`](../rd_core/pdf_utils.py), [`rd_core/sidecar_resolver.py`](../rd_core/sidecar_resolver.py), [`rd_core/models`](../rd_core/models) | Общие модели, OCR backends, HTML/MD генераторы, PDF утилиты, sidecar compatibility | PDF geometry, OCR raw output, block ids | HTML/MD content, normalized coords, resolved sidecar keys | Legacy-совместимость протекает в оба runtime-контура |
-| Storage и DB слой | [`app/tree_client`](../app/tree_client), [`rd_core/r2_storage.py`](../rd_core/r2_storage.py), [`services/remote_ocr/server/storage_jobs.py`](../services/remote_ocr/server/storage_jobs.py), [`services/remote_ocr/server/node_storage/ocr_registry.py`](../services/remote_ocr/server/node_storage/ocr_registry.py) | Доступ к Supabase и R2, регистрация файлов, очередь jobs, pdf status | Таблицы `tree_nodes`, `node_files`, `annotations`, `jobs`, `job_files`, `job_settings`, объекты R2 | Те же таблицы и R2-объекты | Один и тот же storage управляется и GUI, и сервером через разные клиенты |
+## 1. Общая архитектура
 
-Короткий вывод по ландшафту: система уже не делится на “GUI” и “сервер” как на независимые продукты. Это один стек с двумя оркестраторами поверх общего ядра и общей persistence-модели.
+Приложение состоит из четырёх слоёв. Верхний слой — то, что видит пользователь. Нижний — внешние сервисы, куда уходят данные.
 
-## Слой 2. Карта runtime-потоков
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GUI (десктоп, PyQt6)                      │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
+│  │ Дерево       │  │ Просмотр     │  │ Панель блоков     │  │
+│  │ проектов     │  │ страниц PDF  │  │ + панель OCR      │  │
+│  │              │  │              │  │                   │  │
+│  │ Папки,       │  │ Рисование    │  │ Список блоков,    │  │
+│  │ документы,   │  │ блоков,      │  │ запуск OCR,       │  │
+│  │ загрузка PDF │  │ навигация    │  │ просмотр          │  │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬──────────┘  │
+│         └─────────────────┼───────────────────┘             │
+│                    ┌──────┴──────┐                           │
+│                    │ MainWindow  │                           │
+│                    │ (6 миксинов)│                           │
+│                    └──────┬──────┘                           │
+├───────────────────────────┼─────────────────────────────────┤
+│              Сервисный слой (app/)                           │
+│                                                             │
+│  services.py        Единая точка доступа к R2 и Supabase    │
+│  TreeClient         HTTP-клиент к Supabase (5 миксинов)     │
+│  AnnotationDBIO     Сохранение/загрузка разметки в БД       │
+│  LocalOcrRunner     Запуск OCR в отдельном процессе          │
+│  JobsController     Управление OCR-задачами (local/remote)   │
+├───────────────────────────┼─────────────────────────────────┤
+│              Ядро (rd_core/)                                 │
+│                                                             │
+│  models/            Block, Document, Page, ArmorID, enums   │
+│  pipeline/          Двухпроходный OCR-конвейер              │
+│  ocr/               Бэкенды: Chandra (текст), Qwen (картинки)│
+│  pdf_utils.py       Рендер PDF через PyMuPDF                │
+│  annotation_io.py   Версионирование и миграция разметки     │
+│  r2_storage.py      Загрузка/скачивание файлов из облака    │
+├───────────────────────────┼─────────────────────────────────┤
+│              Внешняя инфраструктура                          │
+│                                                             │
+│  ┌───────────┐  ┌─────────┐  ┌──────────┐  ┌─────────────┐ │
+│  │ Supabase  │  │   R2    │  │ LM Studio│  │ Remote OCR  │ │
+│  │ (база     │  │ (файлы  │  │ (локаль- │  │ Server      │ │
+│  │  данных)  │  │  в обла-│  │  ные LLM │  │ (FastAPI +  │ │
+│  │           │  │  ке)    │  │  модели) │  │  Celery +   │ │
+│  │           │  │         │  │          │  │  Redis)     │ │
+│  └───────────┘  └─────────┘  └──────────┘  └─────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### 1. Открытие локального PDF
+**GUI** — интерфейс на Qt: дерево проектов слева, просмотр PDF по центру, панель блоков и OCR справа.
 
-1. Любой локальный open-flow в итоге приходит в [`app/gui/file_operations.py`](../app/gui/file_operations.py) через `FileOperationsMixin._open_pdf_file()`.
-2. Перед открытием окно делает `flush` предыдущей аннотации и, если до этого был tree-backed документ, удаляет старую temp-сессию.
-3. [`rd_core/pdf_utils.py`](../rd_core/pdf_utils.py) через `PDFDocument` открывает PDF и даёт размеры/страницы для viewer.
-4. Если `_current_node_id` пуст, Supabase пропускается и создаётся пустой `Document`; если контекст всё ещё node-backed, приложение пробует взять аннотацию из [`app/annotation_db.py`](../app/annotation_db.py).
-5. Аннотация канонизируется под реальные preview-размеры, затем `MainWindow` рендерит текущую страницу и обновляет blocks tree.
-6. OCR preview и статистика обновляются уже поверх in-memory `annotation_document`.
+**Сервисный слой** — прослойка между GUI и инфраструктурой. GUI не лезет в Supabase напрямую, а вызывает `services.py` или `TreeClient`.
 
-### 2. Открытие tree-backed документа через temp workspace
+**Ядро (rd_core)** — модели данных, OCR-бэкенды, работа с PDF. Не зависит от GUI. Используется и десктопом, и сервером.
 
-1. [`app/gui/project_tree/widget.py`](../app/gui/project_tree/widget.py) при double-click на документе вызывает `document_selected.emit(node_id, r2_key)`.
-2. [`app/gui/panels_setup.py`](../app/gui/panels_setup.py) связывает этот сигнал с `FileDownloadMixin._on_tree_document_selected()`.
-3. [`app/gui/file_download.py`](../app/gui/file_download.py) создаёт temp workspace через [`app/gui/temp_session.py`](../app/gui/temp_session.py), собирает задачи на скачивание PDF и sidecar-файлов из `node_files`, и запускает `FileTransferWorker`.
-4. После загрузки окно выставляет `_current_node_id`, `_current_r2_key`, lock state, origin=`tree_temp` и переходит в тот же `_open_pdf_file()`.
-5. Внутри `_open_pdf_file()` источник правды для разметки остаётся прежним: приложение загружает аннотацию из Supabase, а скачанные `_ocr.html` / `_document.md` выступают как дополнительные sidecar-артефакты.
-6. Логи для tree-backed документа переключаются на projects folder, а не в temp, чтобы cleanup workspace не терял историю.
+**Инфраструктура** — Supabase хранит структуру проектов и разметку, R2 хранит PDF и результаты, LM Studio запускает LLM-модели, Remote Server — альтернативный режим обработки.
 
-### 3. Редактирование блоков и autosave аннотаций
+---
 
-1. Пользовательские действия в [`app/gui/page_viewer.py`](../app/gui/page_viewer.py) и block mixin-слоях меняют `MainWindow.annotation_document`.
-2. `FileAutoSaveMixin._auto_save_annotation()` кладёт актуальный `Document` в глобальный [`app/gui/annotation_cache.py`](../app/gui/annotation_cache.py) и помечает `node_id` как dirty.
-3. `AnnotationCache` по таймеру запускает асинхронный `AnnotationDBIO.save_to_db()`, а перед OCR и при закрытии использует синхронные `flush_for_ocr()`, `force_sync()`, `force_sync_all()`.
-4. После успешной синхронизации UI обновляет `has_annotation` и пересчитывает `pdf_status` через прямые вызовы `TreeClient` и `R2Storage`.
-5. Результат: редактирование остаётся быстрым, но логика persistence и логика tree/status обновления жёстко сцеплены прямо в GUI.
+## 2. Работа с деревом проектов
 
-### 4. Запуск local OCR
+**Что происходит:** при запуске приложения слева появляется дерево проектов — папки и документы, загруженные из Supabase. Пользователь может создавать папки, загружать PDF, переименовывать, архивировать, перетаскивать узлы.
 
-1. [`app/gui/remote_ocr/jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py) в `create_job()` собирает блоки, определяет smart/full режим через `needs_ocr()`, при необходимости очищает старые OCR-поля и сохраняет correction markers.
-2. Перед стартом controller делает `flush` autosave и синхронно сохраняет текущую аннотацию в Supabase.
-3. `JobsController._local_create_job()` передаёт работу в [`app/ocr/local_runner.py`](../app/ocr/local_runner.py), а тот поднимает отдельный `multiprocessing.Process`.
-4. В subprocess вызывается [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py): parse blocks, create backends, `pass1_prepare_crops()`, `pass2_ocr_from_manifest_async()`, verification и генерация локальных артефактов.
-5. `_generate_local_results()` пишет `annotation.json`, `{stem}_ocr.html`, `{stem}_document.md`, `{stem}_export_report.json`, а при наличии `node_id` ещё синхронизирует HTML/MD/crops в `tree_docs/{node_id}` и `node_files`.
-6. После завершения `auto_download_result()` локально перечитывает `annotation.json`, мерджит OCR-поля по `block.id` обратно в открытый документ и снова запускает autosave.
+```
+Запуск приложения
+       │
+       ▼
+InitialLoadWorker (фоновый поток)
+       │
+       ▼
+TreeClient.get_root_nodes()  ──→  Supabase: tree_nodes
+       │                                 (parent_id = null)
+       ▼
+Отображение корневых узлов
+       │
+       ▼  (клик на папку)
+TreeClient.get_children(id)  ──→  Supabase: tree_nodes
+       │                                 (parent_id = id)
+       ▼
+Отображение дочерних узлов (ленивая подгрузка)
+       │
+       ▼  (каждые N секунд)
+TreeRefreshWorker  ──→  Supabase: проверка изменений
+```
 
-### 5. Запуск remote OCR
+**Что делает каждый компонент:**
 
-1. Тот же `JobsController.create_job()` готовит аннотацию и correction flags, но для tree-backed документа идёт по `JobsController._server_create_job()`, а не по legacy upload-flow.
-2. Клиент отправляет лёгкий POST в `/jobs/node`, где [`services/remote_ocr/server/routes/jobs/create_handler.py`](../services/remote_ocr/server/routes/jobs/create_handler.py) поднимает `jobs`, `job_settings`, делает snapshot blocks в R2 и регистрирует `job_files`.
-3. Если используется legacy remote flow `/jobs`, route дополнительно загружает PDF в R2; node-backed flow берёт PDF по `node_id`.
-4. Celery вызывает [`services/remote_ocr/server/tasks.py`](../services/remote_ocr/server/tasks.py), а дальше stages в [`services/remote_ocr/server/job_stages.py`](../services/remote_ocr/server/job_stages.py): `bootstrap_job()` -> `run_ocr()` -> `generate_and_upload()` -> `register_results()` -> `finalize()`.
-5. `bootstrap_job()` скачивает PDF и blocks snapshot из R2, flatten-ит `pages -> blocks`, фильтрует correction subset и создаёт OCR backends.
-6. [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) генерирует HTML/MD, enrich-ит аннотацию, делает verification retry и сохраняет enriched annotation обратно в Supabase.
-7. [`services/remote_ocr/server/task_upload.py`](../services/remote_ocr/server/task_upload.py) выкладывает HTML/MD/crops в R2 и регистрирует `job_files`, а [`services/remote_ocr/server/node_storage/ocr_registry.py`](../services/remote_ocr/server/node_storage/ocr_registry.py) зеркалит результат в `node_files` и обновляет `pdf_status`.
+- **ProjectTreeWidget** ([widget.py](../app/gui/project_tree/widget.py)) — виджет дерева с 7 миксинами: CRUD узлов, фильтрация, контекстное меню, архивация, загрузка, раскрытие, перетаскивание.
+- **TreeClient** ([app/tree_client/](../app/tree_client/)) — HTTP-клиент к Supabase REST API. 5 миксинов: узлы, статусы, файлы, пути, аннотации. Пул соединений (10 макс).
+- **TreeNodeCache** — кеш узлов с TTL 120 секунд, чтобы не ходить в Supabase на каждый клик.
+- **PDFStatusManager** — отслеживает статус обработки PDF (есть ли OCR, все ли файлы на месте).
 
-### 6. Применение OCR-результатов обратно в документ
+**Данные:**
 
-1. Local branch: `JobsController.auto_download_result()` сразу идёт в `_reload_annotation_from_result(output_dir)`.
-2. Remote branch: polling замечает terminal status, запускает `_remote_download_result()` и читает итоговую аннотацию обратно из Supabase.
-3. Обе ветки строят словарь `block_id -> OCR fields`, мерджат `ocr_text/ocr_html/ocr_json/ocr_meta` в текущий `annotation_document` и снимают `is_correction`.
-4. После merge окно делает `_render_current_page()`, обновляет blocks tree, preview widgets и OCR stats.
-5. Если обновления были, включается `_auto_save_annotation()`, чтобы in-memory документ и Supabase снова синхронизировались.
-6. Ключевая опора всего цикла: стабильный `block.id`; ни local, ни remote flow не заменяют документ целиком, они мерджат поля на уровне блока.
+| Таблица Supabase | Что хранит |
+|-----------------|-----------|
+| `tree_nodes` | Узлы дерева: id, parent_id, name, type (FOLDER/DOCUMENT), path, status |
+| `node_files` | Файлы узла: r2_key, file_type (PDF/ANNOTATION/OCR_HTML/RESULT_MD/...) |
 
-### 7. Correction mode и legacy fallback
+---
 
-1. Smart OCR определяется через [`rd_core/ocr_block_status.py`](../rd_core/ocr_block_status.py): controller распознаёт только блоки, которым действительно нужен OCR.
-2. Local correction mode отправляет subset блоков в OCR, а потом в [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) вшивает новые OCR-поля обратно в `full_blocks_data`, чтобы HTML/MD строились по полному документу.
-3. Remote correction mode в [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) загружает существующий enriched annotation из Supabase и обновляет только correction-блоки.
-4. Если existing annotation для remote correction не найден, сервер откатывается к full generation.
-5. Legacy совместимость держится сразу в нескольких местах: `migrate_flat_to_structured()`, `migrate_annotation_data()`, old remote upload path, ручная миграция legacy JSON из дерева и resolver порядка `node_files -> tree_docs/{node_id} -> pdf_parent`.
-6. Итог: система одновременно поддерживает новый node-backed контур и несколько старых схем хранения, что повышает цену любого изменения.
+## 3. Открытие и просмотр PDF
 
-## Слой 3. Карта документов и артефактов
+**Что происходит:** пользователь кликает на документ в дереве → PDF скачивается из облака → отображается страница → поверх рисуются ранее созданные блоки разметки.
 
-| Артефакт | Источник данных | Генератор | Где хранится | Кто читает дальше | Комментарий |
-| --- | --- | --- | --- | --- | --- |
-| `annotations` (`data` по `node_id`) | in-memory `Document`, user edits, OCR enrichment | [`app/annotation_db.py`](../app/annotation_db.py) `AnnotationDBIO.save_to_db()`, [`services/remote_ocr/server/node_storage/ocr_registry.py`](../services/remote_ocr/server/node_storage/ocr_registry.py) `_save_annotation_to_db()` | Supabase `annotations` | `FileOperationsMixin._load_annotation_if_exists()`, remote result apply, compatibility/status операции | Это канонический источник разметки |
-| `annotation.json` | pages/blocks после local OCR и optional full merge | [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) `_generate_local_results()` | Локальный `output_dir` | `JobsController._reload_annotation_from_result()`, локальный post-run merge | Канонический sidecar только для local pipeline |
-| `{stem}_annotation.json` | snapshot blocks, взятый из Supabase или upload | [`services/remote_ocr/server/routes/jobs/create_handler.py`](../services/remote_ocr/server/routes/jobs/create_handler.py) через `blocks_key()` | R2 + `job_files` | `bootstrap_job()` через `download_job_files()` | Это входной snapshot job, а не финальная enriched annotation |
-| `{stem}_ocr.html` | OCR blocks + regenerated `ocr_html` fragments | Local: [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py); Remote: [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) + [`services/remote_ocr/server/task_upload.py`](../services/remote_ocr/server/task_upload.py) | Local `output_dir`; R2 префикс документа; `node_files`; `job_files` | Unified files dialog, block verification, sidecar resolver, пользователи | В remote work dir сначала живёт как `ocr_result.html`, затем переименовывается при upload |
-| `{stem}_document.md` | OCR blocks + regenerated markdown view | Local: [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py); Remote: [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) + `task_upload.py` | Local `output_dir`; R2 префикс документа; `node_files`; `job_files` | Viewer/dialogs, LLM-oriented export use-cases | В remote work dir сначала живёт как `document.md` |
-| `{stem}_export_report.json` | `html_stats` и `md_stats` local export | [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) `_generate_local_results()` | Только local `output_dir` | Пользователь/ручной анализ | На R2 и в `node_files` не зеркалится |
-| `crops/{block_id}.pdf` | PASS1 crops и copied final PDF crops | [`services/remote_ocr/server/pdf_twopass`](../services/remote_ocr/server/pdf_twopass), `copy_crops_to_final()` в [`services/remote_ocr/server/task_upload.py`](../services/remote_ocr/server/task_upload.py) и [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) | Temp work dir, затем R2, `node_files`, `job_files` | HTML crop links, unified files dialog, verification tooling | Stamp crops специально исключаются из итоговой публикации |
-| `jobs` | OCR request metadata, progress, status, block stats | Local: [`app/ocr/local_runner.py`](../app/ocr/local_runner.py) `_save_job_to_supabase()`; Remote: [`services/remote_ocr/server/storage_jobs.py`](../services/remote_ocr/server/storage_jobs.py) | Supabase `jobs` | Jobs panel, remote poller, snapshot/history loaders | Таблица уже общая для local и remote режимов |
-| `job_settings` | engine и correction flags job-а | [`services/remote_ocr/server/routes/jobs/create_handler.py`](../services/remote_ocr/server/routes/jobs/create_handler.py) -> `save_job_settings()` | Supabase `job_settings` | `bootstrap_job()`, `task_results.generate_results()` | Server-only артефакт |
-| `job_files` | PDF/blocks snapshot и загруженные OCR-файлы | create handlers + [`services/remote_ocr/server/task_upload.py`](../services/remote_ocr/server/task_upload.py) | Supabase `job_files` | `download_job_files()`, job inspection | Local mode не использует `job_files` |
-| `node_files` | PDF документа и опубликованные OCR-артефакты | GUI: [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) `_sync_results_to_tree()`; Server: [`services/remote_ocr/server/node_storage/ocr_registry.py`](../services/remote_ocr/server/node_storage/ocr_registry.py) | Supabase `node_files` | Tree download, sidecar resolver, unified files dialog, pdf status | Это канонический регистр файлов документа в tree-backed сценарии |
+```
+Двойной клик на документе в дереве
+       │
+       ▼
+document_selected(node_id, r2_key)       ← сигнал от дерева
+       │
+       ▼
+FileDownloadMixin создаёт temp workspace
+       │
+       ├──→  R2Storage.download_file(r2_key)  ──→  Cloudflare R2
+       │                                          (с кешем на диске)
+       ▼
+PyMuPDF рендерит страницу (150 DPI для превью)
+       │
+       ▼
+PageViewer отображает растр страницы
+       │
+       ├──→  AnnotationDBIO.load_from_db(node_id)  ──→  Supabase: annotations
+       │            │
+       │            ▼
+       │     Миграция формата (v0 → v1 → v2 если нужно)
+       │            │
+       │            ▼
+       │     annotation_canonicalizer: подгонка координат под размер страницы
+       │
+       ▼
+PageViewer рисует блоки поверх страницы (прямоугольники, полигоны)
+```
 
-Короткий вывод по артефактам: для node-backed сценария финальная разметка живёт в `annotations`, а не в R2 sidecar JSON. R2 нужен прежде всего для HTML/MD/crops и для входных job snapshots.
+**Что делает каждый компонент:**
 
-### Важное расхождение по sidecar-артефактам
+- **FileDownloadMixin** ([file_download.py](../app/gui/file_download.py)) — создаёт temp workspace, скачивает PDF и sidecar-файлы из R2. Не скачивает повторно если файл уже есть.
+- **NavigationManager** ([navigation_manager.py](../app/gui/navigation_manager.py)) — листание страниц (вперёд/назад/к номеру), сохранение зума для каждой страницы.
+- **PageViewer** ([page_viewer.py](../app/gui/page_viewer.py)) — графическая сцена Qt. Показывает страницу PDF как картинку и рисует поверх блоки. 5 миксинов: контекстное меню, обработка мыши, отрисовка блоков, полигоны, ручки изменения размера.
+- **PDFDocument** ([pdf_utils.py](../rd_core/pdf_utils.py)) — обёртка над PyMuPDF. Рендер страницы в PIL Image. Два режима: 150 DPI (быстрый превью) и 300 DPI (для OCR).
+- **AnnotationDBIO** ([annotation_db.py](../app/annotation_db.py)) — загрузка разметки из Supabase с автоматической миграцией старых форматов.
+- **annotation_canonicalizer** ([annotation_canonicalizer.py](../rd_core/annotation_canonicalizer.py)) — проверяет что координаты блоков соответствуют реальным размерам страницы PDF. Если размеры не совпадают — пересчитывает.
 
-- Репозиторий до сих пор содержит заметное количество ссылок на `_result.json` и local/legacy `annotation.json`.
-- В examined current paths local OCR действительно пишет `annotation.json`, но server-side result generation делает ставку на enriched annotation в Supabase плюс HTML/MD/crops в R2.
-- Иными словами, часть кода уже живёт в модели `DB + R2 files`, а часть всё ещё ожидает sidecar JSON как полноценный продуктовый артефакт.
+**Кеширование:**
 
-## Слой 4. Узкие места
+- R2 файлы кешируются на диске ([r2_disk_cache.py](../rd_core/r2_disk_cache.py)) — LRU кеш с TTL.
+- Существование файлов в R2 кешируется в памяти ([r2_metadata_cache.py](../rd_core/r2_metadata_cache.py)) — экономит HEAD-запросы.
+- Зум-состояние каждой страницы сохраняется в `NavigationManager.page_zoom_states`.
 
-| Ранг | Узкое место | Где видно | Почему это bottleneck | Практический эффект |
-| --- | --- | --- | --- | --- |
-| 1 | `JobsController` как orchestration god object | [`app/gui/remote_ocr/jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py) | Один файл совмещает режимы local/remote, correction logic, polling, snapshot persistence, create job, auto-download и merge результатов | Любое изменение OCR-флоу требует править один перегруженный модуль и проверять оба режима |
-| 2 | Синхронные Supabase/R2 вызовы из GUI | [`app/gui/file_operations.py`](../app/gui/file_operations.py), [`app/gui/file_download.py`](../app/gui/file_download.py), [`app/gui/file_auto_save.py`](../app/gui/file_auto_save.py), [`app/gui/project_tree/widget.py`](../app/gui/project_tree/widget.py) | GUI-слой напрямую создаёт `TreeClient()` и `R2Storage()` и делает сетевые операции вне общего service boundary | Сложнее тестировать, выше шанс UI-latency и дублирования error/caching логики |
-| 3 | Тяжёлая OCR post-processing стадия | [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py), [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py), [`services/remote_ocr/server/block_verification.py`](../services/remote_ocr/server/block_verification.py) | Генерация артефактов, verification retry, model swap, upload и sync с persistence смешаны в одном критическом пути | Долгий latency path, дорого разбирать partial failures, тяжело локально профилировать |
-| 4 | Legacy-ветки и storage drift | [`rd_core/annotation_io.py`](../rd_core/annotation_io.py), [`rd_core/sidecar_resolver.py`](../rd_core/sidecar_resolver.py), [`app/gui/project_tree/legacy_migration.py`](../app/gui/project_tree/legacy_migration.py), `/_result.json` expectations по репозиторию | Система поддерживает сразу несколько поколений аннотаций и sidecar-схем | Повышается цена изменений и вероятность того, что новый поток сломает старую совместимость |
-| 5 | Temp workspace/session churn | [`app/gui/file_download.py`](../app/gui/file_download.py), [`app/gui/temp_session.py`](../app/gui/temp_session.py), [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py), [`services/remote_ocr/server/job_stages.py`](../services/remote_ocr/server/job_stages.py) | Почти все non-trivial сценарии создают временные директории и копируют PDF/crops | Дополнительный I/O, сложный cleanup, неоднозначные “живые” и “временные” файлы для диагностики |
-| 6 | Shared tables с несколькими владельцами | `jobs`, `annotations`, `node_files` через GUI и server storage слои | Одна и та же сущность записывается разными клиентами и в разном темпе | Трудно жёстко определить owner-слой и инварианты данных |
+---
 
-### Что это значит на практике
+## 4. Разметка блоков
 
-- Самые дорогие для сопровождения изменения лежат не в OCR backend-ах, а в orchestration и persistence glue.
-- Узкие места в основном не вычислительные, а организационные: “кто главный источник правды” и “какой слой имеет право писать”.
-- Без явного разделения канона и совместимости дрейф артефактов будет продолжаться.
+**Что происходит:** пользователь рисует прямоугольники или полигоны на странице PDF. Каждый нарисованный элемент становится «блоком» с уникальным ID. Блоки сохраняются в Supabase автоматически.
 
-## Слой 5. Карта дублирования
+```
+Пользователь рисует прямоугольник на странице
+       │
+       ▼
+MouseEventsMixin фиксирует координаты
+       │
+       ▼
+BlockDrawMixin._on_block_drawn(x, y, w, h)
+       │
+       ├──→  Генерация ArmorID (OCR-устойчивый ID)
+       │
+       ├──→  Создание Block(coords_px, coords_norm, block_type)
+       │
+       ├──→  Добавление на Page → Document
+       │
+       ├──→  PageViewer отрисовывает прямоугольник
+       │
+       └──→  BlocksTreeManager обновляет дерево блоков
+              │
+              ▼
+       AnnotationCache (дебаунс, dirty-флаг)
+              │
+              ▼
+       AnnotationDBIO.save_to_db(document, node_id)  ──→  Supabase: annotations
+```
 
-| Поведение | Где живёт сейчас | Почему появилось | Чем рискует | Что считать каноном |
-| --- | --- | --- | --- | --- |
-| Генерация OCR-результатов | Local: [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) `_generate_local_results()`; Remote: [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) `generate_results()` / `_generate_correction_results()` | Local OCR был построен как desktop-адаптация server pipeline без Celery/HTTP | Исправления в post-processing, naming и verification нужно переносить дважды; дрейф артефактов уже заметен | Доменная логика результата ближе всего к remote `task_results.py`; local pipeline должен быть thin adapter |
-| Создание OCR job | GUI: `_server_create_job()` и legacy `_remote_create_job()` в [`jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py); Server: `create_node_job_handler()` и `create_job_handler()` в [`create_handler.py`](../services/remote_ocr/server/routes/jobs/create_handler.py) | Новый node-backed fast path добавлен поверх старого upload API | Валидация, queue checks и регистрация файлов могут разойтись | Для текущего tree workflow канон: `JobsController._server_create_job()` + `/jobs/node` |
-| Загрузка и миграция аннотаций | GUI: [`app/annotation_db.py`](../app/annotation_db.py), local result reload в [`jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py); Server: [`services/remote_ocr/server/node_storage/ocr_registry.py`](../services/remote_ocr/server/node_storage/ocr_registry.py); Legacy helpers в [`rd_core/annotation_io.py`](../rd_core/annotation_io.py) | GUI нужен `Document`, серверу нужен dict, а старые форматы всё ещё живы | Разные migration/fallback правила и разные HTTP-обвязки для одного и того же ресурса | Канон: `annotations` как source of truth; адаптация к `Document` или raw dict должна быть вторичной |
-| Прямой доступ GUI к `TreeClient` и `R2Storage` в обход фасада | [`app/services.py`](../app/services.py) существует, но множество GUI модулей создают клиентов напрямую | Фасад появился позже, когда прямые вызовы уже расползлись по mixin-слоям | Непоследовательные timeout/caching/logging, лишний coupling, сложнее мокать | Для GUI канон должен быть `app.services` |
-| Применение OCR-результатов в открытый документ | Local merge: `_reload_annotation_from_result()`; Remote merge: `_on_remote_result_loaded()` в [`jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py) | Источник результата разный: local filesystem vs Supabase | Могут разойтись правила merge, очистки `is_correction`, preview refresh и autosave | Канон должен быть единый helper `result source -> block field map -> apply to current document` |
-| Sidecar naming и старые JSON-ожидания | [`rd_core/sidecar_resolver.py`](../rd_core/sidecar_resolver.py), [`services/remote_ocr/server/r2_keys.py`](../services/remote_ocr/server/r2_keys.py), [`app/gui/project_tree/legacy_migration.py`](../app/gui/project_tree/legacy_migration.py), UI references to `_result.json` | Архитектура переехала с sidecar JSON на `annotations` + R2 files, но совместимость сохранена | Модули продолжают ожидать файлы, которые новые потоки уже не считают основными | Канон: `annotations` + `node_files`/R2 HTML/MD/crops; sidecar JSON — только compatibility layer |
+**Три типа блоков:**
 
-Короткий вывод по дублированию: большая часть дублирования поведенческая, а не текстовая. Код повторяет не строки, а право решать одни и те же задачи в нескольких местах.
+| Тип | Для чего | OCR-бэкенд |
+|-----|---------|-------------|
+| **TEXT** | Текстовые области (абзацы, заголовки, таблицы) | Chandra (chandra-ocr-2) |
+| **IMAGE** | Иллюстрации, схемы, чертежи | Qwen (qwen3.5-27b) |
+| **STAMP** | Штампы, печати, QR-коды | Qwen (qwen3.5-9b) |
 
-## Hotspots, на которые стоит смотреть первыми
+**ArmorID** ([armor_id.py](../rd_core/models/armor_id.py)) — специальный формат ID блока (11 символов: `XXXX-XXXX-XXX`). Использует алфавит из 26 символов, устойчивых к OCR-путанице (нет похожих пар типа 0/O, 1/I). Может восстановить до 3 ошибок с помощью матрицы OCR-конфузий.
 
-| Файл | Размер | Почему hotspot |
-| --- | --- | --- |
-| [`app/gui/remote_ocr/jobs_controller.py`](../app/gui/remote_ocr/jobs_controller.py) | 1278 строк | Главная точка схождения local/remote OCR, correction mode, polling и result apply |
-| [`services/remote_ocr/server/block_verification.py`](../services/remote_ocr/server/block_verification.py) | 654 строки | Скрытая стоимость post-processing и retry логики |
-| [`app/ocr/local_pipeline.py`](../app/ocr/local_pipeline.py) | 629 строк | Local OCR orchestration, artefact generation и sync в tree storage |
-| [`app/gui/project_tree/widget.py`](../app/gui/project_tree/widget.py) | 422 строки | Tree navigation, locking, context actions, legacy migration |
-| [`app/gui/main_window.py`](../app/gui/main_window.py) | 396 строк | Центральный state shell с mixin-boundaries |
-| [`services/remote_ocr/server/task_results.py`](../services/remote_ocr/server/task_results.py) | 383 строки | Каноническая бизнес-логика server-side результатов и correction merge |
+**Координаты блока:** хранятся в двух форматах одновременно:
+- `coords_px` — пиксельные координаты на текущем рендере страницы
+- `coords_norm` — нормализованные координаты (0..1), не зависят от масштаба
 
-## Проверка покрытия карты сценариями
+**Undo/Redo** ([undo_redo_mixin.py](../app/gui/undo_redo_mixin.py)) — перед каждым изменением блоков сохраняется полная копия состояния страницы. Максимум 50 шагов отмены.
 
-- Открытие локального PDF покрыто секцией “Открытие локального PDF”.
-- Открытие tree-backed документа через temp workspace покрыто секцией “Открытие tree-backed документа через temp workspace”.
-- Чтение, миграция и сохранение аннотаций в Supabase покрыты секциями “Ландшафт системы”, “Редактирование блоков и autosave” и “Карта документов и артефактов”.
-- Local OCR путь `GUI -> LocalOcrRunner -> local_pipeline -> result files -> apply back` покрыт секциями “Запуск local OCR” и “Применение OCR-результатов”.
-- Remote OCR путь `GUI/API -> jobs -> Celery -> task_results -> node_files/annotations -> apply back` покрыт секциями “Запуск remote OCR” и “Применение OCR-результатов”.
-- Correction mode покрыт отдельной секцией и отражён в карте дублирования.
-- Legacy sidecar и legacy annotation схемы отражены как compatibility layer, а не как основной продуктовый путь.
+**Формируемый документ:** **Annotation JSON** — сохраняется в таблицу `annotations` в Supabase. Формат v2: `{pages: [{page_index, width, height, blocks: [...]}]}`.
 
-## Базовая верификация
+---
 
-По состоянию анализа уже был выполнен `pytest -q` без мутаций кода:
+## 5. Локальный OCR
 
-- `237` тестов прошли;
-- `3` теста упали;
-- два падения связаны с отсутствием `.env.example`;
-- одно падение связано с контрактом stamp formatting и ключом `Наименование`.
+**Что происходит:** пользователь нажимает «Запустить OCR» → создаётся отдельный процесс → PDF нарезается на кропы блоков → каждый кроп отправляется в LLM-модель → результаты собираются в HTML и Markdown.
 
-Это не меняет саму карту, но подтверждает две важные вещи:
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ДЕСКТОП (основной процесс)                                 │
+│                                                             │
+│  Пользователь нажимает "Запустить OCR"                      │
+│         │                                                   │
+│         ▼                                                   │
+│  JobsController подготавливает блоки                        │
+│  (smart mode: только блоки без OCR, correction: повторные)  │
+│         │                                                   │
+│         ▼                                                   │
+│  flush autosave → sync аннотации в Supabase                │
+│         │                                                   │
+│         ▼                                                   │
+│  LocalOcrRunner.submit_job(pdf, blocks, output_dir)         │
+│         │                                                   │
+│         ▼                                                   │
+│  multiprocessing.Process(target=run_local_ocr)              │
+│         │           ▲                                       │
+│         │           │  multiprocessing.Queue                │
+│         │           │  (прогресс, статус)                   │
+│         ▼           │                                       │
+│  ┌──────────────────┴─────────────────────────────────────┐ │
+│  │  SUBPROCESS (изолированная память)                     │ │
+│  │                                                        │ │
+│  │  ┌── PASS 1: Нарезка кропов ────────────────────────┐  │ │
+│  │  │                                                  │  │ │
+│  │  │  PDF страница → рендер 300 DPI (полное качество)  │  │ │
+│  │  │       │                                          │  │ │
+│  │  │       ▼                                          │  │ │
+│  │  │  Для каждого блока:                              │  │ │
+│  │  │    вырезать область → сохранить как PDF-кроп     │  │ │
+│  │  │       │                                          │  │ │
+│  │  │       ▼                                          │  │ │
+│  │  │  TwoPassManifest (список кропов + метаданные)    │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
+│  │                         │                              │ │
+│  │                         ▼                              │ │
+│  │  ┌── PASS 2: Распознавание (3 фазы) ───────────────┐  │ │
+│  │  │                                                  │  │ │
+│  │  │  Фаза A: TEXT блоки                              │  │ │
+│  │  │    ChandraBackend → LM Studio (chandra-ocr-2)    │  │ │
+│  │  │    Промпт: «Распознай текст, верни HTML»         │  │ │
+│  │  │                                                  │  │ │
+│  │  │  ── пауза: смена модели в LM Studio ──           │  │ │
+│  │  │                                                  │  │ │
+│  │  │  Фаза B: STAMP блоки                             │  │ │
+│  │  │    QwenBackend → LM Studio (qwen3.5-9b)          │  │ │
+│  │  │    Промпт: «Опиши штамп, извлеки данные»         │  │ │
+│  │  │                                                  │  │ │
+│  │  │  ── пауза: смена модели в LM Studio ──           │  │ │
+│  │  │                                                  │  │ │
+│  │  │  Фаза C: IMAGE блоки                             │  │ │
+│  │  │    QwenBackend → LM Studio (qwen3.5-27b)         │  │ │
+│  │  │    Промпт: «Опиши изображение»                   │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
+│  │                         │                              │ │
+│  │                         ▼                              │ │
+│  │  ┌── Верификация ───────────────────────────────────┐  │ │
+│  │  │  block_verification.py                           │  │ │
+│  │  │  Проверка качества: пустые ответы, ошибки,       │  │ │
+│  │  │  подозрительный вывод → повторная попытка        │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
+│  │                         │                              │ │
+│  │                         ▼                              │ │
+│  │  ┌── Генерация результатов ─────────────────────────┐  │ │
+│  │  │  result_pipeline.py                              │  │ │
+│  │  │    → OCR HTML  (html_generator.py)               │  │ │
+│  │  │    → Markdown  (md/generator.py)                 │  │ │
+│  │  │    → annotation.json (обогащённые блоки)         │  │ │
+│  │  │    → export_report.json (статистика)             │  │ │
+│  │  └──────────────────────────────────────────────────┘  │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                                                             │
+│  После завершения subprocess:                               │
+│  auto_download_result → merge OCR-полей обратно в документ  │
+│  → autosave → sync в Supabase                              │
+│  → sync HTML/MD/crops в R2 + node_files (если tree-backed)  │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- в репозитории есть отдельный пласт документно-конфигурационного долга;
-- часть OCR/formatting контрактов уже живёт как зафиксированное поведение тестов, а не только как “ожидание из кода”.
+**Что делает каждый компонент:**
 
+- **JobsController** ([jobs_controller.py](../app/gui/remote_ocr/jobs_controller.py)) — оркестратор: выбор режима (local/remote), correction mode, подготовка блоков, polling, apply результатов обратно в документ. Самый нагруженный модуль GUI (~1278 строк).
+- **LocalOcrRunner** ([local_runner.py](../app/ocr/local_runner.py)) — создаёт `multiprocessing.Process` для изоляции памяти. Общается с GUI через Queue (прогресс, ошибки, завершение). Qt-сигналы: `job_created`, `job_updated`, `job_finished`.
+- **local_pipeline.py** ([local_pipeline.py](../app/ocr/local_pipeline.py)) — точка входа в subprocess. Загружает конфиг, создаёт бэкенды, запускает двухпроходный конвейер, генерирует артефакты, опционально синхронизирует в tree storage.
+- **pass1_crops** ([pass1_crops.py](../rd_core/pipeline/pass1_crops.py)) — рендерит PDF-страницы в 300 DPI, вырезает область каждого блока, сохраняет как PDF-кроп на диск.
+- **pass2_ocr_async** ([pass2_ocr_async.py](../rd_core/pipeline/pass2_ocr_async.py)) — асинхронно отправляет кропы в LLM. Три фазы: text → stamp → image. Между фазами меняется модель в LM Studio.
+- **ChandraBackend** ([chandra.py](../rd_core/ocr/chandra.py)) — OCR для текста. Retry 3 раза с exponential backoff. Авто-retry при обрезке ответа (finish_reason=length).
+- **QwenBackend** ([qwen.py](../rd_core/ocr/qwen.py)) — OCR для картинок и штампов. Два варианта: 9b (штампы, быстрее) и 27b (картинки, точнее).
+- **block_verification** ([block_verification.py](../rd_core/ocr/block_verification.py)) — проверяет качество OCR. Детектирует: пустые ответы, JSON-дампы вместо текста, «размышления» модели, подозрительно короткий текст.
+- **result_pipeline** ([result_pipeline.py](../rd_core/ocr/result_pipeline.py)) — собирает все результаты в финальные файлы: HTML, Markdown, JSON.
+
+**Checkpoint** ([checkpoint_models.py](../rd_core/pipeline/checkpoint_models.py)) — после каждой фазы сохраняется состояние. Если процесс упал, можно продолжить с того же места.
+
+**Формируемые документы:**
+
+| Документ | Генератор | Назначение |
+|----------|----------|-----------|
+| OCR HTML | [html_generator.py](../rd_core/ocr/html_generator.py) | Полный документ с разметкой для просмотра |
+| Markdown | [md/generator.py](../rd_core/ocr/md/generator.py) | Текстовый формат для внешних потребителей |
+| annotation.json | [local_pipeline.py](../app/ocr/local_pipeline.py) | Обогащённые блоки (ocr_text, ocr_html заполнены) |
+| export_report.json | [local_pipeline.py](../app/ocr/local_pipeline.py) | Статистика генерации (только локально) |
+
+---
+
+## 6. Удалённый OCR (сервер)
+
+**Что происходит:** пользователь отправляет задачу на сервер → сервер ставит в очередь → Celery worker обрабатывает → результат загружается в R2 → десктоп скачивает и применяет.
+
+### Десктоп: отправка задачи
+
+```
+Пользователь нажимает "Отправить на сервер"
+       │
+       ▼
+JobsController flush autosave → sync аннотации
+       │
+       ▼
+POST /jobs/node (tree-backed)  ──→  FastAPI сервер
+или POST /jobs (legacy upload)
+       │
+       ▼
+Десктоп начинает polling: GET /jobs (каждые N секунд)
+```
+
+### Сервер: 7 стадий обработки
+
+```
+POST /jobs → FastAPI → Celery queue (Redis)
+       │
+       ▼
+┌─── Стадия 1: VALIDATE ──────────────────────────────────┐
+│ Проверяет: не дубль ли это? не отменена ли задача?       │
+│ Не превышен ли лимит попыток (3)? Не истекло ли время?   │
+│ Захватывает execution_lock в Redis (атомарно, NX).       │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 2: BOOTSTRAP ─────────────────────────────────┐
+│ Скачивает PDF и аннотацию из R2 / Supabase.             │
+│ Парсит блоки из JSON. Фильтрует (correction mode).      │
+│ Создаёт тройку бэкендов (Chandra + 2x Qwen).           │
+│ Загружает модели в LM Studio.                           │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 3: RUN_OCR ───────────────────────────────────┐
+│ Тот же двухпроходный конвейер что и в локальном OCR:    │
+│ Pass 1 (кропы) → Pass 2 (text → stamp → image).        │
+│ Код общий: rd_core/pipeline/.                           │
+│ + checkpoint для восстановления при падении.            │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 4: GENERATE ──────────────────────────────────┐
+│ Генерирует HTML, Markdown, result.json.                 │
+│ Запускает верификацию и повторные попытки.               │
+│ Correction mode: загружает existing annotation из       │
+│ Supabase и обновляет только correction-блоки.           │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 5: UPLOAD ────────────────────────────────────┐
+│ Загружает все результаты в R2:                          │
+│ HTML, MD, result.json, кропы блоков.                    │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 6: REGISTER ──────────────────────────────────┐
+│ Записывает enriched аннотацию в Supabase (annotations). │
+│ Регистрирует файлы в node_files.                        │
+│ Обновляет pdf_status узла.                              │
+└──────────────────────────┬───────────────────────────────┘
+                           ▼
+┌─── Стадия 7: FINALIZE ──────────────────────────────────┐
+│ Очищает временные файлы и рабочую директорию.           │
+│ Отпускает execution_lock. Выгружает модели.             │
+│ Ставит статус "done".                                   │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Инфраструктура сервера
+
+| Компонент | Файл | Что делает простым языком |
+|-----------|------|--------------------------|
+| **Execution Lock** | [execution_lock.py](../services/remote_ocr/server/execution_lock.py) | Redis-замок: одна задача не может обрабатываться двумя воркерами одновременно |
+| **Zombie Detector** | [zombie_detector.py](../services/remote_ocr/server/zombie_detector.py) | Каждые 5 минут ищет «зависшие» задачи (processing дольше 2-6 часов) и помечает как ошибку |
+| **Rate Limiter** | [rate_limiter.py](../services/remote_ocr/server/rate_limiter.py) | Ограничивает число одновременных запросов к LM Studio, чтобы не перегрузить GPU |
+| **Debounced Updater** | [debounced_updater.py](../services/remote_ocr/server/debounced_updater.py) | Обновляет прогресс в Supabase не чаще 1 раза в 3 секунды (экономит запросы) |
+| **LM Studio Lifecycle** | [lmstudio_lifecycle.py](../services/remote_ocr/server/lmstudio_lifecycle.py) | Управляет загрузкой/выгрузкой моделей. Grace period 120с перед выгрузкой |
+| **Dynamic Timeout** | [timeout_utils.py](../services/remote_ocr/server/timeout_utils.py) | Вычисляет таймаут задачи по формуле: base + (блоки * секунды_на_блок) + буфер |
+
+### Применение результатов обратно в документ
+
+```
+Polling замечает статус "done"
+       │
+       ▼
+Local: auto_download_result → _reload_annotation_from_result(output_dir)
+Remote: _remote_download_result → читает аннотацию из Supabase
+       │
+       ▼
+Обе ветки: строят {block_id → OCR fields}
+       │
+       ▼
+Merge ocr_text/ocr_html/ocr_json/ocr_meta в текущий annotation_document
+(не заменяют документ целиком — мерджат поля по block.id)
+       │
+       ▼
+_render_current_page() + обновление blocks tree + OCR preview
+       │
+       ▼
+autosave → sync в Supabase
+```
+
+---
+
+## 7. Получение результатов
+
+**Что происходит:** после завершения OCR приложение ищет файлы результатов, скачивает их и показывает пользователю.
+
+```
+OCR завершён (статус "done")
+       │
+       ▼
+sidecar_resolver.py ищет файлы результатов:
+       │
+       ├── 1. Запись в node_files (предпочтительно)
+       ├── 2. Путь tree_docs/{node_id}/ (текущая схема)
+       ├── 3. Путь рядом с PDF (легаси)
+       └── 4. Не найдено
+       │
+       ▼
+R2Storage.download_file()  ──→  скачивание HTML/MD
+       │
+       ▼
+OcrPreviewWidget (QWebEngineView)
+       │
+       ▼
+Пользователь видит распознанный текст в панели справа
+```
+
+**Проверка качества результатов** ([ocr_result.py](../rd_core/ocr_result.py)):
+
+| Маркер | Значение |
+|--------|---------|
+| Чистый текст | Успешное распознавание |
+| `[Ошибка: ...]` | Повторяемая ошибка (можно перезапустить) |
+| `[НеПовторяемая ошибка: ...]` | Постоянная ошибка (блок нераспознаваем) |
+
+Детектор подозрительного вывода (`is_suspicious_output`) ловит:
+- JSON-дампы вместо текста
+- «Размышления» модели («I need to...», «Давайте...»)
+- Слишком мало текста (< 20 символов в длинном ответе)
+
+**PDF Status** ([pdf_status.py](../rd_core/pdf_status.py)) — итоговый статус документа:
+- `COMPLETE` — все файлы и блоки на месте
+- `MISSING_FILES` — OCR HTML или другие файлы отсутствуют
+- `MISSING_BLOCKS` — аннотация есть, но часть страниц без блоков
+
+---
+
+## 8. Карта хранилищ данных
+
+Где лежат данные и как к ним обращаются:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     SUPABASE (PostgreSQL)                │
+│                                                         │
+│  tree_nodes ──── Дерево проектов (папки, документы)     │
+│  node_files ──── Метаданные файлов (R2-ключи, типы)    │
+│  annotations ─── JSON-разметка блоков (формат v2)      │
+│  jobs ────────── Задачи OCR (local + remote)           │
+│  job_settings ── Настройки OCR (модели, режимы)        │
+│                                                         │
+│  Доступ: TreeClient (десктоп), storage_*.py (сервер)   │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│                     CLOUDFLARE R2 (S3)                   │
+│                                                         │
+│  tree_docs/{node_id}/ ── PDF, OCR HTML, MD, кропы      │
+│  local://ocr_jobs/{id}/ ── standalone задачи           │
+│                                                         │
+│  Доступ: R2Storage singleton (boto3, пул 20 потоков)   │
+│  Кеш: r2_disk_cache (файлы), r2_metadata_cache (HEAD)  │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│                     REDIS                                │
+│                                                         │
+│  celery (брокер) ── очередь задач                      │
+│  ocr:executing:{id} ── execution lock                  │
+│  ocr:lmstudio:jobs ── активные модели                  │
+│  pause_cache ── кеш статусов паузы (15с TTL)           │
+│  jobs_list_cache ── кеш списка задач (5с TTL)          │
+│                                                         │
+│  Доступ: Celery (брокер), прямые SET/GET               │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│                     ЛОКАЛЬНЫЙ ДИСК                       │
+│                                                         │
+│  Temp workspace ── скачанные PDF для просмотра         │
+│  Временные кропы (pass1) ── удаляются после OCR        │
+│  R2 кеш (LRU) ── скачанные файлы                      │
+│  Логи (logs/client.log) ── ротация 5MB x 3             │
+│                                                         │
+│  Доступ: прямой I/O, r2_disk_cache                     │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. Карта формирования документов
+
+Какой артефакт → где рождается → где хранится → кто потребляет:
+
+| Артефакт | Где рождается | Где хранится | Кто потребляет |
+|----------|--------------|-------------|---------------|
+| **Annotation JSON** (разметка блоков) | `Document.to_dict()` через `AnnotationDBIO` (десктоп) или `ocr_registry` (сервер) | Supabase `annotations` | PageViewer, OCR pipeline, correction mode |
+| **`annotation.json`** (snapshot) | [local_pipeline.py](../app/ocr/local_pipeline.py) (local), [create_handler.py](../services/remote_ocr/server/routes/jobs/create_handler.py) (remote input) | Локальный output_dir, R2 | Local result merge, server bootstrap |
+| **OCR HTML** (`*_ocr.html`) | [html_generator.py](../rd_core/ocr/html_generator.py) | R2 + `node_files`, local output_dir | OcrPreviewWidget, браузер |
+| **Markdown** (`*_document.md`) | [md/generator.py](../rd_core/ocr/md/generator.py) | R2 + `node_files`, local output_dir | Экспорт, LLM-сценарии |
+| **Кропы блоков** (`crops/{block_id}.pdf`) | [pass1_crops.py](../rd_core/pipeline/pass1_crops.py) | Диск (temp) → R2 + `node_files` | Chandra, Qwen (OCR вход) |
+| **Export report** (`*_export_report.json`) | [local_pipeline.py](../app/ocr/local_pipeline.py) | Только local output_dir | Пользователь (анализ) |
+| **Job record** | [local_runner.py](../app/ocr/local_runner.py), [storage_jobs.py](../services/remote_ocr/server/storage_jobs.py) | Supabase `jobs` | RemoteOCRPanel, polling |
+| **Node files registry** | [local_pipeline.py](../app/ocr/local_pipeline.py), [ocr_registry.py](../services/remote_ocr/server/node_storage/ocr_registry.py) | Supabase `node_files` | Sidecar resolver, tree download |
+
+**Важное расхождение:** local OCR пишет `annotation.json` как sidecar-файл, а server-side делает ставку на enriched annotation в Supabase + HTML/MD/crops в R2. Часть кода живёт в модели «DB + R2 files», а часть ещё ожидает sidecar JSON.
+
+---
+
+## 10. Узкие места
+
+### A. JobsController как god object
+
+**Где:** [jobs_controller.py](../app/gui/remote_ocr/jobs_controller.py) (~1278 строк)
+
+**Что происходит:** один файл совмещает local/remote OCR режимы, correction logic, polling, snapshot persistence, create job, auto-download и merge результатов.
+
+**Влияние:** любое изменение OCR-флоу требует править один перегруженный модуль и проверять оба режима.
+
+### B. Смена моделей LM Studio
+
+**Где:** `pass2_ocr_async` — между фазами text → stamp → image.
+
+**Что происходит:** LM Studio может держать в памяти только одну модель. При переходе между фазами старая модель выгружается, новая загружается. Это занимает 30-120 секунд.
+
+**Влияние:** задача с 3 типами блоков тратит 1-4 минуты только на переключение моделей.
+
+### C. Синхронные Supabase/R2 вызовы из GUI
+
+**Где:** [file_operations.py](../app/gui/file_operations.py), [file_download.py](../app/gui/file_download.py), [widget.py](../app/gui/project_tree/widget.py)
+
+**Что происходит:** GUI-слой напрямую создаёт `TreeClient()` и `R2Storage()` и делает сетевые операции. Не все из них вынесены в фоновые потоки.
+
+**Влияние:** UI latency при медленной сети, сложнее тестировать.
+
+### D. Тяжёлая OCR post-processing стадия
+
+**Где:** [local_pipeline.py](../app/ocr/local_pipeline.py), [task_results.py](../services/remote_ocr/server/task_results.py)
+
+**Что происходит:** генерация артефактов, verification retry, model swap, upload и sync с persistence смешаны в одном критическом пути.
+
+**Влияние:** долгий latency, дорого разбирать partial failures.
+
+### E. Legacy-ветки и storage drift
+
+**Где:** [annotation_io.py](../rd_core/annotation_io.py), [sidecar_resolver.py](../rd_core/sidecar_resolver.py)
+
+**Что происходит:** система одновременно поддерживает несколько поколений аннотаций (v0, v1, v2) и sidecar-схем (node_files, tree_docs, рядом с PDF).
+
+**Влияние:** повышается цена изменений. Новый поток может сломать старую совместимость.
+
+### F. Рендер 300 DPI для OCR
+
+**Где:** `pass1_crops` — рендер страниц для нарезки кропов.
+
+**Что происходит:** страница A0 при 300 DPI — это ~140 мегапикселей.
+
+**Смягчение:** `StreamingPDFProcessor` адаптивно снижает DPI для больших страниц (лимит 100M пикселей). Subprocess изолирует память — после OCR вся память освобождается.
+
+### G. Deep copy для Undo/Redo
+
+**Где:** [undo_redo_mixin.py](../app/gui/undo_redo_mixin.py) — до 50 полных копий состояния.
+
+**Что происходит:** перед каждым действием копируется весь список блоков страницы.
+
+**Влияние:** при 500+ блоках на странице — заметный расход RAM.
+
+### H. Shared tables с несколькими владельцами
+
+**Где:** `jobs`, `annotations`, `node_files` — пишутся и из GUI, и из сервера.
+
+**Влияние:** трудно определить owner-слой и инварианты данных.
+
+---
+
+## 11. Дублирование
+
+### A. Генерация OCR-результатов (поведенческое)
+
+| Путь | Файл |
+|------|------|
+| Local | [local_pipeline.py](../app/ocr/local_pipeline.py) `_generate_local_results()` |
+| Remote | [task_results.py](../services/remote_ocr/server/task_results.py) `generate_results()` |
+
+**Почему:** local OCR был построен как desktop-адаптация server pipeline без Celery/HTTP. Оба вызывают `rd_core` для генерации, но оборачивают по-разному.
+
+**Риск:** исправления в post-processing нужно переносить дважды; дрейф артефактов уже заметен.
+
+### B. Два пути сохранения аннотаций
+
+| Путь | Файл | Контекст |
+|------|------|---------|
+| Десктоп | [annotation_db.py](../app/annotation_db.py) `AnnotationDBIO` | Сохранение из GUI (autosave, ручной) |
+| Сервер | [ocr_registry.py](../services/remote_ocr/server/node_storage/ocr_registry.py) | Сохранение после OCR (с enriched блоками) |
+
+**Оба пишут в одну таблицу** `annotations`. Разные migration/fallback правила и разные HTTP-обвязки для одного ресурса.
+
+### C. Два пути применения OCR-результатов в документ
+
+| Путь | Метод в [jobs_controller.py](../app/gui/remote_ocr/jobs_controller.py) |
+|------|------|
+| Local | `_reload_annotation_from_result()` — из filesystem |
+| Remote | `_on_remote_result_loaded()` — из Supabase |
+
+**Риск:** могут разойтись правила merge, очистки `is_correction`, preview refresh и autosave.
+
+### D. Shim-файлы сервера (осознанное)
+
+Сервер содержит файлы-прокладки, которые реэкспортируют классы из `rd_core`:
+
+| Серверный файл | Источник |
+|---------------|---------|
+| `server/checkpoint_models.py` | `rd_core/pipeline/checkpoint_models.py` |
+| `server/manifest_models.py` | `rd_core/pipeline/manifest_models.py` |
+| `server/memory_utils.py` | `rd_core/pipeline/memory_utils.py` |
+| `server/worker_prompts.py` | `rd_core/pipeline/prompts.py` |
+
+**Зачем:** стабильный API для сервера. Если `rd_core` изменит структуру, достаточно обновить один shim. Это осознанное решение, не проблема.
+
+### E. Прямой доступ GUI к TreeClient/R2 в обход фасада
+
+[services.py](../app/services.py) существует как фасад, но множество GUI модулей создают клиентов напрямую. Фасад появился позже, когда прямые вызовы уже расползлись по mixin-слоям.
+
+### F. Кеширование (5 отдельных реализаций)
+
+| Кеш | Что кешируется |
+|-----|---------------|
+| `TreeNodeCache` | Узлы дерева (TTL 120с) |
+| `PdfStatusCache` | Статусы PDF |
+| [r2_disk_cache.py](../rd_core/r2_disk_cache.py) | Скачанные файлы (LRU) |
+| [r2_metadata_cache.py](../rd_core/r2_metadata_cache.py) | Существование файлов (TTL) |
+| Redis `pause_cache` / `jobs_list_cache` | Состояние задач (5-15с TTL) |
+
+---
+
+## Hotspots — файлы, на которые стоит смотреть первыми
+
+| Файл | Строк | Почему hotspot |
+|------|-------|---------------|
+| [jobs_controller.py](../app/gui/remote_ocr/jobs_controller.py) | ~1278 | Главная точка схождения local/remote OCR, correction, polling, result merge |
+| [local_pipeline.py](../app/ocr/local_pipeline.py) | ~629 | Local OCR orchestration, artefact generation и sync в tree |
+| [task_results.py](../services/remote_ocr/server/task_results.py) | ~383 | Каноническая бизнес-логика server-side результатов |
+| [job_stages.py](../services/remote_ocr/server/job_stages.py) | ~350+ | 7 стадий серверной обработки |
+| [widget.py](../app/gui/project_tree/widget.py) | ~422 | Tree navigation, locking, context actions |
+| [main_window.py](../app/gui/main_window.py) | ~396 | Центральный state shell с mixin-boundaries |

@@ -1,0 +1,48 @@
+# Docker Compose для production (единый контейнер на ПК с GPU)
+#
+# Запуск:
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+#
+# Требования:
+#   - NVIDIA GPU + nvidia-container-toolkit
+#   - .env файл в корне проекта
+#   - Tailscale установлен на ПК
+
+services:
+  rd-ocr:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      - CHANDRA_BASE_URL=http://localhost:1234
+      - QWEN_BASE_URL=http://localhost:1234
+    volumes:
+      - lmstudio_models:/root/.cache/lm-studio
+      - ocr_data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 8g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  lmstudio_models:
+  ocr_data:

@@ -6,7 +6,6 @@ from typing import Optional
 from fastapi import Form, HTTPException
 from pydantic import BaseModel
 
-from services.remote_ocr.server.celery_app import celery_app
 from services.remote_ocr.server.logging_config import get_logger
 from services.remote_ocr.server.routes.common import require_job
 from services.remote_ocr.server.routes.jobs.update_handlers import (
@@ -23,17 +22,15 @@ _logger = get_logger(__name__)
 
 def _revoke_and_resubmit(job_id: str, old_celery_task_id: Optional[str],
                          new_priority: int) -> str:
-    """Отозвать старую Celery задачу и переотправить с новым приоритетом.
+    """Отменить старую задачу и переотправить с новым приоритетом.
 
     Returns:
-        Новый celery_task_id.
+        job_id.
     """
-    if old_celery_task_id:
-        try:
-            celery_app.control.revoke(old_celery_task_id, terminate=False)
-            _logger.info(f"Revoked celery task {old_celery_task_id} for job {job_id[:8]}")
-        except Exception as e:
-            _logger.warning(f"Failed to revoke task {old_celery_task_id}: {e}")
+    # В embedded режиме cancel + resubmit
+    from services.remote_ocr.server.embedded_job_manager_singleton import get_job_manager
+    manager = get_job_manager()
+    manager.cancel(job_id)
 
     task_id = dispatch_ocr_task(job_id, _get_block_count_for_job(job_id), new_priority)
     _logger.info(
