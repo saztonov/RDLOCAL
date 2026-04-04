@@ -25,6 +25,21 @@ logger = get_logger(__name__)
 _KNOWN_STAMP_KEYS = frozenset({"document_code", "project_name", "sheet_name"})
 
 
+def _render_pdf_to_image(pdf_path: str, dpi: int = 300) -> Image.Image:
+    """Рендерит одностраничный PDF кроп в PIL Image."""
+    import fitz
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+        pix = page.get_pixmap(matrix=mat)
+        mode = "RGBA" if pix.alpha else "RGB"
+        return Image.frombytes(mode, (pix.width, pix.height), pix.samples)
+    finally:
+        doc.close()
+
+
 def _parse_stamp_json(text: str) -> Optional[dict]:
     """Извлечь stamp JSON из ответа модели.
 
@@ -155,15 +170,19 @@ async def _process_one_block(
         )
 
     # Определяем, использовать ли PDF crop
-    use_pdf = (
+    has_pdf_crop = (
         entry.pdf_crop_path
-        and entry.block_type in ("image", "stamp")
         and os.path.exists(entry.pdf_crop_path)
+    )
+    use_pdf_native = (
+        has_pdf_crop
         and hasattr(backend, "supports_pdf_input")
         and backend.supports_pdf_input()
     )
+    # Для совместимости — use_pdf означает нативную отправку PDF в backend
+    use_pdf = use_pdf_native
 
-    if not use_pdf and not os.path.exists(entry.crop_path):
+    if not has_pdf_crop and not os.path.exists(entry.crop_path):
         logger.warning(f"Crop не найден: {entry.crop_path}")
         return
 
@@ -205,10 +224,18 @@ async def _process_one_block(
                 break
 
             try:
-                if use_pdf:
+                if use_pdf_native:
                     text = await cancellable_recognize(
                         ctx, backend, None, prompt_data, None, entry.pdf_crop_path,
                     )
+                elif has_pdf_crop:
+                    crop = await asyncio.to_thread(_render_pdf_to_image, entry.pdf_crop_path)
+                    try:
+                        text = await cancellable_recognize(
+                            ctx, backend, crop, prompt_data
+                        )
+                    finally:
+                        crop.close()
                 else:
                     crop = await asyncio.to_thread(Image.open, entry.crop_path)
                     try:
@@ -303,7 +330,7 @@ async def _check_axis_transliteration(
     ctx: Pass2Context,
     backend,
     prompt_data,
-    use_pdf: bool,
+    use_pdf: bool,  # kept for backward compat, ignored — PDF detection is internal
     cancel_event: asyncio.Event,
 ) -> str:
     """Проверить image OCR на латинские lookalike-символы в осях.
@@ -351,11 +378,26 @@ async def _check_axis_transliteration(
     if not await ctx.rate_limiter.acquire_async():
         return text
 
+    has_pdf_retry = entry.pdf_crop_path and os.path.exists(entry.pdf_crop_path)
+    use_pdf_native_retry = (
+        has_pdf_retry
+        and hasattr(backend, "supports_pdf_input")
+        and backend.supports_pdf_input()
+    )
+
     try:
-        if use_pdf:
+        if use_pdf_native_retry:
             retry_text = await cancellable_recognize(
                 ctx, backend, None, enhanced_prompt or prompt_data, None, entry.pdf_crop_path,
             )
+        elif has_pdf_retry:
+            crop = await asyncio.to_thread(_render_pdf_to_image, entry.pdf_crop_path)
+            try:
+                retry_text = await cancellable_recognize(
+                    ctx, backend, crop, enhanced_prompt or prompt_data,
+                )
+            finally:
+                crop.close()
         else:
             crop = await asyncio.to_thread(Image.open, entry.crop_path)
             try:

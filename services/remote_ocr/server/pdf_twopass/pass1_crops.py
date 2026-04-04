@@ -73,14 +73,9 @@ def pass1_prepare_crops(
                         )
                         continue
 
-                    # Определяем директорию для сохранения
-                    is_image_or_stamp = block.block_type in (BlockType.IMAGE, BlockType.STAMP)
-                    if is_image_or_stamp:
-                        crop_filename = f"{block.id}_p0.png"
-                        crop_path = os.path.join(images_dir, crop_filename)
-                    else:
-                        crop_filename = f"{block.id}_p0.png"
-                        crop_path = os.path.join(crops_dir, crop_filename)
+                    # Все блоки сохраняются в images_dir с PNG и PDF кропами
+                    crop_filename = f"{block.id}_p0.png"
+                    crop_path = os.path.join(images_dir, crop_filename)
 
                     crop.save(crop_path, "PNG", compress_level=compress_level)
 
@@ -109,8 +104,8 @@ def pass1_prepare_crops(
 
                     crop.close()
 
-                    # PDF кроп для IMAGE/STAMP блоков
-                    if save_image_crops_as_pdf and is_image_or_stamp:
+                    # PDF кроп для всех типов блоков (text, image, stamp)
+                    if save_image_crops_as_pdf:
                         pdf_crop_path = os.path.join(images_dir, f"{block.id}.pdf")
                         result = processor.crop_block_to_pdf(
                             block, pdf_crop_path, padding_pt=2
