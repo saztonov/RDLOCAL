@@ -57,9 +57,7 @@ export function createJobsWebSocket(
     if (disposed) return;
 
     const base = getWsBaseUrl();
-    const token = localStorage.getItem("api_token");
-    const query = token ? `?token=${encodeURIComponent(token)}` : "";
-    ws = new WebSocket(`${base}/ws/jobs${query}`);
+    ws = new WebSocket(`${base}/ws/jobs`);
 
     ws.addEventListener("open", () => {
       reconnectDelay = INITIAL_RECONNECT_MS;

@@ -1,14 +1,18 @@
 import { create } from "zustand";
 import type { Document } from "../models/document";
 import type { Block } from "../models/block";
+import type { PdfInfo } from "../api/pdf";
+import * as pdfApi from "../api/pdf";
 import * as annotationsApi from "../api/annotations";
 import { useUndoStore } from "./undoStore";
 
 interface DocumentStore {
   nodeId: string | null;
   document: Document | null;
+  pdfInfo: PdfInfo | null;
   currentPage: number;
   loading: boolean;
+  error: string | null;
   dirty: boolean;
   syncTimer: ReturnType<typeof setTimeout> | null;
 
@@ -18,10 +22,7 @@ interface DocumentStore {
   updateBlock: (blockId: string, updates: Partial<Block>) => void;
   deleteBlock: (blockId: string) => void;
   deleteBlocks: (blockIds: string[]) => void;
-  moveBlock: (
-    blockId: string,
-    newCoords: [number, number, number, number],
-  ) => void;
+  moveBlock: (blockId: string, newCoords: [number, number, number, number]) => void;
   getCurrentPageBlocks: () => Block[];
   markDirty: () => void;
   saveAnnotation: () => Promise<void>;
@@ -44,7 +45,6 @@ function updateBlocksInDocument(
   };
 }
 
-/** Push current document to undo stack before a mutation. */
 function pushUndo() {
   const { document } = useDocumentStore.getState();
   if (document) useUndoStore.getState().pushUndo(document);
@@ -53,8 +53,10 @@ function pushUndo() {
 export const useDocumentStore = create<DocumentStore>((set, get) => ({
   nodeId: null,
   document: null,
+  pdfInfo: null,
   currentPage: 0,
   loading: false,
+  error: null,
   dirty: false,
   syncTimer: null,
 
@@ -63,14 +65,35 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     if (syncTimer) clearTimeout(syncTimer);
 
     useUndoStore.getState().clear();
-    set({ loading: true, nodeId, dirty: false, syncTimer: null });
+    set({
+      loading: true,
+      nodeId,
+      error: null,
+      pdfInfo: null,
+      document: null,
+      currentPage: 0,
+      dirty: false,
+      syncTimer: null,
+    });
     try {
-      const response = await annotationsApi.getAnnotation(nodeId);
-      const document = response.data;
-      set({ document, currentPage: 0, loading: false });
+      const info = await pdfApi.getPdfInfo(nodeId);
+      const doc: Document = {
+        pdf_path: "",
+        format_version: 1,
+        pages: info.pages.map((p) => ({
+          page_number: p.page_index,
+          width: p.width,
+          height: p.height,
+          blocks: [],
+        })),
+      };
+      set({ pdfInfo: info, document: doc, loading: false });
     } catch (err) {
-      console.error("Failed to load document:", err);
-      set({ loading: false });
+      console.error("Failed to load PDF info:", err);
+      set({
+        error: err instanceof Error ? err.message : "Failed to load PDF",
+        loading: false,
+      });
     }
   },
 
@@ -95,8 +118,6 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document, currentPage } = get();
     if (!document) return;
 
-    // Don't push undo for every mousemove during resize — only on discrete edits.
-    // Resize pushes undo at start via handleResizeStart; continuous updates skip it.
     const updated = updateBlocksInDocument(document, currentPage, (blocks) =>
       blocks.map((b) => (b.id === blockId ? { ...b, ...updates } : b)),
     );

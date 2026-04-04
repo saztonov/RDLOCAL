@@ -26,6 +26,7 @@ export function AppLayout() {
 
   const currentPage = useDocumentStore((s) => s.currentPage)
   const document = useDocumentStore((s) => s.document)
+  const pdfInfo = useDocumentStore((s) => s.pdfInfo)
   const dirty = useDocumentStore((s) => s.dirty)
   const setCurrentPage = useDocumentStore((s) => s.setCurrentPage)
   const saveAnnotation = useDocumentStore((s) => s.saveAnnotation)
@@ -38,7 +39,7 @@ export function AppLayout() {
   const setActiveBlockType = useViewerStore((s) => s.setActiveBlockType)
   const setActiveShapeType = useViewerStore((s) => s.setActiveShapeType)
 
-  const totalPages = document?.pages.length ?? 0
+  const totalPages = pdfInfo?.page_count ?? 0
 
   const handlePrevPage = useCallback(() => {
     if (currentPage > 0) setCurrentPage(currentPage - 1)
@@ -236,13 +237,7 @@ export function AppLayout() {
 
         {/* Center: PDF viewer */}
         <main className="flex-1 flex overflow-hidden bg-gray-900">
-          {document ? (
-            <PdfViewer />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
-              Выберите документ в дереве проектов
-            </div>
-          )}
+          <PdfViewer />
         </main>
 
         {/* Right panel */}

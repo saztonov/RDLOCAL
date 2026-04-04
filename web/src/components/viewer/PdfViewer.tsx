@@ -1,139 +1,56 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useDocumentStore } from "../../stores/documentStore";
-import { useViewerStore } from "../../stores/viewerStore";
-import { BlockCanvas } from "./BlockCanvas";
+import { useMemo } from 'react'
+import { useDocumentStore } from '../../stores/documentStore'
+import { getPageImageUrl } from '../../api/pdf'
 
-const BASE_URL: string =
-  import.meta.env.VITE_API_BASE_URL ?? window.location.origin;
-
-/**
- * Main PDF viewer component.
- *
- * Fetches the current page as a raster image from the server-side rendering
- * endpoint and overlays the Konva-based BlockCanvas for annotation drawing.
- */
 export function PdfViewer() {
-  const nodeId = useDocumentStore((s) => s.nodeId);
-  const document = useDocumentStore((s) => s.document);
-  const currentPage = useDocumentStore((s) => s.currentPage);
-  const loading = useDocumentStore((s) => s.loading);
+  const nodeId = useDocumentStore((s) => s.nodeId)
+  const pdfInfo = useDocumentStore((s) => s.pdfInfo)
+  const currentPage = useDocumentStore((s) => s.currentPage)
+  const loading = useDocumentStore((s) => s.loading)
+  const error = useDocumentStore((s) => s.error)
 
-  const zoom = useViewerStore((s) => s.zoom);
-  const setZoom = useViewerStore((s) => s.setZoom);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [pageImageUrl, setPageImageUrl] = useState<string | null>(null);
-  const [imageLoaded, setImageLoaded] = useState(false);
-  const [imageError, setImageError] = useState(false);
-
-  // Dimensions of the current page from the document model (in PDF points).
-  const page = document?.pages[currentPage];
-  const pageWidth = page?.width ?? 0;
-  const pageHeight = page?.height ?? 0;
-
-  // Scaled dimensions used for both the image and the Konva overlay.
-  const canvasWidth = Math.round(pageWidth * zoom);
-  const canvasHeight = Math.round(pageHeight * zoom);
-
-  // -----------------------------------------------------------------------
-  // Fetch page image whenever nodeId / currentPage change
-  // -----------------------------------------------------------------------
-  useEffect(() => {
-    if (!nodeId) {
-      setPageImageUrl(null);
-      return;
-    }
-
-    setImageLoaded(false);
-    setImageError(false);
-
-    // pageNum is 1-based for the API.
-    const pageNum = currentPage + 1;
-    const url = `${BASE_URL}/api/pdf/${encodeURIComponent(nodeId)}/page/${pageNum}?dpi=150`;
-    setPageImageUrl(url);
-  }, [nodeId, currentPage]);
-
-  // -----------------------------------------------------------------------
-  // Ctrl+Wheel zoom
-  // -----------------------------------------------------------------------
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      setZoom(zoom + delta);
-    },
-    [zoom, setZoom],
-  );
-
-  // -----------------------------------------------------------------------
-  // Empty state
-  // -----------------------------------------------------------------------
-  if (!nodeId || !document) {
-    return (
-      <div className="flex h-full w-full items-center justify-center bg-gray-900 text-gray-400">
-        <p className="text-lg">Откройте документ</p>
-      </div>
-    );
-  }
+  const imageUrl = useMemo(() => {
+    if (!nodeId || !pdfInfo) return null
+    return getPageImageUrl(nodeId, currentPage)
+  }, [nodeId, pdfInfo, currentPage])
 
   if (loading) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-gray-900 text-gray-400">
-        <p className="text-lg">Загрузка...</p>
+      <div className="flex items-center justify-center h-full text-gray-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-gray-600 border-t-blue-500 rounded-full animate-spin" />
+          <span className="text-sm">Загрузка PDF...</span>
+        </div>
       </div>
-    );
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-red-400 text-sm bg-red-900/20 px-4 py-3 rounded-lg max-w-md text-center">
+          {error}
+        </div>
+      </div>
+    )
+  }
+
+  if (!imageUrl) {
+    return (
+      <div className="flex items-center justify-center h-full text-gray-500 text-sm">
+        Выберите документ в дереве проектов
+      </div>
+    )
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="relative flex-1 overflow-auto bg-gray-900"
-      onWheel={handleWheel}
-    >
-      <div
-        className="relative mx-auto my-4"
-        style={{ width: canvasWidth, height: canvasHeight }}
-      >
-        {/* PDF page image */}
-        {pageImageUrl && (
-          <img
-            src={pageImageUrl}
-            alt={`Page ${currentPage + 1}`}
-            width={canvasWidth}
-            height={canvasHeight}
-            className="absolute left-0 top-0 select-none"
-            style={{ imageRendering: "auto" }}
-            draggable={false}
-            onLoad={() => setImageLoaded(true)}
-            onError={() => setImageError(true)}
-          />
-        )}
-
-        {/* Error fallback */}
-        {imageError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-800 text-red-400">
-            Не удалось загрузить страницу
-          </div>
-        )}
-
-        {/* Konva block overlay */}
-        {imageLoaded && pageWidth > 0 && pageHeight > 0 && (
-          <div className="absolute left-0 top-0">
-            <BlockCanvas
-              width={canvasWidth}
-              height={canvasHeight}
-              pageWidth={pageWidth}
-              pageHeight={pageHeight}
-            />
-          </div>
-        )}
-
-        {/* Page number badge */}
-        <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/60 px-2 py-1 text-xs text-white">
-          {currentPage + 1} / {document.pages.length}
-        </div>
-      </div>
+    <div className="flex items-start justify-center h-full overflow-auto p-4">
+      <img
+        src={imageUrl}
+        alt={`Страница ${currentPage + 1}`}
+        className="max-w-full shadow-2xl rounded"
+        draggable={false}
+      />
     </div>
-  );
+  )
 }

@@ -3,7 +3,7 @@ import { fetchApi } from "./client.ts";
 
 /** Fetch all root-level tree nodes. */
 export async function getRootNodes(): Promise<TreeNode[]> {
-  return fetchApi<TreeNode[]>("/api/tree/nodes");
+  return fetchApi<TreeNode[]>("/api/tree/nodes/root");
 }
 
 /** Fetch direct children of a given parent node. */

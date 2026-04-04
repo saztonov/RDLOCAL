@@ -222,7 +222,23 @@ def delete_node_file_endpoint(file_id: str):
 
 
 def _node_to_dict(node) -> Dict[str, Any]:
-    """Конвертировать TreeNode в словарь"""
+    """Конвертировать узел (dict из Supabase или объект) в ответ API."""
+    if isinstance(node, dict):
+        nt = node.get("node_type", "")
+        st = node.get("status", "")
+        return {
+            "id": node["id"],
+            "parent_id": node.get("parent_id"),
+            "node_type": nt.value if hasattr(nt, "value") else nt,
+            "name": node.get("name", ""),
+            "code": node.get("code"),
+            "status": st.value if hasattr(st, "value") else st,
+            "attributes": node.get("attributes", {}),
+            "sort_order": node.get("sort_order", 0),
+            "version": node.get("version", 1),
+            "created_at": node.get("created_at", ""),
+            "updated_at": node.get("updated_at", ""),
+        }
     return {
         "id": node.id,
         "parent_id": node.parent_id,

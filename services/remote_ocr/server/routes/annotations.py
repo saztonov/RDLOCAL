@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..auth import verify_token
 from ..logging_config import get_logger
 from ..node_storage.ocr_registry import _load_annotation_from_db, _save_annotation_to_db
 
@@ -20,10 +19,7 @@ class SaveAnnotationRequest(BaseModel):
 
 
 @router.get("/{node_id}")
-def get_annotation(
-    node_id: str,
-    _user: str = Depends(verify_token),
-) -> dict:
+def get_annotation(node_id: str) -> dict:
     """Получить аннотацию документа по node_id."""
     ann_data = _load_annotation_from_db(node_id)
     if ann_data is None:
@@ -32,11 +28,7 @@ def get_annotation(
 
 
 @router.put("/{node_id}")
-def save_annotation(
-    node_id: str,
-    body: SaveAnnotationRequest,
-    _user: str = Depends(verify_token),
-) -> dict:
+def save_annotation(node_id: str, body: SaveAnnotationRequest) -> dict:
     """Сохранить аннотацию документа (upsert)."""
     success = _save_annotation_to_db(node_id, body.data)
     if not success:

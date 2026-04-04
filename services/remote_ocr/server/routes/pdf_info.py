@@ -4,10 +4,9 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from ..auth import verify_token
 from ..logging_config import get_logger
 from ..storage import get_node_pdf_r2_key
 
@@ -38,10 +37,7 @@ def _download_pdf_to_temp(node_id: str) -> Path:
 
 
 @router.get("/{node_id}/info")
-def get_pdf_info(
-    node_id: str,
-    _user: str = Depends(verify_token),
-) -> dict:
+def get_pdf_info(node_id: str) -> dict:
     """Получить информацию о PDF: количество страниц и размеры."""
     pdf_path = _download_pdf_to_temp(node_id)
     try:
@@ -68,12 +64,7 @@ def get_pdf_info(
 
 
 @router.get("/{node_id}/page/{page_num}")
-def render_page(
-    node_id: str,
-    page_num: int,
-    dpi: int = 150,
-    _user: str = Depends(verify_token),
-) -> Response:
+def render_page(node_id: str, page_num: int, dpi: int = 150) -> Response:
     """Рендер страницы PDF как PNG (fallback для случаев когда pdf.js не подходит)."""
     if dpi > 300:
         dpi = 300
