@@ -5,29 +5,14 @@ from typing import Optional, Tuple
 import httpx
 
 
-def get_lmstudio_auth() -> Optional[Tuple[str, str]]:
-    """Прочитать Basic Auth credentials для LM Studio (ngrok) из env."""
-    user = os.getenv("LMSTUDIO_AUTH_USER", "").strip()
-    password = os.getenv("LMSTUDIO_AUTH_PASSWORD", "").strip()
-    if user and password:
-        return (user, password)
-    return None
-
-
-def get_remote_ocr_auth() -> Optional[Tuple[str, str]]:
-    """Прочитать auth для доступа GUI к OCR серверу (ngrok).
-
-    Приоритет: REMOTE_OCR_AUTH_* → fallback на LMSTUDIO_AUTH_* (обратная совместимость).
-    """
-    user = os.getenv("REMOTE_OCR_AUTH_USER", "").strip()
-    password = os.getenv("REMOTE_OCR_AUTH_PASSWORD", "").strip()
-    if user and password:
-        return (user, password)
-    return get_lmstudio_auth()
+def get_lmstudio_api_key() -> Optional[str]:
+    """Прочитать Bearer token для LM Studio из env (LMSTUDIO_API_KEY)."""
+    key = os.getenv("LMSTUDIO_API_KEY", "").strip()
+    return key or None
 
 
 def create_http_client(
-    auth: Optional[Tuple[str, str]] = None,
+    api_key: Optional[str] = None,
     total_retries: int = 3,
     timeout: float = 90.0,
     preload_mode: bool = False,
@@ -35,7 +20,7 @@ def create_http_client(
     """Создать httpx.Client с retry и connection pooling.
 
     Args:
-        auth: (username, password) basic auth
+        api_key: Bearer token для Authorization header
         total_retries: количество повторов при транспортных ошибках
         timeout: таймаут запроса в секундах
         preload_mode: умеренный timeout для preload-операций
@@ -49,10 +34,14 @@ def create_http_client(
         http2=False,
     )
 
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     client = httpx.Client(
         transport=transport,
         timeout=httpx.Timeout(timeout, connect=10.0),
-        auth=auth,
+        headers=headers,
         follow_redirects=True,
     )
     return client
@@ -60,7 +49,7 @@ def create_http_client(
 
 # Backward compatibility alias
 def create_retry_session(
-    auth: Optional[Tuple[str, str]] = None,
+    api_key: Optional[str] = None,
     total_retries: int = 3,
     backoff_factor: float = 0.5,
     status_forcelist: tuple = (502, 503, 504),
@@ -68,7 +57,7 @@ def create_retry_session(
 ) -> httpx.Client:
     """Alias для обратной совместимости. Возвращает httpx.Client."""
     return create_http_client(
-        auth=auth,
+        api_key=api_key,
         total_retries=total_retries,
         preload_mode=preload_mode,
     )

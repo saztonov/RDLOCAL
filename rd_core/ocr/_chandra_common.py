@@ -45,7 +45,7 @@ CHANDRA_DEFAULT_SYSTEM = (
     "Output only recognized text as HTML."
 )
 
-DEFAULT_BASE_URL = "http://localhost:1234"
+DEFAULT_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
 
 # LM Studio native API: конфигурация загрузки модели
 # n_parallel задаётся ТОЛЬКО через UI LM Studio (REST API не поддерживает этот параметр)

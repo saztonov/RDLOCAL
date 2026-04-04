@@ -1,5 +1,4 @@
-"""Remote OCR HTTP client package."""
-from app.ocr_client.client import RemoteOCRClient, RemoteOCRError
+"""OCR client package."""
 from app.ocr_client.models import JobInfo
 
-__all__ = ["RemoteOCRClient", "RemoteOCRError", "JobInfo"]
+__all__ = ["JobInfo"]

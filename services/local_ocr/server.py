@@ -1,7 +1,7 @@
 """Local OCR FastAPI сервер — без Celery/Redis.
 
 Реализует подмножество API remote-сервера, достаточное для работы
-через RemoteOCRClient. Использует multiprocessing.Process для OCR.
+Использует multiprocessing.Process для OCR.
 """
 from __future__ import annotations
 

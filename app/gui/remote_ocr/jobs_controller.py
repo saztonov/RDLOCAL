@@ -3,10 +3,8 @@
 Чистый QObject, владеющий состоянием и фоновыми операциями.
 Не зависит от UI-виджетов напрямую — общается через Qt-сигналы.
 
-Режим определяется env var REMOTE_OCR_BASE_URL:
-  - Задан → подключение к указанному remote OCR серверу
-  - Не задан → запуск local-ocr Docker контейнера (http://127.0.0.1:18100)
-В обоих случаях используется единый HTTP-протокол через RemoteOCRClient.
+Подключается к LM Studio напрямую через LMSTUDIO_BASE_URL (reverse proxy).
+OCR выполняется локально через LocalOcrRunner, бэкенды обращаются к LM Studio.
 """
 from __future__ import annotations
 
@@ -43,11 +41,15 @@ def _get_client_id() -> str:
 
 
 class JobsController(QObject):
-    """Контроллер OCR задач (HTTP-mode: remote server или local Docker).
+    """Контроллер OCR задач.
+
+    Использует LMStudioClient для health check и LocalOcrRunner для
+    выполнения OCR. Бэкенды (Chandra, Qwen) подключаются к LM Studio
+    через reverse proxy (LMSTUDIO_BASE_URL).
 
     Владеет:
-      - RemoteOCRClient (подключение к OCR серверу)
-      - LocalOcrServiceManager (запуск Docker контейнера, если нет REMOTE_OCR_BASE_URL)
+      - LMStudioClient (health check LM Studio)
+      - LocalOcrRunner (выполнение OCR задач)
       - Кэшем задач для UI
       - Result application (merge ocr_text в annotation)
     """
@@ -64,10 +66,8 @@ class JobsController(QObject):
     download_finished = Signal(str, str)       # job_id, extract_dir
     download_error = Signal(str, str)          # job_id, error
 
-    # Polling intervals (ms)
-    POLL_INTERVAL_ACTIVE = 3_000
-    POLL_INTERVAL_IDLE = 15_000
-    POLL_INTERVAL_ERROR = 10_000
+    # Health check interval (ms)
+    HEALTH_CHECK_INTERVAL = 30_000
 
     def __init__(self, main_window: MainWindow, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -82,95 +82,104 @@ class JobsController(QObject):
         self._downloaded_jobs: set[str] = set()
         self._has_active_jobs: bool = False
         self._jobs_cache: dict = {}
+        self._supabase_history: dict = {}
 
-        # ── Определяем режим ─────────────────────────────────────────
-        remote_url = os.getenv("REMOTE_OCR_BASE_URL", "").strip()
-        self._mode = "remote"
-        self._service_manager = None
-        if remote_url:
-            self._init_remote(remote_url)
-        else:
-            self._init_local_service()
+        self._client_id = _get_client_id()
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr")
+
+        # ── Инициализация LM Studio + LocalOcrRunner ─────────────────
+        self._init_lmstudio()
 
     # ── Init helpers ──────────────────────────────────────────────────
 
-    def _init_local_service(self) -> None:
-        """Инициализация local mode через Docker-контейнер.
+    def _init_lmstudio(self) -> None:
+        """Инициализация: LMStudioClient для health + LocalOcrRunner для OCR."""
+        from rd_core.ocr.lmstudio_client import LMStudioClient
 
-        Запускает local-ocr сервис в Docker и подключается к нему
-        через тот же RemoteOCRClient, что используется для remote mode.
-        """
-        from app.ocr.service_manager import LocalOcrServiceManager
-
-        self._service_manager = LocalOcrServiceManager()
+        self._lmstudio = LMStudioClient()
         self.connection_status.emit("loading")
 
-        # Запуск/подключение к сервису в фоновом потоке
-        from concurrent.futures import ThreadPoolExecutor
+        # LocalOcrRunner для выполнения OCR задач
+        from app.ocr.local_runner import LocalOcrRunner
 
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-ocr-init")
+        self._runner = LocalOcrRunner(self)
+        self._runner.job_created.connect(self._on_runner_job_created)
+        self._runner.job_updated.connect(self._on_runner_job_updated)
+        self._runner.job_finished.connect(self._on_runner_job_finished)
+        self._runner.job_error.connect(self._on_runner_job_error)
 
-        def _ensure_and_connect():
-            ok = self._service_manager.ensure_running()
-            return ok, self._service_manager.base_url if ok else None
-
-        future = executor.submit(_ensure_and_connect)
-
-        def _on_service_ready():
-            try:
-                ok, base_url = future.result(timeout=0.1)
-            except Exception:
-                # Ещё не готов — перепроверим позже
-                QTimer.singleShot(500, _on_service_ready)
-                return
-
-            if ok and base_url:
-                logger.info(f"Local OCR service ready at {base_url}")
-                self._init_remote(base_url)
-            else:
-                logger.error("Failed to start local OCR service")
-                self.connection_status.emit("disconnected")
-
-            executor.shutdown(wait=False)
-
-        QTimer.singleShot(500, _on_service_ready)
-
-    def _init_remote(self, base_url: str) -> None:
-        """Инициализация remote mode (HTTP-клиент)."""
-        from app.ocr_client import RemoteOCRClient
-        from rd_core.ocr.http_utils import get_remote_ocr_auth
-
-        auth = get_remote_ocr_auth()
-        logger.info(f"Remote OCR mode: {base_url} (auth={'yes' if auth else 'no'})")
-        self._client = RemoteOCRClient(base_url, auth=auth)
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="remote-ocr")
-        self._client_id = _get_client_id()
-
-        # Polling state
-        self._last_server_time: str | None = None
-        self._is_fetching: bool = False
-        self._consecutive_errors: int = 0
-        self._force_full_refresh: bool = True
-        self._optimistic_jobs: dict = {}  # job_id → (JobInfo, timestamp)
-        self._supabase_history: dict = {}  # job_id → JobInfo (baseline from Supabase)
-
-        # Загрузить snapshot с прошлого запуска (до первого poll)
-        self._load_snapshot()
-
-        # Загрузить историю задач из Supabase (дополняет snapshot)
+        # Загрузить историю задач из Supabase
         self._load_history_from_supabase()
 
-        # Thread-safe data passing (write in bg thread, read in GUI slot)
-        self._pending_error: tuple[str, str] | None = None  # (error_type, message)
-        self._pending_result: tuple[str, str] | None = None  # (job_id, node_id)
+        # Health check timer
+        self._health_timer = QTimer(self)
+        self._health_timer.timeout.connect(self._health_check)
+        self._health_timer.setInterval(self.HEALTH_CHECK_INTERVAL)
 
-        # Polling timer
-        self._poll_timer = QTimer(self)
-        self._poll_timer.timeout.connect(self._remote_poll)
-        self._poll_timer.setInterval(self.POLL_INTERVAL_ACTIVE)
+        # Первоначальная проверка — с задержкой
+        QTimer.singleShot(500, self._health_check)
 
-        # Первоначальная проверка — с задержкой, чтобы UI успел инициализироваться
-        QTimer.singleShot(500, self._remote_poll)
+    # ── LocalOcrRunner signal handlers ────────────────────────────────
+
+    @Slot(object)
+    def _on_runner_job_created(self, local_job) -> None:
+        """LocalOcrRunner создал задачу."""
+        job_info = self._local_job_to_job_info(local_job)
+        self._jobs_cache[job_info.id] = job_info
+        self._has_active_jobs = True
+        self.job_created.emit(job_info)
+        self._emit_jobs_list()
+
+    @Slot(object)
+    def _on_runner_job_updated(self, local_job) -> None:
+        """LocalOcrRunner обновил прогресс."""
+        job_info = self._local_job_to_job_info(local_job)
+        self._jobs_cache[job_info.id] = job_info
+        self._emit_jobs_list()
+
+    @Slot(object)
+    def _on_runner_job_finished(self, local_job) -> None:
+        """LocalOcrRunner завершил задачу."""
+        job_info = self._local_job_to_job_info(local_job)
+        self._jobs_cache[job_info.id] = job_info
+        self._has_active_jobs = any(
+            getattr(j, "status", "") in ("queued", "processing")
+            for j in self._jobs_cache.values()
+        )
+        self._emit_jobs_list()
+
+        # Применить результаты OCR
+        node_id = getattr(local_job, "node_id", None)
+        if node_id and local_job.status in ("done", "partial"):
+            self._apply_ocr_results(job_info.id, node_id)
+
+    @Slot(str, str)
+    def _on_runner_job_error(self, job_id: str, error_message: str) -> None:
+        """LocalOcrRunner сообщил об ошибке."""
+        self.job_create_error.emit("ocr", error_message)
+
+    @staticmethod
+    def _local_job_to_job_info(local_job):
+        """Конвертировать LocalJob → JobInfo для совместимости с UI."""
+        from app.ocr_client.models import JobInfo
+
+        return JobInfo(
+            id=local_job.id,
+            status=local_job.status,
+            progress=local_job.progress,
+            document_id=local_job.node_id or "",
+            document_name=local_job.document_name,
+            task_name=getattr(local_job, "document_name", ""),
+            created_at=time.strftime(
+                "%Y-%m-%dT%H:%M:%S",
+                time.localtime(local_job.created_at),
+            ),
+            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            error_message=local_job.error_message,
+            node_id=local_job.node_id,
+            status_message=local_job.status_message,
+            priority=0,
+        )
 
     # ══════════════════════════════════════════════════════════════════
     # PUBLIC API
@@ -180,24 +189,22 @@ class JobsController(QObject):
         """Уведомить контроллер о видимости панели."""
         self._panel_visible = visible
         if visible:
-            if hasattr(self, "_poll_timer") and not self._poll_timer.isActive():
-                self._poll_timer.start()
-            if hasattr(self, "_remote_poll"):
-                self._remote_poll()
+            if hasattr(self, "_health_timer") and not self._health_timer.isActive():
+                self._health_timer.start()
+            self._health_check()
         else:
-            if hasattr(self, "_poll_timer"):
-                self._poll_timer.stop()
+            if hasattr(self, "_health_timer"):
+                self._health_timer.stop()
 
     def refresh(self, *, force_full: bool = False, show_loading: bool = False) -> None:
         """Обновить список задач в UI."""
-        self._force_full_refresh = force_full
         if show_loading:
             self.connection_status.emit("loading")
-        if hasattr(self, "_remote_poll"):
-            self._remote_poll()
+        self._health_check()
+        self._emit_jobs_list()
 
     def create_job(self) -> None:
-        """Создать OCR-задачу на сервере (server-only flow для tree-документов)."""
+        """Создать OCR-задачу (выполняется локально через LocalOcrRunner)."""
         from PySide6.QtWidgets import QDialog, QMessageBox
 
         mw = self.main_window
@@ -245,14 +252,12 @@ class JobsController(QObject):
                 return
 
             if mode_dialog.selected_mode == SmartOCRModeDialog.MODE_SMART:
-                # Smart: пометить нераспознанные блоки is_correction
                 self._is_correction_mode = True
                 for b in blocks_needing:
                     b.is_correction = True
                 cleanup_blocks = [b.id for b in blocks_needing]
                 self._clear_ocr_text_in_memory(blocks_to_reprocess=cleanup_blocks)
             else:
-                # Full: очистить всё
                 self._is_correction_mode = False
                 self._clear_ocr_text_in_memory()
 
@@ -265,26 +270,18 @@ class JobsController(QObject):
             )
             return
         else:
-            # Первый запуск — полный OCR
             self._is_correction_mode = False
             self._clear_ocr_text_in_memory()
 
-        # Сохранить annotation в Supabase (с мутациями) перед отправкой на сервер
-        document_name = Path(mw.annotation_document.pdf_path or "").name
-        task_name = Path(mw.annotation_document.pdf_path or "").stem
-
+        # Сохранить annotation в Supabase перед OCR
         self._flush_autosave(node_id)
         self._save_annotation_to_db(node_id)
 
-        self._server_create_job(
-            node_id=node_id,
-            document_name=document_name,
-            task_name=task_name,
-            is_correction_mode=self._is_correction_mode,
-        )
+        # Запуск OCR через LocalOcrRunner
+        self._submit_local_ocr(node_id=node_id)
 
     def force_recognize_block(self, block_id: str) -> None:
-        """Принудительно пере-распознать один блок (server-only)."""
+        """Принудительно пере-распознать один блок."""
         from PySide6.QtWidgets import QMessageBox
 
         mw = self.main_window
@@ -333,31 +330,26 @@ class JobsController(QObject):
         target_block.ocr_meta = None
         target_block.is_correction = True
 
-        # Сохранить annotation в Supabase перед отправкой
         self._flush_autosave(node_id)
         self._save_annotation_to_db(node_id)
 
-        document_name = Path(mw.annotation_document.pdf_path or "").name
-        task_name = f"Блок {block_id[:9]}"
         self._is_correction_mode = True
 
         from app.gui.toast import show_toast
         show_toast(mw, f"Принудительное OCR блока {block_id[:9]}...", duration=2000)
 
-        self._server_create_job(
-            node_id=node_id,
-            document_name=document_name,
-            task_name=task_name,
-            is_correction_mode=True,
-        )
+        self._submit_local_ocr(node_id=node_id)
 
     def cancel_job(self, job_id: str) -> None:
-        self._executor.submit(self._remote_cancel_job, job_id)
+        if hasattr(self, "_runner"):
+            self._runner.cancel_job(job_id)
 
     def cancel_all_jobs(self) -> None:
-        for job_id, job in list(self._jobs_cache.items()):
-            if getattr(job, "status", "") in ("queued", "processing"):
-                self._executor.submit(self._remote_cancel_job, job_id)
+        if hasattr(self, "_runner"):
+            for job_id in list(self._runner.jobs.keys()):
+                job = self._runner.jobs[job_id]
+                if job.status in ("queued", "processing"):
+                    self._runner.cancel_job(job_id)
 
     def clear_all_jobs(self) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -377,17 +369,18 @@ class JobsController(QObject):
         if reply != QMessageBox.Yes:
             return
 
-        for job_id in list(self._jobs_cache.keys()):
-            self._executor.submit(self._remote_delete_job, job_id)
+        self._jobs_cache.clear()
+        self._emit_jobs_list()
 
     def resume_job(self, job_id: str) -> None:
-        self._executor.submit(self._remote_resume_job, job_id)
+        logger.info(f"Resume not supported for local jobs: {job_id}")
 
     def reorder_job(self, job_id: str, direction: str) -> None:
-        self._executor.submit(self._remote_reorder_job, job_id, direction)
+        logger.info(f"Reorder not supported for local jobs: {job_id}")
 
     def delete_job(self, job_id: str) -> None:
-        self._executor.submit(self._remote_delete_job, job_id)
+        self._jobs_cache.pop(job_id, None)
+        self._emit_jobs_list()
 
     def show_job_details(self, job_id: str) -> None:
         job = self._jobs_cache.get(job_id)
@@ -405,13 +398,14 @@ class JobsController(QObject):
             "recognized": 0,
             "total_blocks": 0,
             "output_dir": "",
-            "mode": "remote",
+            "mode": "lmstudio",
         }
         dialog = JobDetailsDialog(details, self.main_window)
         dialog.exec()
 
     def auto_download_result(self, job_id: str) -> None:
-        self._remote_download_result(job_id)
+        """Для совместимости. Результаты применяются автоматически."""
+        pass
 
     def mark_node_downloads_complete(self, node_id: str) -> None:
         for job_id, job in self._jobs_cache.items():
@@ -438,557 +432,113 @@ class JobsController(QObject):
         return list(merged.values())
 
     def shutdown(self) -> None:
-        if hasattr(self, "_poll_timer"):
-            self._poll_timer.stop()
+        if hasattr(self, "_health_timer"):
+            self._health_timer.stop()
         if hasattr(self, "_executor"):
             self._executor.shutdown(wait=False)
-        if hasattr(self, "_client"):
-            self._client.close()
-        # Docker контейнер продолжает работать (restart: always)
+        if hasattr(self, "_lmstudio"):
+            self._lmstudio.close()
+        if hasattr(self, "_runner"):
+            self._runner.shutdown()
 
     # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Snapshot persistence
+    # HEALTH CHECK
     # ══════════════════════════════════════════════════════════════════
 
-    _SNAPSHOT_PATH = Path.home() / ".rd_cache" / "jobs_snapshot.json"
+    def _health_check(self) -> None:
+        """Проверка доступности LM Studio (фоновый поток)."""
+        self._executor.submit(self._health_check_bg)
 
-    def _load_snapshot(self) -> None:
-        """Загрузить кэш задач с прошлого запуска."""
+    def _health_check_bg(self) -> None:
+        """Фоновый поток: health check LM Studio."""
         try:
-            if not self._SNAPSHOT_PATH.exists():
-                logger.debug("Snapshot file not found, skipping")
-                return
-            raw = self._SNAPSHOT_PATH.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if not isinstance(data, dict) or data.get("version") != 1:
-                return
-            from app.ocr_client.models import JobInfo
-            for jd in data.get("jobs", []):
-                try:
-                    job = JobInfo.from_dict(jd)
-                    self._jobs_cache[job.id] = job
-                except Exception:
-                    continue
-            self._downloaded_jobs = set(data.get("downloaded_jobs", []))
-            self._last_server_time = data.get("server_time") or None
-            logger.info(f"Snapshot loaded: {len(self._jobs_cache)} jobs")
-        except Exception as e:
-            logger.warning(f"Failed to load snapshot: {e}")
-
-    def _save_snapshot(self) -> None:
-        """Сохранить кэш задач на диск (атомарно)."""
-        try:
-            # Merge: server cache + supabase history (cache takes priority)
-            merged = dict(self._supabase_history)
-            merged.update(self._jobs_cache)
-            jobs_list = [j.to_dict() for j in merged.values()]
-            data = {
-                "version": 1,
-                "server_time": self._last_server_time or "",
-                "downloaded_jobs": list(self._downloaded_jobs),
-                "jobs": jobs_list,
-            }
-            tmp_path = self._SNAPSHOT_PATH.with_suffix(".tmp")
-            tmp_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp_path, self._SNAPSHOT_PATH)
-        except Exception as e:
-            logger.warning(f"Failed to save snapshot: {e}")
-
-    def _load_history_from_supabase(self) -> None:
-        """Загрузить историю задач напрямую из Supabase (fallback для remote mode)."""
-        try:
-            url = os.getenv("SUPABASE_URL", "").strip()
-            key = os.getenv("SUPABASE_KEY", "").strip()
-            if not url or not key:
-                return
-            import httpx
-            from app.ocr_client.models import JobInfo
-
-            headers = {
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            }
-            resp = httpx.get(
-                f"{url}/rest/v1/jobs"
-                f"?select=id,document_id,document_name,task_name,status,progress,"
-                f"created_at,updated_at,error_message,status_message,node_id,priority"
-                f"&order=created_at.desc"
-                f"&limit=100",
-                headers=headers,
-                timeout=5.0,
-            )
-            if resp.status_code != 200:
-                logger.warning(f"Supabase history: HTTP {resp.status_code}")
-                return
-            rows = resp.json()
-            loaded = 0
-            for row in rows:
-                job_id = row.get("id", "")
-                if not job_id or job_id in self._jobs_cache or job_id in self._supabase_history:
-                    continue
-                self._supabase_history[job_id] = JobInfo(
-                    id=job_id,
-                    status=row.get("status", ""),
-                    progress=row.get("progress", 0.0),
-                    document_id=row.get("document_id", ""),
-                    document_name=row.get("document_name", ""),
-                    task_name=row.get("task_name", ""),
-                    created_at=row.get("created_at", ""),
-                    updated_at=row.get("updated_at", ""),
-                    error_message=row.get("error_message"),
-                    node_id=row.get("node_id"),
-                    status_message=row.get("status_message"),
-                    priority=row.get("priority", 0),
-                )
-                loaded += 1
-            if loaded:
-                logger.info(f"Supabase history: загружено {loaded} задач")
+            ok = self._lmstudio.health_check()
+            status = "connected" if ok else "disconnected"
         except Exception:
-            logger.debug("Supabase history: не удалось загрузить", exc_info=True)
-
-    # ══════════════════════════════════════════════════════════════════
-    # SERVER-ONLY: Create job (node-backed, без upload)
-    # ══════════════════════════════════════════════════════════════════
-
-    def _save_annotation_to_db(self, node_id: str) -> bool:
-        """Сохранить текущую annotation в Supabase (синхронно)."""
-        try:
-            from app.annotation_db import AnnotationDBIO
-            doc = self.main_window.annotation_document
-            if doc and node_id:
-                AnnotationDBIO.save_to_db(doc, node_id)
-                logger.info(f"Annotation saved to Supabase for node {node_id}")
-                return True
-        except Exception as e:
-            logger.error(f"Failed to save annotation to Supabase: {e}", exc_info=True)
-        return False
-
-    def _server_create_job(
-        self,
-        *,
-        node_id: str,
-        document_name: str,
-        task_name: str,
-        is_correction_mode: bool = False,
-    ) -> None:
-        """Создать OCR-задачу для node-backed документа (без upload PDF/blocks).
-
-        Сервер сам берёт PDF из R2 и annotation из Supabase.
-        Лёгкий POST без файлов.
-        """
-        from app.gui.toast import show_toast
-        from app.ocr_client.models import JobInfo
-
-        document_id = node_id  # Стабильный серверный идентификатор
-
-        # Optimistic job для немедленного показа в UI
-        temp_id = str(uuid.uuid4())
-        temp_job = JobInfo(
-            id=temp_id,
-            status="uploading",
-            progress=0.0,
-            document_id=document_id,
-            document_name=document_name,
-            task_name=task_name,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            node_id=node_id,
-            status_message="Отправка задачи...",
-        )
-        self._optimistic_jobs[temp_id] = (temp_job, time.time())
-        self.job_uploading.emit(temp_job)
-        self._emit_remote_jobs_list()
-
-        show_toast(self.main_window, "Отправка задачи на сервер...", duration=2000)
-
-        self._executor.submit(
-            self._server_create_job_bg,
-            temp_id=temp_id,
-            node_id=node_id,
-            document_id=document_id,
-            document_name=document_name,
-            task_name=task_name,
-            is_correction_mode=is_correction_mode,
-        )
-
-    def _server_create_job_bg(
-        self,
-        *,
-        temp_id: str,
-        node_id: str,
-        document_id: str,
-        document_name: str,
-        task_name: str,
-        is_correction_mode: bool,
-    ) -> None:
-        """Фоновый поток: лёгкий POST на сервер (без файлов)."""
-        from app.ocr_client import RemoteOCRError
-        from app.ocr_client.models import JobInfo
-
-        try:
-            result = self._client.create_node_job(
-                node_id=node_id,
-                document_id=document_id,
-                document_name=document_name,
-                client_id=self._client_id,
-                task_name=task_name,
-                is_correction_mode=is_correction_mode,
-            )
-
-            # Заменяем optimistic job на реальный
-            self._optimistic_jobs.pop(temp_id, None)
-            real_job = JobInfo.from_dict(result)
-            self._optimistic_jobs[real_job.id] = (real_job, time.time())
-
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_created",
-                Qt.QueuedConnection,
-            )
-
-        except RemoteOCRError as e:
-            self._optimistic_jobs.pop(temp_id, None)
-            error_type = "server"
-            if e.status_code == 400:
-                error_type = "validation"
-            elif e.status_code == 503:
-                error_type = "server"
-            self._pending_error = (error_type, str(e))
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_create_error",
-                Qt.QueuedConnection,
-            )
-        except Exception as e:
-            self._optimistic_jobs.pop(temp_id, None)
-            logger.error(f"Server create_node_job failed: {e}", exc_info=True)
-            self._pending_error = ("generic", str(e))
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_create_error",
-                Qt.QueuedConnection,
-            )
-
-    # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Create job (legacy, с upload PDF)
-    # ══════════════════════════════════════════════════════════════════
-
-    def _remote_create_job(
-        self,
-        *,
-        pdf_path: str,
-        blocks_data: list[dict],
-        full_blocks_data: list[dict] | None,
-        node_id: str | None,
-        task_name: str,
-        is_correction_mode: bool | None = None,
-    ) -> None:
-        """Отправить OCR-задачу на удалённый сервер (async)."""
-        from app.gui.toast import show_toast
-        from app.ocr_client.models import JobInfo
-
-        correction = is_correction_mode if is_correction_mode is not None else self._is_correction_mode
-        document_name = Path(pdf_path).name
-        document_id = hashlib.md5(pdf_path.encode()).hexdigest()
-
-        # Optimistic job для немедленного показа в UI
-        temp_id = str(uuid.uuid4())
-        temp_job = JobInfo(
-            id=temp_id,
-            status="uploading",
-            progress=0.0,
-            document_id=document_id,
-            document_name=document_name,
-            task_name=task_name,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-            node_id=node_id,
-            status_message="Загрузка на сервер...",
-        )
-        self._optimistic_jobs[temp_id] = (temp_job, time.time())
-        self.job_uploading.emit(temp_job)
-        self._emit_remote_jobs_list()
-
-        show_toast(self.main_window, "Отправка на сервер...", duration=2000)
-
-        # Данные для передачи блоков: если есть full_blocks_data (correction mode),
-        # отправляем полный annotation (сервер сам разберётся)
-        send_blocks = full_blocks_data if full_blocks_data else blocks_data
-
-        self._executor.submit(
-            self._remote_create_job_bg,
-            temp_id=temp_id,
-            pdf_path=pdf_path,
-            document_id=document_id,
-            document_name=document_name,
-            task_name=task_name,
-            node_id=node_id or "",
-            is_correction_mode=correction,
-            blocks_data=send_blocks,
-        )
-
-    def _remote_create_job_bg(
-        self,
-        *,
-        temp_id: str,
-        pdf_path: str,
-        document_id: str,
-        document_name: str,
-        task_name: str,
-        node_id: str,
-        is_correction_mode: bool,
-        blocks_data: list[dict] | dict,
-    ) -> None:
-        """Фоновый поток: отправка задачи на сервер."""
-        from app.ocr_client import RemoteOCRError
-        from app.ocr_client.models import JobInfo
-
-        try:
-            result = self._client.create_job(
-                document_id=document_id,
-                document_name=document_name,
-                client_id=self._client_id,
-                task_name=task_name,
-                engine="lmstudio",
-                node_id=node_id,
-                is_correction_mode=is_correction_mode,
-                pdf_path=pdf_path,
-                blocks_data=blocks_data,
-            )
-
-            # Заменяем optimistic job на реальный
-            self._optimistic_jobs.pop(temp_id, None)
-            real_job = JobInfo.from_dict(result)
-            self._optimistic_jobs[real_job.id] = (real_job, time.time())
-
-            # Emit signals в GUI потоке
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_created",
-                Qt.QueuedConnection,
-            )
-
-        except RemoteOCRError as e:
-            self._optimistic_jobs.pop(temp_id, None)
-            error_type = "server"
-            if e.status_code == 413:
-                error_type = "size"
-            elif e.status_code == 503:
-                error_type = "server"
-            self._pending_error = (error_type, str(e))
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_create_error",
-                Qt.QueuedConnection,
-            )
-        except Exception as e:
-            self._optimistic_jobs.pop(temp_id, None)
-            logger.error(f"Remote create_job failed: {e}", exc_info=True)
-            self._pending_error = ("generic", str(e))
-            QMetaObject.invokeMethod(
-                self, "_on_remote_job_create_error",
-                Qt.QueuedConnection,
-            )
-
-    @Slot()
-    def _on_remote_job_created(self) -> None:
-        self._emit_remote_jobs_list()
-        self._force_full_refresh = True
-        self._remote_poll()
-
-    @Slot()
-    def _on_remote_job_create_error(self) -> None:
-        self._emit_remote_jobs_list()
-        error_type, message = self._pending_error or ("generic", "Unknown error")
-        self._pending_error = None
-        self.job_create_error.emit(error_type, message)
-
-    # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Polling
-    # ══════════════════════════════════════════════════════════════════
-
-    def _remote_poll(self) -> None:
-        """Запустить фоновый poll (если не в процессе)."""
-        if self._is_fetching:
-            return
-
-        # При множественных ошибках — health check перед poll
-        if self._consecutive_errors >= 3:
-            self._executor.submit(self._remote_health_then_poll)
-            return
-
-        self._is_fetching = True
-        self._executor.submit(self._remote_fetch_jobs_bg)
-
-    def _remote_health_then_poll(self) -> None:
-        """Health check, затем poll при успехе."""
-        try:
-            if self._client.health():
-                logger.info("Health check OK, сброс backoff")
-                self._consecutive_errors = 0
-                self._force_full_refresh = True
-                self._is_fetching = True
-                self._remote_fetch_jobs_bg()
-                return
-        except Exception:
-            pass
-        # Health check failed
+            status = "disconnected"
         QMetaObject.invokeMethod(
-            self, "_on_remote_poll_error",
+            self, "_on_health_result",
             Qt.QueuedConnection,
         )
+        self._pending_health_status = status
 
-    def _remote_fetch_jobs_bg(self) -> None:
-        """Фоновый поток: загрузка списка задач с сервера."""
-        use_delta = False
-        try:
-            use_delta = bool(
-                self._last_server_time
-                and self._jobs_cache
-                and not self._force_full_refresh
-            )
-
-            if use_delta:
-                jobs, server_time = self._client.list_jobs(since=self._last_server_time)
-                if jobs:
-                    for job in jobs:
-                        self._jobs_cache[job.id] = job
-                    logger.info(f"Poll delta: {len(jobs)} updated jobs")
-                if server_time:
-                    self._last_server_time = server_time
-            else:
-                jobs, server_time = self._client.list_jobs()
-                self._jobs_cache = {j.id: j for j in jobs}
-                logger.info(f"Poll full: {len(jobs)} jobs from server, cache={len(self._jobs_cache)}")
-                if server_time:
-                    self._last_server_time = server_time
-
-            QMetaObject.invokeMethod(
-                self, "_on_remote_poll_success",
-                Qt.QueuedConnection,
-            )
-
-        except Exception as e:
-            logger.error(f"Poll error: {e}")
-            if use_delta:
-                self._force_full_refresh = True
-            QMetaObject.invokeMethod(
-                self, "_on_remote_poll_error",
-                Qt.QueuedConnection,
-            )
+    _pending_health_status: str = "disconnected"
 
     @Slot()
-    def _on_remote_poll_success(self) -> None:
-        """GUI thread: обработка результатов poll."""
-        self._is_fetching = False
-        self._force_full_refresh = False
-        self._consecutive_errors = 0
+    def _on_health_result(self) -> None:
+        """GUI thread: обработка результата health check."""
+        self.connection_status.emit(self._pending_health_status)
 
-        # Merge optimistic jobs
-        current_time = time.time()
-        for job_id, (job_info, timestamp) in list(self._optimistic_jobs.items()):
-            if job_id in self._jobs_cache:
-                self._optimistic_jobs.pop(job_id, None)
-            elif current_time - timestamp > 60:
-                self._optimistic_jobs.pop(job_id, None)
+    # ══════════════════════════════════════════════════════════════════
+    # LOCAL OCR: Submit job
+    # ══════════════════════════════════════════════════════════════════
 
-        # Убираем из Supabase-истории задачи, которые уже есть в серверном кэше
-        for job_id in list(self._supabase_history):
-            if job_id in self._jobs_cache:
-                self._supabase_history.pop(job_id, None)
+    def _submit_local_ocr(self, *, node_id: str) -> None:
+        """Запуск OCR через LocalOcrRunner."""
+        from app.gui.toast import show_toast
 
-        self._emit_remote_jobs_list()
-        self._save_snapshot()
-        self.connection_status.emit("connected")
+        mw = self.main_window
+        doc = mw.annotation_document
+        if not doc or not doc.pdf_path:
+            return
 
-        # Проверяем есть ли завершённые задачи для автоскачивания
-        # Скачиваем только для текущего документа, чтобы не забивать executor
-        current_node = getattr(self.main_window, "_current_node_id", None)
-        for job_id, job in self._jobs_cache.items():
-            if getattr(job, "status", "") in ("done", "partial") and job_id not in self._downloaded_jobs:
-                node_id = getattr(job, "node_id", None)
-                if node_id and (not current_node or node_id == current_node):
-                    self.auto_download_result(job_id)
+        pdf_path = doc.pdf_path
+        lmstudio_url = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
 
-        # Обновляем интервал polling
-        self._has_active_jobs = any(
-            getattr(j, "status", "") in ("queued", "processing")
-            for j in self._jobs_cache.values()
+        # Подготовить данные блоков
+        blocks_data = []
+        full_blocks_data = []
+        for page in doc.pages:
+            for block in page.blocks:
+                bd = block.to_dict() if hasattr(block, "to_dict") else {}
+                full_blocks_data.append(bd)
+                if self._is_correction_mode:
+                    if block.is_correction:
+                        blocks_data.append(bd)
+                else:
+                    blocks_data.append(bd)
+
+        if not blocks_data:
+            show_toast(mw, "Нет блоков для распознавания")
+            return
+
+        # Output directory
+        output_dir = str(Path(pdf_path).parent / ".ocr_output")
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        show_toast(mw, f"Запуск OCR ({len(blocks_data)} блоков)...", duration=2000)
+
+        self._runner.submit_job(
+            pdf_path=pdf_path,
+            blocks_data=blocks_data,
+            output_dir=output_dir,
+            engine="lmstudio",
+            chandra_base_url=lmstudio_url,
+            qwen_base_url=lmstudio_url,
+            chandra_http_timeout=int(
+                int(os.getenv("LMSTUDIO_TIMEOUT_MS", "300000")) / 1000
+            ),
+            qwen_http_timeout=int(
+                int(os.getenv("LMSTUDIO_TIMEOUT_MS", "300000")) / 1000
+            ),
+            is_correction_mode=self._is_correction_mode,
+            node_id=node_id,
+            task_name=Path(pdf_path).stem,
+            full_blocks_data=full_blocks_data if self._is_correction_mode else None,
         )
-        new_interval = self.POLL_INTERVAL_ACTIVE if self._has_active_jobs else self.POLL_INTERVAL_IDLE
-        if self._poll_timer.interval() != new_interval:
-            self._poll_timer.setInterval(new_interval)
-
-    @Slot()
-    def _on_remote_poll_error(self) -> None:
-        """GUI thread: ошибка poll."""
-        self._is_fetching = False
-        self._consecutive_errors += 1
-        self.connection_status.emit("disconnected")
-
-        backoff = min(
-            self.POLL_INTERVAL_ERROR * (2 ** min(self._consecutive_errors - 1, 3)),
-            180_000,
-        )
-        if self._poll_timer.interval() != backoff:
-            self._poll_timer.setInterval(backoff)
 
     # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Job actions (background)
+    # RESULT APPLICATION
     # ══════════════════════════════════════════════════════════════════
 
-    def _remote_cancel_job(self, job_id: str) -> None:
-        try:
-            self._client.cancel_job(job_id)
-            self._force_full_refresh = True
-            QMetaObject.invokeMethod(self, "_remote_poll", Qt.QueuedConnection)
-        except Exception as e:
-            logger.error(f"Cancel job failed: {e}")
-
-    def _remote_delete_job(self, job_id: str) -> None:
-        try:
-            self._client.delete_job(job_id)
-            self._jobs_cache.pop(job_id, None)
-            self._force_full_refresh = True
-            QMetaObject.invokeMethod(self, "_remote_poll", Qt.QueuedConnection)
-        except Exception as e:
-            logger.error(f"Delete job failed: {e}")
-
-    def _remote_resume_job(self, job_id: str) -> None:
-        try:
-            self._client.resume_job(job_id)
-            self._force_full_refresh = True
-            QMetaObject.invokeMethod(self, "_remote_poll", Qt.QueuedConnection)
-        except Exception as e:
-            logger.error(f"Resume job failed: {e}")
-
-    def _remote_reorder_job(self, job_id: str, direction: str) -> None:
-        try:
-            self._client.reorder_job(job_id, direction)
-            self._force_full_refresh = True
-            QMetaObject.invokeMethod(self, "_remote_poll", Qt.QueuedConnection)
-        except Exception as e:
-            logger.error(f"Reorder job failed: {e}")
-
-    # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Result download
-    # ══════════════════════════════════════════════════════════════════
-
-    def _remote_download_result(self, job_id: str) -> None:
-        """Для remote mode: загрузить результаты OCR из Supabase."""
+    def _apply_ocr_results(self, job_id: str, node_id: str) -> None:
+        """Применить результаты OCR из Supabase к текущему документу."""
         if job_id in self._downloaded_jobs:
             return
-
-        job = self._jobs_cache.get(job_id)
-        if not job:
-            return
-
-        node_id = getattr(job, "node_id", None)
-        if not node_id:
-            logger.warning(f"Remote job {job_id} has no node_id, cannot download results")
-            return
-
         self._downloaded_jobs.add(job_id)
-        self._executor.submit(self._remote_download_result_bg, job_id, node_id)
+        self._executor.submit(self._apply_ocr_results_bg, job_id, node_id)
 
-    def _remote_download_result_bg(self, job_id: str, node_id: str) -> None:
+    def _apply_ocr_results_bg(self, job_id: str, node_id: str) -> None:
         """Фоновый поток: загрузка аннотации из Supabase."""
         try:
             from app.annotation_db import AnnotationDBIO
@@ -1000,15 +550,17 @@ class JobsController(QObject):
 
             self._pending_result = (job_id, node_id)
             QMetaObject.invokeMethod(
-                self, "_on_remote_result_loaded",
+                self, "_on_ocr_result_loaded",
                 Qt.QueuedConnection,
             )
 
         except Exception as e:
-            logger.error(f"Remote download failed for {job_id}: {e}", exc_info=True)
+            logger.error(f"Apply OCR results failed for {job_id}: {e}", exc_info=True)
+
+    _pending_result: tuple[str, str] | None = None
 
     @Slot()
-    def _on_remote_result_loaded(self) -> None:
+    def _on_ocr_result_loaded(self) -> None:
         """GUI thread: применить загруженные результаты."""
         pending = self._pending_result
         self._pending_result = None
@@ -1027,7 +579,6 @@ class JobsController(QObject):
             if not current_doc:
                 return
 
-            # Проверяем что текущий документ соответствует node_id
             current_node = getattr(self.main_window, "_current_node_id", None)
             if current_node != node_id:
                 logger.info(f"Skipping result apply: current node {current_node} != job node {node_id}")
@@ -1085,33 +636,98 @@ class JobsController(QObject):
             self.update_ocr_stats()
             self.download_finished.emit(job_id, "")
 
-            logger.info(f"Remote OCR результаты применены: {updated_count} блоков обновлено")
+            logger.info(f"OCR результаты применены: {updated_count} блоков обновлено")
 
             from app.gui.toast import show_toast
             show_toast(self.main_window, f"OCR завершён: {updated_count} блоков обновлено", duration=5000)
 
         except Exception as e:
-            logger.error(f"Ошибка применения remote OCR результатов: {e}", exc_info=True)
+            logger.error(f"Ошибка применения OCR результатов: {e}", exc_info=True)
 
     # ══════════════════════════════════════════════════════════════════
-    # REMOTE MODE: Job list helper
+    # SUPABASE HISTORY
     # ══════════════════════════════════════════════════════════════════
 
-    def _emit_remote_jobs_list(self) -> None:
-        """Emit список задач для remote mode (cache + supabase history + optimistic)."""
+    def _save_annotation_to_db(self, node_id: str) -> bool:
+        """Сохранить текущую annotation в Supabase (синхронно)."""
+        try:
+            from app.annotation_db import AnnotationDBIO
+            doc = self.main_window.annotation_document
+            if doc and node_id:
+                AnnotationDBIO.save_to_db(doc, node_id)
+                logger.info(f"Annotation saved to Supabase for node {node_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save annotation to Supabase: {e}", exc_info=True)
+        return False
+
+    def _load_history_from_supabase(self) -> None:
+        """Загрузить историю задач напрямую из Supabase."""
+        try:
+            url = os.getenv("SUPABASE_URL", "").strip()
+            key = os.getenv("SUPABASE_KEY", "").strip()
+            if not url or not key:
+                return
+            import httpx
+            from app.ocr_client.models import JobInfo
+
+            headers = {
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+            resp = httpx.get(
+                f"{url}/rest/v1/jobs"
+                f"?select=id,document_id,document_name,task_name,status,progress,"
+                f"created_at,updated_at,error_message,status_message,node_id,priority"
+                f"&order=created_at.desc"
+                f"&limit=100",
+                headers=headers,
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Supabase history: HTTP {resp.status_code}")
+                return
+            rows = resp.json()
+            loaded = 0
+            for row in rows:
+                job_id = row.get("id", "")
+                if not job_id or job_id in self._jobs_cache or job_id in self._supabase_history:
+                    continue
+                self._supabase_history[job_id] = JobInfo(
+                    id=job_id,
+                    status=row.get("status", ""),
+                    progress=row.get("progress", 0.0),
+                    document_id=row.get("document_id", ""),
+                    document_name=row.get("document_name", ""),
+                    task_name=row.get("task_name", ""),
+                    created_at=row.get("created_at", ""),
+                    updated_at=row.get("updated_at", ""),
+                    error_message=row.get("error_message"),
+                    node_id=row.get("node_id"),
+                    status_message=row.get("status_message"),
+                    priority=row.get("priority", 0),
+                )
+                loaded += 1
+            if loaded:
+                logger.info(f"Supabase history: загружено {loaded} задач")
+        except Exception:
+            logger.debug("Supabase history: не удалось загрузить", exc_info=True)
+
+    # ══════════════════════════════════════════════════════════════════
+    # JOB LIST HELPER
+    # ══════════════════════════════════════════════════════════════════
+
+    def _emit_jobs_list(self) -> None:
+        """Emit список задач для UI (cache + supabase history + runner jobs)."""
         jobs = list(self._jobs_cache.values())
         cache_ids = {j.id for j in jobs}
 
-        # Добавляем Supabase-историю, которой нет в серверном кэше
+        # Добавляем Supabase-историю
         for job_id, job_info in self._supabase_history.items():
             if job_id not in cache_ids:
                 jobs.append(job_info)
                 cache_ids.add(job_id)
-
-        # Добавляем optimistic jobs, которых ещё нет в кэше
-        for job_id, (job_info, _) in self._optimistic_jobs.items():
-            if job_id not in cache_ids:
-                jobs.insert(0, job_info)
 
         jobs.sort(key=lambda j: (getattr(j, "priority", 0), getattr(j, "created_at", "")))
         self.jobs_updated.emit(jobs)

@@ -126,7 +126,7 @@ def run_local_ocr(
         )
         from services.remote_ocr.server.settings import settings
 
-        chandra_url = chandra_base_url or settings.chandra_base_url or "http://localhost:1234"
+        chandra_url = chandra_base_url or settings.chandra_base_url or os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234")
         qwen_url = qwen_base_url or settings.qwen_base_url or chandra_url
 
         text_backend = create_ocr_engine(

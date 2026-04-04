@@ -1,7 +1,7 @@
 """Менеджер Docker-контейнера local-ocr.
 
 Пр��веряет/запускает контейнер, выполняет health-check,
-предоставляет base_url для RemoteOCRClient.
+предоставляет base_url для OCR клиента.
 """
 from __future__ import annotations
 

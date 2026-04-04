@@ -19,7 +19,7 @@ from rd_core.ocr._chandra_common import (
     parse_response,
 )
 from rd_core.ocr._lmstudio_helpers import LMStudioLifecycleMixin
-from rd_core.ocr.http_utils import create_retry_session, get_lmstudio_auth
+from rd_core.ocr.http_utils import create_retry_session, get_lmstudio_api_key
 from rd_core.ocr.utils import image_to_base64
 from rd_core.ocr_result import is_error, make_error
 
@@ -89,9 +89,9 @@ class ChandraBackend(LMStudioLifecycleMixin):
         self._model_id: Optional[str] = None
         self._model_lock = threading.Lock()
         self._server_unreachable = False
-        auth = get_lmstudio_auth()
-        self.session = create_retry_session(auth=auth)
-        self._preload_session = create_retry_session(auth=auth, preload_mode=True)
+        api_key = get_lmstudio_api_key()
+        self.session = create_retry_session(api_key=api_key)
+        self._preload_session = create_retry_session(api_key=api_key, preload_mode=True)
         self._deadline: Optional[float] = None
         self._cancel_event: Optional[threading.Event] = None
         self._http_timeout = http_timeout

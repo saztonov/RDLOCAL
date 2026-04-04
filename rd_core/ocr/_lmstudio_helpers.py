@@ -4,6 +4,7 @@
 preload, load/unload — всё, что идентично между ChandraBackend и QwenBackend.
 """
 import logging
+import os
 import threading
 import time
 from typing import Tuple
@@ -187,6 +188,9 @@ class LMStudioLifecycleMixin:
         return resp
 
     def _ensure_model_loaded(self) -> None:
+        if os.getenv("LMSTUDIO_ALLOW_MODEL_MANAGEMENT", "true").lower() == "false":
+            logger.info(f"{self._BACKEND_NAME}: model management отключён (LMSTUDIO_ALLOW_MODEL_MANAGEMENT=false)")
+            return
         required_ctx = self._LOAD_CONFIG["context_length"]
         try:
             logger.info("Preload: GET /api/v1/models (timeout=10s)...")
@@ -246,6 +250,9 @@ class LMStudioLifecycleMixin:
 
     def unload_model(self) -> None:
         if not self._model_id:
+            return
+        if os.getenv("LMSTUDIO_ALLOW_MODEL_MANAGEMENT", "true").lower() == "false":
+            logger.info(f"{self._BACKEND_NAME}: model unload пропущен (LMSTUDIO_ALLOW_MODEL_MANAGEMENT=false)")
             return
         try:
             resp = self.session.get(f"{self.base_url}/api/v1/models", timeout=10)
