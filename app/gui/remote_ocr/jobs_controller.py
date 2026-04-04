@@ -1,11 +1,12 @@
-"""Контроллер бизнес-логики OCR задач (dual-mode: local / remote).
+"""Контроллер бизнес-логики OCR задач.
 
 Чистый QObject, владеющий состоянием и фоновыми операциями.
 Не зависит от UI-виджетов напрямую — общается через Qt-сигналы.
 
 Режим определяется env var REMOTE_OCR_BASE_URL:
-  - Задан → remote mode (HTTP-клиент к серверу)
-  - Не задан → local mode (LocalOcrRunner / multiprocessing)
+  - Задан → подключение к указанному remote OCR серверу
+  - Не задан → запуск local-ocr Docker контейнера (http://127.0.0.1:18100)
+В обоих случаях используется единый HTTP-протокол через RemoteOCRClient.
 """
 from __future__ import annotations
 
@@ -42,10 +43,11 @@ def _get_client_id() -> str:
 
 
 class JobsController(QObject):
-    """Контроллер OCR задач (dual-mode: local / remote).
+    """Контроллер OCR задач (HTTP-mode: remote server или local Docker).
 
     Владеет:
-      - LocalOcrRunner (local mode) или RemoteOCRClient (remote mode)
+      - RemoteOCRClient (подключение к OCR серверу)
+      - LocalOcrServiceManager (запуск Docker контейнера, если нет REMOTE_OCR_BASE_URL)
       - Кэшем задач для UI
       - Result application (merge ocr_text в annotation)
     """
@@ -83,25 +85,55 @@ class JobsController(QObject):
 
         # ── Определяем режим ─────────────────────────────────────────
         remote_url = os.getenv("REMOTE_OCR_BASE_URL", "").strip()
+        self._mode = "remote"
+        self._service_manager = None
         if remote_url:
-            self._mode = "remote"
             self._init_remote(remote_url)
         else:
-            self._mode = "local"
-            self._init_local()
+            self._init_local_service()
 
     # ── Init helpers ──────────────────────────────────────────────────
 
-    def _init_local(self) -> None:
-        """Инициализация local mode (multiprocessing)."""
-        from app.ocr.local_runner import LocalOcrRunner
+    def _init_local_service(self) -> None:
+        """Инициализация local mode через Docker-контейнер.
 
-        self._runner = LocalOcrRunner(parent=self)
-        self._runner.job_created.connect(self._on_runner_job_created)
-        self._runner.job_updated.connect(self._on_runner_job_updated)
-        self._runner.job_finished.connect(self._on_runner_job_finished)
+        Запускает local-ocr сервис в Docker и подключается к нему
+        через тот же RemoteOCRClient, что используется для remote mode.
+        """
+        from app.ocr.service_manager import LocalOcrServiceManager
 
-        QTimer.singleShot(100, lambda: self.connection_status.emit("connected"))
+        self._service_manager = LocalOcrServiceManager()
+        self.connection_status.emit("loading")
+
+        # Запуск/подключение к сервису в фоновом потоке
+        from concurrent.futures import ThreadPoolExecutor
+
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-ocr-init")
+
+        def _ensure_and_connect():
+            ok = self._service_manager.ensure_running()
+            return ok, self._service_manager.base_url if ok else None
+
+        future = executor.submit(_ensure_and_connect)
+
+        def _on_service_ready():
+            try:
+                ok, base_url = future.result(timeout=0.1)
+            except Exception:
+                # Ещё не готов — перепроверим позже
+                QTimer.singleShot(500, _on_service_ready)
+                return
+
+            if ok and base_url:
+                logger.info(f"Local OCR service ready at {base_url}")
+                self._init_remote(base_url)
+            else:
+                logger.error("Failed to start local OCR service")
+                self.connection_status.emit("disconnected")
+
+            executor.shutdown(wait=False)
+
+        QTimer.singleShot(500, _on_service_ready)
 
     def _init_remote(self, base_url: str) -> None:
         """Инициализация remote mode (HTTP-клиент)."""
@@ -147,26 +179,22 @@ class JobsController(QObject):
     def set_panel_visible(self, visible: bool) -> None:
         """Уведомить контроллер о видимости панели."""
         self._panel_visible = visible
-        if self._mode == "remote":
-            if visible:
-                if not self._poll_timer.isActive():
-                    self._poll_timer.start()
+        if visible:
+            if hasattr(self, "_poll_timer") and not self._poll_timer.isActive():
+                self._poll_timer.start()
+            if hasattr(self, "_remote_poll"):
                 self._remote_poll()
-            else:
-                self._poll_timer.stop()
         else:
-            if visible:
-                self._emit_jobs_list()
+            if hasattr(self, "_poll_timer"):
+                self._poll_timer.stop()
 
     def refresh(self, *, force_full: bool = False, show_loading: bool = False) -> None:
         """Обновить список задач в UI."""
-        if self._mode == "remote":
-            self._force_full_refresh = force_full
-            if show_loading:
-                self.connection_status.emit("loading")
+        self._force_full_refresh = force_full
+        if show_loading:
+            self.connection_status.emit("loading")
+        if hasattr(self, "_remote_poll"):
             self._remote_poll()
-        else:
-            self._emit_jobs_list()
 
     def create_job(self) -> None:
         """Создать OCR-задачу на сервере (server-only flow для tree-документов)."""
@@ -248,30 +276,12 @@ class JobsController(QObject):
         self._flush_autosave(node_id)
         self._save_annotation_to_db(node_id)
 
-        if self._mode == "remote":
-            self._server_create_job(
-                node_id=node_id,
-                document_name=document_name,
-                task_name=task_name,
-                is_correction_mode=self._is_correction_mode,
-            )
-        else:
-            # Legacy local mode fallback
-            pdf_path = mw.annotation_document.pdf_path
-            selected_blocks = blocks_needing if self._is_correction_mode else all_blocks
-            blocks_data = [b.to_dict() for b in selected_blocks]
-            full_blocks_data = (
-                [b.to_dict() for b in all_blocks] if self._is_correction_mode else None
-            )
-            output_dir = str(Path(pdf_path).parent) if pdf_path else ""
-            self._local_create_job(
-                pdf_path=pdf_path,
-                blocks_data=blocks_data,
-                full_blocks_data=full_blocks_data,
-                output_dir=output_dir,
-                node_id=node_id,
-                task_name=task_name,
-            )
+        self._server_create_job(
+            node_id=node_id,
+            document_name=document_name,
+            task_name=task_name,
+            is_correction_mode=self._is_correction_mode,
+        )
 
     def force_recognize_block(self, block_id: str) -> None:
         """Принудительно пере-распознать один блок (server-only)."""
@@ -334,180 +344,79 @@ class JobsController(QObject):
         from app.gui.toast import show_toast
         show_toast(mw, f"Принудительное OCR блока {block_id[:9]}...", duration=2000)
 
-        if self._mode == "remote":
-            self._server_create_job(
-                node_id=node_id,
-                document_name=document_name,
-                task_name=task_name,
-                is_correction_mode=True,
-            )
-        else:
-            # Legacy local fallback
-            pdf_path = mw.annotation_document.pdf_path
-            blocks_data = [target_block.to_dict()]
-            all_blocks = self._get_selected_blocks()
-            full_blocks_data = [b.to_dict() for b in all_blocks]
-            output_dir = str(Path(pdf_path).parent) if pdf_path else ""
-            chandra_url = os.getenv("CHANDRA_BASE_URL", "http://localhost:1234")
-            chandra_url = chandra_url.replace("host.docker.internal", "localhost")
-            qwen_url = os.getenv("QWEN_BASE_URL", "") or chandra_url
-            qwen_url = qwen_url.replace("host.docker.internal", "localhost")
-
-            self._runner.submit_job(
-                pdf_path=pdf_path,
-                blocks_data=blocks_data,
-                output_dir=output_dir,
-                engine="lmstudio",
-                chandra_base_url=chandra_url,
-                qwen_base_url=qwen_url,
-                is_correction_mode=True,
-                node_id=node_id,
-                task_name=task_name,
-                full_blocks_data=full_blocks_data,
-            )
+        self._server_create_job(
+            node_id=node_id,
+            document_name=document_name,
+            task_name=task_name,
+            is_correction_mode=True,
+        )
 
     def cancel_job(self, job_id: str) -> None:
-        if self._mode == "remote":
-            self._executor.submit(self._remote_cancel_job, job_id)
-        else:
-            self._runner.cancel_job(job_id)
-            self._emit_jobs_list()
+        self._executor.submit(self._remote_cancel_job, job_id)
 
     def cancel_all_jobs(self) -> None:
-        if self._mode == "remote":
-            for job_id, job in list(self._jobs_cache.items()):
-                if getattr(job, "status", "") in ("queued", "processing"):
-                    self._executor.submit(self._remote_cancel_job, job_id)
-        else:
-            for job_id, job in list(self._runner.jobs.items()):
-                if job.status in ("queued", "processing"):
-                    self._runner.cancel_job(job_id)
-            self._emit_jobs_list()
+        for job_id, job in list(self._jobs_cache.items()):
+            if getattr(job, "status", "") in ("queued", "processing"):
+                self._executor.submit(self._remote_cancel_job, job_id)
 
     def clear_all_jobs(self) -> None:
         from PySide6.QtWidgets import QMessageBox
 
-        if self._mode == "remote":
-            if not self._jobs_cache:
-                from app.gui.toast import show_toast
-                show_toast(self.main_window, "Нет задач для очистки")
-                return
+        if not self._jobs_cache:
+            from app.gui.toast import show_toast
+            show_toast(self.main_window, "Нет задач для очистки")
+            return
 
-            reply = QMessageBox.question(
-                self.main_window,
-                "Очистка задач",
-                f"Удалить все задачи ({len(self._jobs_cache)} шт.)?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
+        reply = QMessageBox.question(
+            self.main_window,
+            "Очистка задач",
+            f"Удалить все задачи ({len(self._jobs_cache)} шт.)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
 
-            for job_id in list(self._jobs_cache.keys()):
-                self._executor.submit(self._remote_delete_job, job_id)
-        else:
-            if not self._runner.jobs:
-                from app.gui.toast import show_toast
-                show_toast(self.main_window, "Нет задач для очистки")
-                return
-
-            reply = QMessageBox.question(
-                self.main_window,
-                "Очистка задач",
-                f"Удалить все задачи ({len(self._runner.jobs)} шт.)?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-            for job_id in list(self._runner.jobs.keys()):
-                self._runner.remove_job(job_id)
-            self._emit_jobs_list()
+        for job_id in list(self._jobs_cache.keys()):
+            self._executor.submit(self._remote_delete_job, job_id)
 
     def resume_job(self, job_id: str) -> None:
-        if self._mode == "remote":
-            self._executor.submit(self._remote_resume_job, job_id)
-        # Не поддерживается в local mode
+        self._executor.submit(self._remote_resume_job, job_id)
 
     def reorder_job(self, job_id: str, direction: str) -> None:
-        if self._mode == "remote":
-            self._executor.submit(self._remote_reorder_job, job_id, direction)
-        # Не поддерживается в local mode
+        self._executor.submit(self._remote_reorder_job, job_id, direction)
 
     def delete_job(self, job_id: str) -> None:
-        if self._mode == "remote":
-            self._executor.submit(self._remote_delete_job, job_id)
-        else:
-            self._runner.remove_job(job_id)
-            self._emit_jobs_list()
+        self._executor.submit(self._remote_delete_job, job_id)
 
     def show_job_details(self, job_id: str) -> None:
-        if self._mode == "remote":
-            job = self._jobs_cache.get(job_id)
-            if not job:
-                return
-            from app.gui.job_details_dialog import JobDetailsDialog
-            details = {
-                "id": job.id,
-                "status": job.status,
-                "progress": job.progress,
-                "document_name": job.document_name,
-                "created_at": job.created_at,
-                "status_message": job.status_message or "",
-                "error_message": job.error_message or "",
-                "recognized": 0,
-                "total_blocks": 0,
-                "output_dir": "",
-                "mode": "remote",
-            }
-            dialog = JobDetailsDialog(details, self.main_window)
-            dialog.exec()
-        else:
-            job = self._runner.jobs.get(job_id)
-            if not job:
-                return
-            from app.gui.job_details_dialog import JobDetailsDialog
-            details = {
-                "id": job.id,
-                "status": job.status,
-                "progress": job.progress,
-                "document_name": job.document_name,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(job.created_at)),
-                "status_message": job.status_message,
-                "error_message": job.error_message or "",
-                "recognized": job.recognized,
-                "total_blocks": job.total_blocks,
-                "output_dir": job.output_dir,
-                "mode": "local",
-            }
-            dialog = JobDetailsDialog(details, self.main_window)
-            dialog.exec()
+        job = self._jobs_cache.get(job_id)
+        if not job:
+            return
+        from app.gui.job_details_dialog import JobDetailsDialog
+        details = {
+            "id": job.id,
+            "status": job.status,
+            "progress": job.progress,
+            "document_name": job.document_name,
+            "created_at": job.created_at,
+            "status_message": job.status_message or "",
+            "error_message": job.error_message or "",
+            "recognized": 0,
+            "total_blocks": 0,
+            "output_dir": "",
+            "mode": "remote",
+        }
+        dialog = JobDetailsDialog(details, self.main_window)
+        dialog.exec()
 
     def auto_download_result(self, job_id: str) -> None:
-        if self._mode == "remote":
-            self._remote_download_result(job_id)
-        else:
-            job = self._runner.jobs.get(job_id)
-            if not job or not job.output_dir:
-                return
-            if job_id in self._downloaded_jobs:
-                return
-            self._downloaded_jobs.add(job_id)
-            self._reload_annotation_from_result(job.output_dir)
-            self._refresh_document_in_tree()
-            self.update_ocr_stats()
-            self.download_finished.emit(job_id, job.output_dir)
+        self._remote_download_result(job_id)
 
     def mark_node_downloads_complete(self, node_id: str) -> None:
-        if self._mode == "remote":
-            for job_id, job in self._jobs_cache.items():
-                if getattr(job, "status", "") in ("done", "partial") and getattr(job, "node_id", None) == node_id:
-                    self._downloaded_jobs.add(job_id)
-        else:
-            for job_id, job in self._runner.jobs.items():
-                if job.status in ("done", "partial") and job.node_id == node_id:
-                    self._downloaded_jobs.add(job_id)
+        for job_id, job in self._jobs_cache.items():
+            if getattr(job, "status", "") in ("done", "partial") and getattr(job, "node_id", None) == node_id:
+                self._downloaded_jobs.add(job_id)
 
     def update_ocr_stats(self) -> None:
         mw = self.main_window
@@ -518,32 +427,24 @@ class JobsController(QObject):
             panel.update_ocr_stats()
 
     def get_cached_job(self, job_id: str):
-        if self._mode == "remote":
-            return self._jobs_cache.get(job_id)
-        return self._runner.jobs.get(job_id)
+        return self._jobs_cache.get(job_id)
 
     def has_snapshot(self) -> bool:
-        if self._mode == "remote":
-            return bool(self._jobs_cache) or bool(self._supabase_history)
-        return bool(self._runner.jobs)
+        return bool(self._jobs_cache) or bool(self._supabase_history)
 
     def get_snapshot_jobs(self) -> list:
-        if self._mode == "remote":
-            # Merge: cache + supabase history (cache takes priority)
-            merged = dict(self._supabase_history)
-            merged.update(self._jobs_cache)
-            return list(merged.values())
-        return self._build_job_list()
+        merged = dict(self._supabase_history)
+        merged.update(self._jobs_cache)
+        return list(merged.values())
 
     def shutdown(self) -> None:
-        if self._mode == "remote":
+        if hasattr(self, "_poll_timer"):
             self._poll_timer.stop()
+        if hasattr(self, "_executor"):
             self._executor.shutdown(wait=False)
+        if hasattr(self, "_client"):
             self._client.close()
-        else:
-            for job_id in list(self._runner.jobs.keys()):
-                if self._runner.jobs[job_id].status in ("queued", "processing"):
-                    self._runner.cancel_job(job_id)
+        # Docker контейнер продолжает работать (restart: always)
 
     # ══════════════════════════════════════════════════════════════════
     # REMOTE MODE: Snapshot persistence
@@ -1216,79 +1117,6 @@ class JobsController(QObject):
         self.jobs_updated.emit(jobs)
 
     # ══════════════════════════════════════════════════════════════════
-    # LOCAL MODE: Create job
-    # ══════════════════════════════════════════════════════════════════
-
-    def _local_create_job(
-        self,
-        *,
-        pdf_path: str,
-        blocks_data: list[dict],
-        full_blocks_data: list[dict] | None,
-        output_dir: str,
-        node_id: str | None,
-        task_name: str,
-    ) -> None:
-        from app.gui.toast import show_toast
-
-        show_toast(self.main_window, "Запуск локального OCR...", duration=1500)
-
-        chandra_url = os.getenv("CHANDRA_BASE_URL", "http://localhost:1234")
-        chandra_url = chandra_url.replace("host.docker.internal", "localhost")
-        qwen_url = os.getenv("QWEN_BASE_URL", "") or chandra_url
-        qwen_url = qwen_url.replace("host.docker.internal", "localhost")
-
-        self._runner.submit_job(
-            pdf_path=pdf_path,
-            blocks_data=blocks_data,
-            output_dir=output_dir,
-            engine="lmstudio",
-            chandra_base_url=chandra_url,
-            qwen_base_url=qwen_url,
-            is_correction_mode=self._is_correction_mode,
-            node_id=node_id,
-            task_name=task_name,
-            full_blocks_data=full_blocks_data,
-        )
-
-    # ══════════════════════════════════════════════════════════════════
-    # LOCAL MODE: Runner signal handlers
-    # ══════════════════════════════════════════════════════════════════
-
-    def _on_runner_job_created(self, job) -> None:
-        self._emit_jobs_list()
-        self.job_created.emit(self._to_job_info(job))
-
-    def _on_runner_job_updated(self, job) -> None:
-        self._emit_jobs_list()
-
-    def _on_runner_job_finished(self, job) -> None:
-        self._has_active_jobs = self._runner.has_active_jobs
-        self._emit_jobs_list()
-
-        if job.status in ("done", "partial") and job.output_dir:
-            self.auto_download_result(job.id)
-
-            from app.gui.toast import show_toast
-
-            is_corr = getattr(job, "is_correction_mode", False)
-            if is_corr:
-                rec_doc = getattr(job, "recognized_document", job.recognized)
-                doc_total = getattr(job, "document_total_blocks", job.total_blocks)
-                msg = (
-                    f"Корректировка: {job.recognized}/{job.total_blocks}"
-                    f" | Документ: {rec_doc}/{doc_total}"
-                )
-            elif job.status == "partial":
-                msg = f"OCR частично: {job.recognized}/{job.total_blocks}"
-            else:
-                msg = f"OCR завершён: {job.recognized}/{job.total_blocks}"
-            show_toast(self.main_window, msg, duration=5000)
-        elif job.status == "error":
-            from app.gui.toast import show_toast
-            show_toast(self.main_window, f"OCR ошибка: {job.error_message or 'неизвестная'}", duration=5000)
-
-    # ══════════════════════════════════════════════════════════════════
     # INTERNAL: Shared helpers
     # ══════════════════════════════════════════════════════════════════
 
@@ -1336,94 +1164,6 @@ class JobsController(QObject):
                             cleared += 1
         return cleared
 
-    def _reload_annotation_from_result(self, extract_dir: str) -> None:
-        """Обновить OCR-поля в блоках из результата pipeline (local mode)."""
-        try:
-            pdf_path = getattr(self.main_window, "_current_pdf_path", None)
-            if not pdf_path:
-                return
-
-            pdf_stem = Path(pdf_path).stem
-            ann_path = Path(extract_dir) / "annotation.json"
-
-            if not ann_path.exists():
-                ann_path = Path(extract_dir) / f"{pdf_stem}_annotation.json"
-            if not ann_path.exists():
-                logger.warning(f"Файл аннотации не найден: {extract_dir}")
-                return
-
-            import json as _json
-            from rd_core.annotation_io import (
-                is_flat_format,
-                migrate_annotation_data,
-                migrate_flat_to_structured,
-            )
-            from rd_core.models import Document
-
-            with open(str(ann_path), "r", encoding="utf-8") as _f:
-                _data = _json.load(_f)
-
-            if is_flat_format(_data):
-                _data = migrate_flat_to_structured(_data)
-            _data, _result = migrate_annotation_data(_data)
-            if not _result.success:
-                logger.warning(f"Не удалось загрузить OCR результат: {_result.errors}")
-                return
-            loaded_doc, _ = Document.from_dict(_data, migrate_ids=True)
-            if not loaded_doc:
-                logger.warning("Не удалось загрузить OCR результат: Document.from_dict вернул None")
-                return
-
-            current_doc = self.main_window.annotation_document
-            if not current_doc:
-                return
-
-            ocr_results: dict[str, dict] = {}
-            for page in loaded_doc.pages:
-                for block in page.blocks:
-                    if block.ocr_text:
-                        ocr_results[block.id] = {
-                            "ocr_text": block.ocr_text,
-                            "ocr_html": getattr(block, "ocr_html", None),
-                            "ocr_json": getattr(block, "ocr_json", None),
-                            "ocr_meta": getattr(block, "ocr_meta", None),
-                        }
-
-            updated_count = 0
-            for page in current_doc.pages:
-                for block in page.blocks:
-                    if block.id in ocr_results:
-                        result = ocr_results[block.id]
-                        block.ocr_text = result["ocr_text"]
-                        block.ocr_html = result["ocr_html"]
-                        block.ocr_json = result["ocr_json"]
-                        block.ocr_meta = result["ocr_meta"]
-                        if block.is_correction:
-                            block.is_correction = False
-                        updated_count += 1
-
-            self.main_window._render_current_page()
-            if (
-                hasattr(self.main_window, "blocks_tree_manager")
-                and self.main_window.blocks_tree_manager
-            ):
-                self.main_window.blocks_tree_manager.update_blocks_tree()
-
-            if updated_count > 0:
-                self.main_window._auto_save_annotation()
-
-            if hasattr(self.main_window, "_load_ocr_preview_data"):
-                self.main_window._load_ocr_preview_data()
-
-            for preview_attr in ("ocr_preview", "ocr_preview_inline"):
-                preview = getattr(self.main_window, preview_attr, None)
-                if preview and getattr(preview, "_current_block_id", None):
-                    preview.show_block(preview._current_block_id)
-
-            logger.info(f"OCR результаты применены: {updated_count} блоков обновлено")
-        except Exception as e:
-            logger.error(f"Ошибка применения OCR результатов: {e}")
-
     def _refresh_document_in_tree(self) -> None:
         node_id = getattr(self.main_window, "_current_node_id", None)
         if not node_id:
@@ -1435,50 +1175,6 @@ class JobsController(QObject):
             pass
         logger.info(f"Refreshed document in tree: {node_id}")
 
-    # ── Local mode job list helpers ───────────────────────────────────
-
-    def _emit_jobs_list(self) -> None:
-        job_list = self._build_job_list()
-        self._jobs_cache = {self._job_id(j): j for j in job_list}
-        self.jobs_updated.emit(job_list)
-
-    def _build_job_list(self) -> list:
-        jobs = []
-        for job in self._runner.jobs.values():
-            jobs.append(self._to_job_info(job))
-        jobs.sort(key=lambda j: j.created_at, reverse=True)
-        return jobs
-
-    def _to_job_info(self, job) -> _LocalJobInfo:
-        return _LocalJobInfo(
-            id=job.id,
-            status=job.status,
-            progress=job.progress,
-            document_id="",
-            document_name=job.document_name,
-            task_name=job.document_name,
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(job.created_at)),
-            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time())),
-            error_message=job.error_message,
-            node_id=job.node_id,
-            status_message=job.status_message,
-            priority=0,
-        )
-
     @staticmethod
     def _job_id(job) -> str:
         return job.id if hasattr(job, "id") else ""
-
-
-class _LocalJobInfo:
-    """Lightweight замена app.ocr_client.models.JobInfo для UI совместимости."""
-
-    __slots__ = (
-        "id", "status", "progress", "document_id", "document_name",
-        "task_name", "created_at", "updated_at", "error_message",
-        "node_id", "status_message", "priority",
-    )
-
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
